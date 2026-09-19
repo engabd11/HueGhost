@@ -106,8 +106,8 @@ class Daemon:
         self.last_obs: Observation | None = None
         self.jf_ok = False
         self.jf_error: str | None = None
-        self._jf_err_log = 0.0
-        self._required_log = 0.0
+        self._jf_err_log = float("-inf")
+        self._required_log = float("-inf")
         self._idle_since: float | None = None
         self._launches: deque[float] = deque()
         self._last_launch = 0.0
@@ -117,13 +117,13 @@ class Daemon:
         self._engine_started = False
         self._eof_item: str | None = None
         self._last_report_count = 0
-        self._stalls_saved_mono = 0.0
+        self._stalls_saved_mono = float("-inf")
         self._startup_latency = 1.0   # EMA of launch -> first time-pos
         self._launch_mono = 0.0
         self._stop = threading.Event()
         self._lock = threading.RLock()
         self.control: ControlServer | None = None
-        self._setup_log = 0.0
+        self._setup_log = float("-inf")
         self._test_proc: subprocess.Popen | None = None
         self.restart_required: list[str] = []
         self.restart_requested = False

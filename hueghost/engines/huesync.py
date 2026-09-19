@@ -83,11 +83,13 @@ class HueSyncEngine(Engine):
         self._stop = threading.Event()
         self._ws: WebSocket | None = None
         self._last_sent: dict[str, float] = {}
-        self._last_launch = 0.0
-        self._warned_absent = 0.0
+        # monotonic() counts from boot: "never" must be -inf, not 0, or the
+        # cooldowns below silently hold for the first minute after start-up
+        self._last_launch = float("-inf")
+        self._warned_absent = float("-inf")
         self._started_by_us = False       # we sent the start_sync that is running
         self.want_area: str | None = None
-        self._area_failed_at = 0.0
+        self._area_failed_at = float("-inf")
         self._refresh_area()
         self._thread = threading.Thread(target=self._run, name="huesync-engine", daemon=True)
         self._thread.start()
