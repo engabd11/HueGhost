@@ -15,7 +15,8 @@ daemon.py   ── state machine  idle → ghosting → syncing
    │              speed / paused-for-cache → real position readback
    ├─▶ engines/   Engine.start()/stop(): HueSyncEngine (WS :24851, declarative reconcile),
    │              HttpHookEngine (GET url/start|stop), NullEngine
-   └─▶ control.py HTTP API :8787 → tray / CLI / Home Assistant
+   └─▶ control.py + webapi.py  HTTP API :8787 → Home Assistant / CLI
+gui/app.py  ── PySide6 desktop app: runs the daemon in-process, tray icon, pages call the daemon directly
 ```
 
 ## Why the ghost follows and never leads
@@ -68,6 +69,17 @@ after the first ~40 s, seeks detected within one poll, no spurious seeks.
 
 A 0.2 s lead becomes speed 0.96 for ~5 s: inaudible (the ghost is muted) and
 invisible on the lights.
+
+## Stalls (watcher.py, StallEstimator)
+
+After a seek / start / resume the TV client reports the target position at
+once, then sits on a still frame while it buffers (3-5 s on an Apple TV with
+Moonfin). The model holds the position for a learned per-kind stall (priors
+3.5 / 3.5 / 1.0 s), the daemon pauses the ghost on the matching frame, and the
+first report that shows the position advancing both re-anchors exactly and
+updates the estimate (`sync.stall_estimates`, persisted). Steady-state
+corrections use the median of the last six residuals with a gain limit, so
+whole-second or jittery reports do not move the ghost.
 
 ## Ghost (ghost.py)
 

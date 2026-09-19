@@ -9,18 +9,20 @@ Ordering rules (avoid flashing the desktop colours into the living room):
 """
 from __future__ import annotations
 
+import copy
 import logging
 import os
 import statistics
+import subprocess
 import threading
 import time
 from collections import deque
 
 from . import __version__
-from .config import Config, INTENSITIES, app_data_dir, source_root
+from .config import Config, INTENSITIES, _deep_merge, app_data_dir, source_root
 from .control import ControlServer
 from .engines import Engine, build_engine
-from .ghost import GhostPlayer
+from .ghost import GhostPlayer, mpv_args
 from .jellyfin import JellyfinClient, JellyfinError
 from .lockstep import GhostObs, Params, Pause, Resume, Seek, decide
 from .watcher import Observation, SessionMatcher, SessionWatcher
@@ -34,6 +36,14 @@ ENGINE_STOP_WAIT_S = 2.0
 
 def _asc(s) -> str:
     return (s or "").encode("ascii", "replace").decode("ascii")
+
+
+def _get(d: dict, dotted: str):
+    for p in dotted.split("."):
+        if not isinstance(d, dict) or p not in d:
+            return None
+        d = d[p]
+    return d
 
 
 class DriftStats:
@@ -113,6 +123,10 @@ class Daemon:
         self._stop = threading.Event()
         self._lock = threading.RLock()
         self.control: ControlServer | None = None
+        self._setup_log = 0.0
+        self._test_proc: subprocess.Popen | None = None
+        self.restart_required: list[str] = []
+        self.restart_requested = False
         base = source_root() or app_data_dir()
         os.makedirs(base, exist_ok=True)
         self._mpv_err = os.path.join(base, "mpv_ghost.err")
@@ -132,9 +146,12 @@ class Daemon:
         if not port:
             return
         try:
+            from .webapi import WebApi
+            api = WebApi(self)
             self.control = ControlServer(c.get("bind", "127.0.0.1"), port, c.get("token", ""),
-                                         self.status, self.action)
+                                         self.status, self.action, api.handle)
             self.control.start()
+            self.restart_required = []
         except OSError as e:
             log.warning("control API unavailable on port %s: %s", port, e)
             self.control = None
@@ -165,6 +182,12 @@ class Daemon:
     def stop(self) -> None:
         self._stop.set()
 
+    def request_restart(self) -> None:
+        """Stop the loop; the front end (cli/tray) re-launches the process."""
+        self.restart_requested = True
+        log.info("restart requested from the UI")
+        threading.Timer(0.5, self._stop.set).start()
+
     def _shutdown(self) -> None:
         with self._lock:
             if self.ghost is not None:
@@ -184,6 +207,13 @@ class Daemon:
 
     # -- polling the followed session --------------------------------------------
     def _poll(self, now: float) -> None:
+        problems = self.cfg.problems()
+        if problems:
+            self.jf_ok, self.jf_error = False, "setup required: " + problems[0]
+            if now - self._setup_log > 120:
+                log.warning("setup required (%s) - open the UI at %s", problems[0], self.ui_url())
+                self._setup_log = now
+            return
         try:
             obs = self.watcher.poll(self.jf)
             if not self.jf_ok:
@@ -396,6 +426,9 @@ class Daemon:
                 "enabled": self.enabled,
                 "state": self.state,
                 "config_path": self.cfg.path,
+                "setup_required": self.cfg.problems(),
+                "restart_required": list(self.restart_required),
+                "ui_url": self.ui_url(),
                 "jellyfin": {"url": self.cfg.get("jellyfin.url"), "ok": self.jf_ok, "error": self.jf_error,
                              "clock_offset_s": self.watcher.clock.value},
                 "follow": {
@@ -429,6 +462,81 @@ class Daemon:
                 "intensity": self.cfg.get("engine.huesync.intensity"),
                 "mode": self.cfg.get("engine.huesync.mode"),
             }
+
+    def ui_url(self) -> str:
+        c = self.cfg.section("control")
+        return "http://127.0.0.1:%d/" % int(c.get("port") or 8787)
+
+    def apply_config(self, partial: dict) -> dict:
+        """Merge a partial nested config in, save it and apply it live where
+        possible. Returns what still needs a restart."""
+        with self._lock:
+            old = copy.deepcopy(self.cfg.data)
+            self.cfg.data = _deep_merge(self.cfg.data, partial)
+            new = self.cfg.data
+            problems = self.cfg.problems()
+            if self.cfg.path:
+                self.cfg.save()
+
+            def changed(*keys):
+                return any(self.cfg.get(k) != _get(old, k) for k in keys)
+
+            if changed("jellyfin.url", "jellyfin.api_key"):
+                self.jf = JellyfinClient(self.cfg.get("jellyfin.url"), self.cfg.get("jellyfin.api_key"))
+                self.jf_ok = False
+            if changed("jellyfin.url", "jellyfin.api_key", "jellyfin.follow.device_id",
+                       "jellyfin.follow.device_name_contains", "jellyfin.follow.user",
+                       "jellyfin.poll_interval_s"):
+                if self.ghost is not None:
+                    self._stop_ghost("followed client changed")
+                stalls = self.watcher.stalls
+                self.watcher = self._make_watcher()
+                self.watcher.stalls = stalls
+                self.last_obs = None
+            self.watcher.jitter_tol = float(self.cfg.get("sync.jitter_tolerance_s", 1.5))
+            self.params = Params.from_config(self.cfg)
+            if changed("engine.type", "engine.huesync.host", "engine.huesync.port",
+                       "engine.huesync.launch_exe", "engine.httphook.url"):
+                try:
+                    self.engine.stop()
+                    self.engine.close()
+                except Exception:
+                    pass
+                self.engine = build_engine(self.cfg)
+                self._engine_started = False
+                self.state = GHOSTING if self.ghost is not None else IDLE
+            self._push_engine_prefs()
+            if changed("enabled"):
+                self.set_enabled(bool(self.cfg.get("enabled", True)))
+            if changed("log_level"):
+                lvl = getattr(logging, str(self.cfg.get("log_level", "INFO")).upper(), logging.INFO)
+                logging.getLogger("hue-ghost").setLevel(lvl)
+            if changed("control.bind", "control.port", "control.token"):
+                self.restart_required = sorted(set(self.restart_required) | {"control"})
+            log.info("config updated%s", (" (restart needed: %s)" % ", ".join(self.restart_required))
+                     if self.restart_required else "")
+            return {"ok": True, "problems": problems, "restart_required": list(self.restart_required)}
+
+    def test_ghost(self, screen_name: str | None = None, seconds: int = 8) -> dict:
+        """Show a colour test pattern on the ghost display (no media needed)."""
+        with self._lock:
+            if self.ghost is not None:
+                raise ValueError("a ghost is playing right now; stop playback first")
+            if self._test_proc is not None and self._test_proc.poll() is None:
+                raise ValueError("a test is already running")
+            cfg = Config(copy.deepcopy(self.cfg.data), self.cfg.path)
+            if screen_name:
+                cfg.set("ghost.screen_name", screen_name)
+                cfg.set("ghost.screen_index", None)
+            seconds = max(2, min(int(seconds), 60))
+            args = mpv_args(cfg, "hue-ghost test pattern")
+            args = [a for a in args if not a.startswith("--input-ipc-server=")]
+            args += ["--length=%d" % seconds,
+                     "av://lavfi:testsrc2=size=1280x720:rate=30:duration=%d" % seconds]
+            self._test_proc = subprocess.Popen(args, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                                               stdin=subprocess.DEVNULL)
+            log.info("test pattern on %s for %ds", cfg.get("ghost.screen_name") or "current display", seconds)
+            return {"ok": True, "seconds": seconds}
 
     def action(self, name: str, payload: dict) -> dict:
         with self._lock:

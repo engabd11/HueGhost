@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import threading
 import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -39,9 +40,10 @@ def _coerce(v: str):
 class ControlServer:
     def __init__(self, bind: str, port: int, token: str,
                  status_fn: Callable[[], dict],
-                 action_fn: Callable[[str, dict], dict]):
+                 action_fn: Callable[[str, dict], dict],
+                 api_fn: Callable[[str, str, dict, dict], object] | None = None):
         self.bind, self.port, self.token = bind, int(port), token or ""
-        self.status_fn, self.action_fn = status_fn, action_fn
+        self.status_fn, self.action_fn, self.api_fn = status_fn, action_fn, api_fn
         self._srv: ThreadingHTTPServer | None = None
 
     def start(self) -> None:
@@ -84,19 +86,33 @@ class ControlServer:
             def _serve(self, method: str) -> None:
                 parsed = urllib.parse.urlsplit(self.path)
                 path = parsed.path.rstrip("/") or "/"
-                query = urllib.parse.parse_qs(parsed.query)
+                query = {k: v[0] for k, v in urllib.parse.parse_qs(parsed.query).items()}
                 if path == "/health":
                     return self._send(200, {"ok": True, "version": __version__})
-                if not self._authed(query):
+                if method == "GET" and path == "/":
+                    return self._send(200, {"app": "hue-ghost", "version": __version__,
+                                            "hint": "settings live in the Hue Ghost app; API under /api/"})
+                if not self._authed({k: [v] for k, v in query.items()}):
                     return self._send(401, {"error": "unauthorized"})
                 try:
+                    if path.startswith("/api/"):
+                        if outer.api_fn is None:
+                            return self._send(404, {"error": "no api"})
+                        payload = self._body() if method == "POST" else {}
+                        try:
+                            return self._send(200, outer.api_fn(method, path, payload, query))
+                        except Exception as e:  # ApiError carries its code
+                            code = getattr(e, "code", None)
+                            if isinstance(code, int):
+                                return self._send(code, {"error": str(e)})
+                            raise
                     if path == "/status":
                         return self._send(200, outer.status_fn())
                     if path in ACTION_PATHS:
                         payload = self._body() if method == "POST" else {}
-                        for k, vals in query.items():
-                            if k != "token" and vals:
-                                payload.setdefault(k, _coerce(vals[0]))
+                        for k, v in query.items():
+                            if k != "token":
+                                payload.setdefault(k, _coerce(v))
                         return self._send(200, outer.action_fn(path[1:], payload))
                     return self._send(404, {"error": "unknown path",
                                             "paths": ["/status", "/health", *ACTION_PATHS]})

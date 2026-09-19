@@ -16,7 +16,7 @@ from . import __version__
 from .config import Config, INTENSITIES, app_data_dir, log_path, resolve_config_path
 from .jellyfin import JellyfinClient, JellyfinError, session_label
 from .winutil import (autostart_installed, find_mpv, hue_sync_info, install_autostart,
-                      list_displays, uninstall_autostart)
+                      list_displays, tray_command, uninstall_autostart)
 
 log = logging.getLogger("hue-ghost")
 
@@ -101,18 +101,18 @@ def cmd_run(args) -> int:
     if cfg.migrated:
         log.info("loaded v1 config from %s (migrated in memory; run 'hue-ghost setup' to rewrite)", cfg.path)
     probs = cfg.problems()
-    if probs:
-        for p in probs:
-            log.error("config: %s", p)
-        log.error("fix %s or run: hue-ghost setup", cfg.path)
-        return 2
+    for p in probs:
+        log.warning("config: %s", p)
     from .daemon import Daemon
     d = Daemon(cfg)
+    if probs:
+        log.warning("setup required - run 'hue-ghost gui' (or 'hue-ghost setup')")
     try:
         d.run()
     except KeyboardInterrupt:
         d.stop()
         log.info("stopped by user")
+    _relaunch_if_requested(d)
     return 0
 
 
@@ -423,13 +423,28 @@ def cmd_setup(args) -> int:
 
 
 def _tray_command() -> list[str]:
-    if getattr(sys, "frozen", False):
-        return [sys.executable, "tray"]
-    exe = sys.executable
-    pyw = os.path.join(os.path.dirname(exe), "pythonw.exe")
-    if os.path.exists(pyw):
-        exe = pyw
-    return [exe, "-m", "hueghost", "tray"]
+    return tray_command()
+
+
+def _relaunch_if_requested(daemon) -> None:
+    if getattr(daemon, "restart_requested", False):
+        import subprocess
+        cmd = tray_command() if getattr(sys, "frozen", False) or daemon.cfg.get("_mode") == "tray" \
+            else [sys.executable, "-m", "hueghost", "run"]
+        log.info("relaunching: %s", " ".join(cmd))
+        time.sleep(1.0)
+        subprocess.Popen(cmd, close_fds=True)
+
+
+def cmd_gui(args) -> int:
+    cfg = Config.load(args.config)
+    setup_logging(cfg.get("log_level", "INFO"))
+    try:
+        from .gui.app import run_gui
+    except ImportError as e:
+        log.error("the desktop app needs PySide6: pip install \"hue-ghost[gui]\" (%s)", e)
+        return 2
+    return run_gui(cfg, minimized=bool(getattr(args, "minimized", False)))
 
 
 def cmd_install_autostart(args) -> int:
@@ -481,8 +496,11 @@ def build_parser() -> argparse.ArgumentParser:
                    % os.path.join(app_data_dir(), "config.json"))
     p.add_argument("--version", action="version", version="hue-ghost " + __version__)
     sub = p.add_subparsers(dest="cmd")
-    sub.add_parser("run", help="run the daemon in the foreground").set_defaults(fn=cmd_run)
-    sub.add_parser("tray", help="run with a system-tray icon").set_defaults(fn=cmd_tray)
+    sub.add_parser("run", help="run the daemon in the foreground (no window)").set_defaults(fn=cmd_run)
+    s = sub.add_parser("gui", help="the desktop app (daemon + control panel + tray icon)")
+    s.add_argument("--minimized", action="store_true", help="start in the tray without showing the window")
+    s.set_defaults(fn=cmd_gui)
+    sub.add_parser("tray", help="lightweight tray icon without the desktop app (pystray)").set_defaults(fn=cmd_tray)
     sub.add_parser("setup", help="interactive setup wizard").set_defaults(fn=cmd_setup)
     sub.add_parser("doctor", help="check Jellyfin, mpv, displays and Hue Sync").set_defaults(fn=cmd_doctor)
     s = sub.add_parser("status", help="show the running daemon's state")
@@ -515,8 +533,13 @@ def main(argv: list[str] | None = None) -> int:
     p = build_parser()
     args = p.parse_args(argv)
     if not getattr(args, "fn", None):
-        # double-click / no args: tray if available, else run
-        args.cmd = "tray"
+        # double-click / no args: the desktop app if available, else tray, else run
+        try:
+            import PySide6  # noqa: F401
+            args.minimized = False
+            return cmd_gui(args)
+        except ImportError:
+            pass
         try:
             import pystray  # noqa: F401
             return cmd_tray(args)

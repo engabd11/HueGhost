@@ -67,9 +67,20 @@ MPV_CANDIDATES_WIN = [
 ]
 
 
+def _bundled_mpv() -> list[str]:
+    """mpv shipped next to the installed executable (installer component)."""
+    base = os.path.dirname(os.path.abspath(sys.executable if getattr(sys, "frozen", False) else __file__))
+    exe = "mpv.exe" if sys.platform == "win32" else "mpv"
+    return [os.path.join(base, "mpv", exe), os.path.join(base, exe),
+            os.path.join(os.path.dirname(base), "mpv", exe)]
+
+
 def find_mpv(configured: str = "") -> str | None:
     if configured and configured not in ("mpv", "mpv.exe"):
         return configured if os.path.exists(configured) else None
+    for c in _bundled_mpv():
+        if os.path.exists(c):
+            return c
     p = shutil.which("mpv")
     if p:
         return p
@@ -78,6 +89,22 @@ def find_mpv(configured: str = "") -> str | None:
             if os.path.exists(c):
                 return c
     return None
+
+
+def tray_command() -> list[str]:
+    """How to start Hue Ghost at login: the desktop app minimised to the tray."""
+    if getattr(sys, "frozen", False):
+        exe = sys.executable
+        # the CLI exe (hue-ghost.exe) may have called us: start the windowed app next to it
+        gui = os.path.join(os.path.dirname(exe), "HueGhost.exe")
+        if os.path.exists(gui):
+            exe = gui
+        return [exe, "gui", "--minimized"]
+    exe = sys.executable
+    pyw = os.path.join(os.path.dirname(exe), "pythonw.exe")
+    if os.path.exists(pyw):
+        exe = pyw
+    return [exe, "-m", "hueghost", "gui", "--minimized"]
 
 
 # -- Hue Sync app peek (read-only) ------------------------------------------------

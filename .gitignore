@@ -22,3 +22,7 @@ dist/
 .claude/
 .vscode/
 .idea/
+
+# installer payload (fetched by scripts/fetch_payload.ps1)
+installer/payload/
+*.spec.bak
