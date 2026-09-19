@@ -32,6 +32,8 @@ jobs:
           python-version: "3.12"
       - run: choco install innosetup 7zip -y --no-progress
       - run: powershell -ExecutionPolicy Bypass -File scripts/build_installer.ps1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       - uses: actions/upload-artifact@v4
         with:
           name: HueGhost-Setup

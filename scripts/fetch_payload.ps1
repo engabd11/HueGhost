@@ -20,9 +20,13 @@ if (-not (Test-Path "$payload\mpv\mpv.exe")) {
     Get-ChildItem "$src\*.dll" -ErrorAction SilentlyContinue | Copy-Item -Destination "$payload\mpv\" -Force
   } else {
     Write-Host "mpv: downloading the latest shinchiro build"
-    $rel = Invoke-RestMethod "https://api.github.com/repos/shinchiro/mpv-winbuild-cmake/releases/latest"
+    $hdr = @{}
+    if ($env:GITHUB_TOKEN) { $hdr["Authorization"] = "Bearer $env:GITHUB_TOKEN" }   # CI: avoid the anonymous rate limit
+    $rel = Invoke-RestMethod "https://api.github.com/repos/shinchiro/mpv-winbuild-cmake/releases/latest" -Headers $hdr
     $asset = $rel.assets | Where-Object { $_.name -match '^mpv-x86_64-\d{8}-git-[0-9a-f]+\.7z$' } | Select-Object -First 1
-    if (-not $asset) { throw "no mpv x86_64 asset found in the latest release" }
+    if (-not $asset) { $asset = $rel.assets | Where-Object { $_.name -match '^mpv-x86_64.*\.7z$' -and $_.name -notmatch 'v3|dev' } | Select-Object -First 1 }
+    if (-not $asset) { throw ("no mpv x86_64 asset found; assets: " + (($rel.assets | ForEach-Object { $_.name }) -join ", ")) }
+    Write-Host "mpv: $($asset.name)"
     $tmp = Join-Path $env:TEMP "mpv.7z"
     Invoke-WebRequest $asset.browser_download_url -OutFile $tmp
     $sz = Get-Command 7z -ErrorAction SilentlyContinue
