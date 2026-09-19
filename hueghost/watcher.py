@@ -100,14 +100,10 @@ class SessionMatcher:
         return self.device_id or self.needle or "?"
 
     def matches(self, s: dict) -> bool:
-        if self.device_id:
-            if (s.get("DeviceId") or "") != self.device_id:
-                return False
-        elif self.needle:
-            label = ((s.get("DeviceName") or "") + " " + (s.get("Client") or "")).lower()
-            if self.needle not in label:
-                return False
-        else:
+        by_id = bool(self.device_id) and (s.get("DeviceId") or "") == self.device_id
+        label = ((s.get("DeviceName") or "") + " " + (s.get("Client") or "")).lower()
+        by_name = bool(self.needle) and self.needle in label
+        if not (by_id or by_name):
             return False
         if self.user and self.user not in (s.get("UserName") or "").lower():
             return False
