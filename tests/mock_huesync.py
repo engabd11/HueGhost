@@ -42,6 +42,12 @@ class MockHueSync:
         with self._lock:
             for c in self._clients:
                 try:
+                    # shutdown() sends FIN even while another thread is blocked in
+                    # recv(); a bare close() would not on Linux (fd still referenced)
+                    c.shutdown(socket.SHUT_RDWR)
+                except OSError:
+                    pass
+                try:
                     c.close()
                 except OSError:
                     pass
