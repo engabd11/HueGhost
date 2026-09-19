@@ -1,0 +1,24 @@
+# secrets / local state
+config.json
+*.log
+*.log.*
+*.err
+mpv_*.err
+
+# media used for local plumbing tests
+*.mp4
+*.mkv
+
+# python
+__pycache__/
+*.pyc
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+.venv/
+
+# tooling
+.claude/
+.vscode/
+.idea/

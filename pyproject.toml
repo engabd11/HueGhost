@@ -1,0 +1,42 @@
+[build-system]
+requires = ["setuptools>=64", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "hue-ghost"
+version = "2.0.0"
+description = "Software Hue Sync Box for Jellyfin: sync Philips Hue lights to a TV client by ghosting its playback on a PC running the Hue Sync app"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { file = "LICENSE" }
+authors = [{ name = "Abdullah (engabd11)" }]
+keywords = ["philips-hue", "hue-sync", "jellyfin", "ambilight", "entertainment-area", "apple-tv"]
+classifiers = [
+  "Programming Language :: Python :: 3",
+  "Operating System :: Microsoft :: Windows",
+  "Operating System :: MacOS",
+  "Topic :: Multimedia :: Video",
+  "Topic :: Home Automation",
+]
+dependencies = []
+
+[project.optional-dependencies]
+tray = ["pystray>=0.19", "Pillow>=9"]
+dev = ["pytest>=7"]
+build = ["pyinstaller>=6", "pystray>=0.19", "Pillow>=9"]
+
+[project.scripts]
+hue-ghost = "hueghost.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/engabd11/HueGhost"
+Issues = "https://github.com/engabd11/HueGhost/issues"
+
+[tool.setuptools]
+packages = ["hueghost", "hueghost.engines"]
+
+[tool.setuptools.package-data]
+hueghost = ["ghost_input.conf"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
