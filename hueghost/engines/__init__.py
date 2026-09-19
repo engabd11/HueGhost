@@ -27,6 +27,9 @@ class EngineState:
     intensity: str | None = None
     bri: int | None = None
     error: str | None = None
+    area_id: str | None = None     # entertainment area the engine currently targets
+    area_name: str | None = None
+    switching: bool = False        # area switch in progress
     updated_mono: float = field(default_factory=time.monotonic)
 
     def as_dict(self) -> dict:
@@ -52,6 +55,12 @@ class Engine:
 
     def adjust_brightness(self, step: int) -> None:
         pass
+
+    def set_area(self, area_id: str | None) -> None:
+        """Ask the engine to target this entertainment area (None = leave as is)."""
+
+    def areas(self) -> list[dict]:
+        return []
 
     def wait_until(self, pred: Callable[[EngineState], bool], timeout: float) -> bool:
         deadline = time.monotonic() + timeout

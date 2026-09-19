@@ -131,11 +131,95 @@ def hue_sync_exe() -> str | None:
     return None
 
 
+def hue_sync_bridge_file() -> str | None:
+    d = hue_sync_dir()
+    return os.path.join(d, "bridge.json") if d else None
+
+
+def hue_sync_selected_area() -> tuple[str | None, str | None]:
+    """(area id, area name) currently selected in the Hue Sync app, from bridge.json."""
+    p = hue_sync_bridge_file()
+    if not p or not os.path.exists(p):
+        return None, None
+    try:
+        with open(p, "r", encoding="utf-8", errors="replace") as f:
+            br = json.loads(f.read(), strict=False)
+    except Exception:
+        return None, None
+    sel, name = _selected_group(br)
+    return sel, name
+
+
+def hue_sync_groups() -> list[dict]:
+    """Entertainment areas the Hue Sync app knows: [{id, name, lights}]."""
+    p = hue_sync_bridge_file()
+    if not p or not os.path.exists(p):
+        return []
+    try:
+        with open(p, "r", encoding="utf-8", errors="replace") as f:
+            br = json.loads(f.read(), strict=False)
+    except Exception:
+        return []
+    out = []
+
+    def walk(o):
+        if isinstance(o, dict):
+            if o.get("type") == "huestream.Group" and "Id" in o:
+                out.append({"id": o["Id"], "name": o.get("Name") or o["Id"], "lights": len(o.get("Lights") or [])})
+            for v in o.values():
+                walk(v)
+        elif isinstance(o, list):
+            for v in o:
+                walk(v)
+
+    walk(br)
+    out.sort(key=lambda g: g["name"].lower())
+    return out
+
+
+def hue_sync_write_selected_area(area_id: str) -> None:
+    """Point the (stopped!) Hue Sync app at another entertainment area. Text
+    substitution keeps the file byte-identical otherwise (it embeds a PEM with
+    raw newlines that a JSON round-trip would rewrite)."""
+    import re
+    p = hue_sync_bridge_file()
+    if not p or not os.path.exists(p):
+        raise RuntimeError("Hue Sync bridge.json not found")
+    with open(p, "r", encoding="utf-8", errors="replace", newline="") as f:
+        raw = f.read()
+    new, n = re.subn(r'("SelectedGroup"\s*:\s*")[^"]*(")', lambda m: m.group(1) + area_id + m.group(2), raw, count=1)
+    if n != 1:
+        raise RuntimeError("SelectedGroup not found in bridge.json")
+    with open(p, "w", encoding="utf-8", newline="") as f:
+        f.write(new)
+
+
+def hue_sync_kill() -> bool:
+    if sys.platform != "win32":
+        return False
+    import subprocess
+    r = subprocess.run(["taskkill", "/F", "/IM", "HueSync.exe"], capture_output=True,
+                       creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+    return r.returncode == 0
+
+
+def hue_sync_launch(exe: str | None = None, silent: bool = True) -> bool:
+    import subprocess
+    exe = exe or hue_sync_exe()
+    if not exe or not os.path.exists(exe):
+        return False
+    args = [exe] + (["-silent"] if silent else [])
+    subprocess.Popen(args, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, stdin=subprocess.DEVNULL,
+                     close_fds=True)
+    return True
+
+
 def hue_sync_info() -> dict:
     """What the Hue Sync app is configured to do, from its own config files."""
     info: dict = {"installed": bool(hue_sync_exe()), "exe": hue_sync_exe(), "config_dir": hue_sync_dir(),
                   "public_control_enabled": None, "public_control_port": None,
-                  "automatic_display": None, "sync_delay_ms": None, "selected_area": None}
+                  "automatic_display": None, "sync_delay_ms": None, "selected_area": None,
+                  "selected_area_id": None, "groups": hue_sync_groups()}
     d = hue_sync_dir()
     if not d:
         return info
@@ -154,6 +238,7 @@ def hue_sync_info() -> dict:
             br = json.loads(f.read(), strict=False)   # embeds a PEM with raw newlines
         sel, name = _selected_group(br)
         info["selected_area"] = name or sel
+        info["selected_area_id"] = sel
     except Exception:
         pass
     return info

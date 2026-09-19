@@ -29,6 +29,12 @@ DEFAULTS: dict[str, Any] = {
             "device_name_contains": "",  # case-insensitive substring of DeviceName + Client
             "user": "",                  # optional UserName substring
         },
+        # More players, in priority order, each optionally bound to a Hue
+        # entertainment area: {device_id, device_name_contains, user, area_id, area_name}.
+        # `follow` above is the first player (its area: jellyfin.follow_area_id).
+        "players": [],
+        "follow_area_id": "",
+        "follow_area_name": "",
         "poll_interval_s": 0.5,
     },
     "sync": {
@@ -241,6 +247,36 @@ class Config:
     def exists(self) -> bool:
         return bool(self.path) and os.path.exists(self.path)
 
+    # -- players ------------------------------------------------------------
+    def players(self) -> list[dict]:
+        """All followed players in priority order (the legacy single `follow`
+        first), normalised to {device_id, device_name_contains, user, area_id, area_name}."""
+        out = []
+        f = self.get("jellyfin.follow", {}) or {}
+        if f.get("device_id") or f.get("device_name_contains"):
+            out.append({"device_id": f.get("device_id", "") or "", "device_name_contains": f.get("device_name_contains", "") or "",
+                        "user": f.get("user", "") or "", "area_id": self.get("jellyfin.follow_area_id", "") or "",
+                        "area_name": self.get("jellyfin.follow_area_name", "") or ""})
+        for p in self.get("jellyfin.players", []) or []:
+            if not isinstance(p, dict) or not (p.get("device_id") or p.get("device_name_contains")):
+                continue
+            out.append({"device_id": p.get("device_id", "") or "", "device_name_contains": p.get("device_name_contains", "") or "",
+                        "user": p.get("user", "") or "", "area_id": p.get("area_id", "") or "",
+                        "area_name": p.get("area_name", "") or ""})
+        return out
+
+    def set_players(self, players: list[dict]) -> None:
+        """Store a full players list: first entry -> `follow`, the rest -> `players`."""
+        players = [p for p in players if p.get("device_id") or p.get("device_name_contains")]
+        first = players[0] if players else {"device_id": "", "device_name_contains": "", "user": "", "area_id": "", "area_name": ""}
+        self.set("jellyfin.follow", {"device_id": first.get("device_id", ""), "device_name_contains": first.get("device_name_contains", ""),
+                                     "user": first.get("user", "")})
+        self.set("jellyfin.follow_area_id", first.get("area_id", "") or "")
+        self.set("jellyfin.follow_area_name", first.get("area_name", "") or "")
+        self.set("jellyfin.players", [{"device_id": p.get("device_id", ""), "device_name_contains": p.get("device_name_contains", ""),
+                                       "user": p.get("user", ""), "area_id": p.get("area_id", "") or "",
+                                       "area_name": p.get("area_name", "") or ""} for p in players[1:]])
+
     # -- validation -------------------------------------------------------
     def problems(self) -> list[str]:
         out = []
@@ -248,9 +284,8 @@ class Config:
             out.append("jellyfin.api_key is empty (Jellyfin Dashboard > API Keys > +)")
         if not str(self.get("jellyfin.url", "")).strip():
             out.append("jellyfin.url is empty")
-        f = self.get("jellyfin.follow", {}) or {}
-        if not (f.get("device_id") or f.get("device_name_contains")):
-            out.append("jellyfin.follow needs device_id or device_name_contains")
+        if not self.players():
+            out.append("no player to follow (jellyfin.follow needs device_id or device_name_contains)")
         if self.get("engine.type") not in ENGINE_TYPES:
             out.append("engine.type must be one of " + " | ".join(ENGINE_TYPES))
         if self.get("engine.huesync.intensity") not in INTENSITIES:

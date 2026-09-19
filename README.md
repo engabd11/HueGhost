@@ -48,9 +48,10 @@ Hue Sync for macOS is untested; Linux has no Hue Sync app - see *Limitations*).
 
 Launch **Hue Ghost** (Start menu). The first run opens on the **Player** page:
 
-1. **Player** - enter your Jellyfin URL and an API key (Jellyfin Dashboard >
+1. **Players** - enter your Jellyfin URL and an API key (Jellyfin Dashboard >
    API Keys > +). Click *Test connection and list players*, play something on
-   the TV, pick it from the list, *Save player*.
+   the TV, select it, *Add selected player*, *Save players*. Add every device
+   you want followed (top of the list wins if several play at once).
 2. **Display** - pick the ghost display (the virtual display, or a dummy plug)
    and click *Show test pattern* to be sure it's the right one. mpv is detected
    automatically.
@@ -64,6 +65,18 @@ Launch **Hue Ghost** (Start menu). The first run opens on the **Player** page:
 That's it. Close the window - Hue Ghost keeps running in the tray (the ghost
 icon changes colour with the state: grey idle, blue ghost playing, green
 syncing, red = Hue Sync unreachable).
+
+## One PC, several rooms
+
+Each player can be bound to a Hue **entertainment area** on the Players page
+(`lights:` dropdown). When the Apple TV in the living room plays, Hue Sync
+targets the living-room area; when the office TV plays, the office lights -
+fully automatic. The Hue Sync app has no API for selecting an area, so Hue
+Ghost switches it the only way possible: it stops its sync, restarts the app
+silently with the new selection (~3 s) and resumes. That happens only when
+playback moves to a device bound to a *different* area, i.e. once per
+viewing session, never mid-movie. Players left on "Hue Sync's current area"
+don't touch the selection.
 
 ## Tuning the timing (from the couch)
 

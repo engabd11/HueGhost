@@ -93,6 +93,18 @@ on a synchronous pipe handle would block writes from other threads).
 window (sync disables itself); `reason=eof` means the item finished (no
 relaunch until the client is clearly not at the end).
 
+## Players and areas (config.players(), watcher.PlayerSet)
+
+`jellyfin.follow` (+ `follow_area_id`) is player #1; `jellyfin.players` adds
+more, in priority order, each with an optional `area_id`. `PlayerSet.pick`
+returns the first player that is playing a video (else the first one seen),
+and the model resets when the playing device changes. On `new_item` the
+daemon calls `engine.set_area(player.area_id)`; `HueSyncEngine` compares it
+with `SelectedGroup` from `bridge.json` and, if different, stops its own sync,
+kills the app, patches the file and relaunches `HueSync.exe -silent`; the
+normal reconnect + reconcile then starts the sync on the new area. The engine
+only stops syncs it started itself.
+
 ## Engine ordering (daemon.py)
 
 - start: launch mpv → first `time-pos` → `engine.start()`  (never sync the desktop)

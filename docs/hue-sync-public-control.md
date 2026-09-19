@@ -70,4 +70,9 @@ Live-verified behaviour:
   `Groups[].Name`. Note: it embeds a PEM certificate with raw newlines, so parse
   with `json.loads(..., strict=False)`.
 
-hue-ghost never writes to these files.
+hue-ghost only ever writes one thing: `SelectedGroup` in `bridge.json`, and only
+while the app is stopped (entertainment-area switching for player bindings):
+stop own sync -> `taskkill HueSync.exe` -> substitute the id in the text (the
+file is otherwise left byte-identical) -> relaunch `HueSync.exe -silent`. The
+app reads the selection at start-up and rewrites the file itself; verified on
+1.13.1. `-silent` starts it without showing the window.

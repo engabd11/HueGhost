@@ -204,7 +204,8 @@ class HomePage(Page):
         if f.get("playing"):
             self.np_title.setText(f.get("item") or "?")
             flags = " (paused)" if f.get("paused") else " (buffering)" if f.get("buffering") else ""
-            self.np_device.setText("%s%s" % (f.get("device") or "", flags))
+            area = ("  ->  " + f["area_name"]) if f.get("area_name") else ""
+            self.np_device.setText("%s%s%s" % (f.get("device") or "", flags, area))
             pos, rt = f.get("position_s") or 0.0, f.get("runtime_s")
             self.np_bar.setValue(int(1000 * pos / rt) if rt else 0)
             self.np_time.setText("%s / %s" % (_fmt_time(pos), _fmt_time(rt)))
@@ -224,11 +225,15 @@ class HomePage(Page):
         else:
             self.ghost_text.setText("no ghost running")
 
-        if e.get("connected"):
+        if e.get("switching"):
+            set_pill(self.hs_pill, "switching area...", theme.WARN)
+            self.hs_text.setText("restarting Hue Sync for %s" % (f.get("area_name") or "the bound area"))
+        elif e.get("connected"):
             hs_state = e.get("state") or "connected"
             set_pill(self.hs_pill, hs_state.replace("_", " "),
                      theme.GOOD if e.get("syncing") else theme.INFO if hs_state == "bridge_connected" else theme.WARN)
-            self.hs_text.setText("mode %s  intensity %s  brightness %s" % (e.get("mode"), e.get("intensity"), e.get("bri")))
+            self.hs_text.setText("area %s  -  mode %s  intensity %s  brightness %s" % (
+                e.get("area_name") or "?", e.get("mode"), e.get("intensity"), e.get("bri")))
         else:
             set_pill(self.hs_pill, "not reachable", theme.BAD if e.get("name") == "huesync" else theme.STATE_COLORS["idle"])
             self.hs_text.setText(e.get("error") or ("engine: %s" % e.get("name")))
@@ -365,8 +370,47 @@ class SyncPage(Page):
 
 
 # ============================================================================================
+class PlayerRow(QWidget):
+    """One followed player: label + entertainment-area picker + remove."""
+
+    def __init__(self, player: dict, areas: list[dict], on_remove, on_move):
+        super().__init__()
+        self.player = dict(player)
+        lay = QHBoxLayout(self)
+        lay.setContentsMargins(0, 0, 0, 0)
+        name = player.get("device_name_contains") or player.get("device_id") or "?"
+        how = "device" if player.get("device_id") else "name match"
+        self.lbl = QLabel("%s   <span style='color:%s'>(%s%s)</span>" % (
+            name, theme.MUTED, how, (", user " + player["user"]) if player.get("user") else ""))
+        self.lbl.setTextFormat(Qt.RichText)
+        lay.addWidget(self.lbl, 1)
+        lay.addWidget(QLabel("lights:"))
+        self.area = QComboBox()
+        self.area.addItem("Hue Sync's current area", "")
+        for a in areas:
+            self.area.addItem(a["name"], a["id"])
+        idx = self.area.findData(player.get("area_id") or "")
+        self.area.setCurrentIndex(max(0, idx))
+        if player.get("area_id") and idx < 0:
+            self.area.addItem(player.get("area_name") or player["area_id"], player["area_id"])
+            self.area.setCurrentIndex(self.area.count() - 1)
+        lay.addWidget(self.area)
+        up = button("\u25b2", "small", lambda: on_move(self, -1))
+        down = button("\u25bc", "small", lambda: on_move(self, 1))
+        rm = button("Remove", "small", lambda: on_remove(self))
+        lay.addWidget(up)
+        lay.addWidget(down)
+        lay.addWidget(rm)
+
+    def value(self) -> dict:
+        p = dict(self.player)
+        p["area_id"] = self.area.currentData() or ""
+        p["area_name"] = self.area.currentText() if p["area_id"] else ""
+        return p
+
+
 class PlayerPage(Page):
-    key, title, subtitle = "player", "Player", "Which Jellyfin client the ghost follows"
+    key, title, subtitle = "player", "Players", "Which Jellyfin clients the ghost follows, and which lights they drive"
 
     def __init__(self, ctx: Context):
         super().__init__(ctx)
@@ -384,45 +428,71 @@ class PlayerPage(Page):
         c.add_row(button("Test connection and list players", "primary", self._test), self.server_status, stretch_last=False)
         self.lay.addWidget(c)
 
-        c2 = Card("Player to follow")
-        c2.add(label("Start playing something on the TV, then pick it here. Matching by exact device is most "
-                     "reliable; matching by name works when the device id changes (e.g. after reinstalling the app).",
-                     "hint", wrap=True))
+        c2 = Card("Players to follow  (top = priority when several play at once)")
+        c2.add(label("Each player can be bound to an entertainment area: when it plays, Hue Sync switches to those "
+                     "lights automatically (the app restarts silently for ~3 s the first time a movie moves rooms). "
+                     "'Hue Sync's current area' leaves the selection alone.", "hint", wrap=True))
+        self.rows_box = QVBoxLayout()
+        self.rows_box.setSpacing(6)
+        c2.body.addLayout(self.rows_box)
+        self.rows: list[PlayerRow] = []
+        self.empty = label("No players yet - add one below.", "muted")
+        c2.add(self.empty)
+        self.lay.addWidget(c2)
+
+        c3 = Card("Add a player")
+        c3.add(label("Play something on the device so it shows up here, select it and add it. Matching by exact "
+                     "device is most reliable; matching by name survives app reinstalls.", "hint", wrap=True))
         self.list = QListWidget()
-        self.list.setMinimumHeight(160)
-        self.list.itemSelectionChanged.connect(self._picked)
-        c2.add(self.list)
+        self.list.setMinimumHeight(140)
+        c3.add(self.list)
         self.by_name = QLineEdit()
         self.by_name.setPlaceholderText("device name contains... e.g. Apple TV")
-        self.user = QLineEdit()
-        self.user.setPlaceholderText("optional: only this Jellyfin user")
-        c2.add_row(label("Or match by name"), self.by_name)
-        c2.add_row(label("User filter"), self.user)
-        self.picked = label("", "muted", wrap=True)
-        c2.add(self.picked)
-        self.lay.addWidget(c2)
-        self.lay.addWidget(button("Save player", "primary", self._save))
+        c3.add_row(button("Add selected player", None, self._add_selected), label("or"), self.by_name,
+                   button("Add by name", None, self._add_by_name))
+        self.lay.addWidget(c3)
+        self.lay.addWidget(button("Save players", "primary", self._save))
         self.lay.addStretch(1)
-        self._device_id = ""
+        self._areas: list[dict] = []
 
     def on_show(self) -> None:
         cfg = self.ctx.daemon.cfg
         self.url.setText(cfg.get("jellyfin.url") or "")
         self.key.setText(cfg.get("jellyfin.api_key") or "")
-        self._device_id = cfg.get("jellyfin.follow.device_id") or ""
-        self.by_name.setText(cfg.get("jellyfin.follow.device_name_contains") or "")
-        self.user.setText(cfg.get("jellyfin.follow.user") or "")
-        self._show_picked()
+        self._areas = list(self.ctx.daemon.engine.areas() or [])
+        self._set_rows(cfg.players())
         if self.url.text() and self.key.text() and self.list.count() == 0:
             self._test()
 
-    def _show_picked(self) -> None:
-        if self._device_id:
-            self.picked.setText("Following device id %s (%s)" % (self._device_id, self.by_name.text() or "?"))
-        elif self.by_name.text():
-            self.picked.setText("Following any device whose name contains '%s'" % self.by_name.text())
-        else:
-            self.picked.setText("Nothing selected yet")
+    def _set_rows(self, players: list[dict]) -> None:
+        for r in self.rows:
+            self.rows_box.removeWidget(r)
+            r.deleteLater()
+        self.rows = []
+        for p in players:
+            self._append_row(p)
+        self.empty.setVisible(not self.rows)
+
+    def _append_row(self, p: dict) -> None:
+        row = PlayerRow(p, self._areas, self._remove, self._move)
+        self.rows.append(row)
+        self.rows_box.addWidget(row)
+        self.empty.setVisible(False)
+
+    def _remove(self, row: PlayerRow) -> None:
+        self.rows.remove(row)
+        self.rows_box.removeWidget(row)
+        row.deleteLater()
+        self.empty.setVisible(not self.rows)
+
+    def _move(self, row: PlayerRow, delta: int) -> None:
+        i = self.rows.index(row)
+        j = i + delta
+        if not (0 <= j < len(self.rows)):
+            return
+        players = [r.value() for r in self.rows]
+        players[i], players[j] = players[j], players[i]
+        self._set_rows(players)
 
     def _test(self) -> None:
         url, key = self.url.text().strip(), self.key.text().strip()
@@ -441,32 +511,40 @@ class PlayerPage(Page):
                 it = QListWidgetItem(txt)
                 it.setData(Qt.UserRole, s)
                 self.list.addItem(it)
-                if s["device_id"] == self._device_id:
-                    it.setSelected(True)
             if not res["sessions"]:
                 self.server_status.setText(self.server_status.text() + " - play something on the TV to see it")
 
         run_async(lambda: self.ctx.api.sessions({}, {"url": url, "api_key": key}), done,
                   lambda e: self.server_status.setText(e))
 
-    def _picked(self) -> None:
+    def _add_selected(self) -> None:
         items = self.list.selectedItems()
         if not items:
+            self.ctx.toast("Select a player in the list first", "warn")
             return
         s = items[0].data(Qt.UserRole)
-        self._device_id = s["device_id"] or ""
-        self.by_name.setText(s["device_name"] or "")
-        self._show_picked()
+        if any(r.player.get("device_id") == s["device_id"] for r in self.rows if s.get("device_id")):
+            self.ctx.toast("That player is already in the list", "warn")
+            return
+        self._append_row({"device_id": s.get("device_id") or "", "device_name_contains": s.get("device_name") or "",
+                          "user": "", "area_id": "", "area_name": ""})
+
+    def _add_by_name(self) -> None:
+        name = self.by_name.text().strip()
+        if not name:
+            return
+        self._append_row({"device_id": "", "device_name_contains": name, "user": "", "area_id": "", "area_name": ""})
+        self.by_name.clear()
 
     def _save(self) -> None:
+        players = [r.value() for r in self.rows]
+        cfg = self.ctx.daemon.cfg
+        cfg.set_players(players)
         partial = {"jellyfin": {"url": self.url.text().strip().rstrip("/"), "api_key": self.key.text().strip(),
-                                "follow": {"device_id": self._device_id if self.list.selectedItems() else "",
-                                           "device_name_contains": self.by_name.text().strip(),
-                                           "user": self.user.text().strip()}}}
-        if not self.list.selectedItems():
-            partial["jellyfin"]["follow"]["device_id"] = ""
-        self.save(partial, "Player saved")
-        self._show_picked()
+                                "follow": cfg.get("jellyfin.follow"), "follow_area_id": cfg.get("jellyfin.follow_area_id"),
+                                "follow_area_name": cfg.get("jellyfin.follow_area_name"),
+                                "players": cfg.get("jellyfin.players")}}
+        self.save(partial, "Players saved")
 
 
 # ============================================================================================

@@ -83,10 +83,21 @@ class ClockOffset:
 
 
 class SessionMatcher:
-    def __init__(self, device_id: str = "", name_contains: str = "", user: str = ""):
+    def __init__(self, device_id: str = "", name_contains: str = "", user: str = "",
+                 area_id: str = "", area_name: str = ""):
         self.device_id = (device_id or "").strip()
         self.needle = (name_contains or "").strip().lower()
         self.user = (user or "").strip().lower()
+        self.area_id = (area_id or "").strip() or None
+        self.area_name = (area_name or "").strip() or None
+
+    @classmethod
+    def from_player(cls, p: dict) -> "SessionMatcher":
+        return cls(p.get("device_id", ""), p.get("device_name_contains", ""), p.get("user", ""),
+                   p.get("area_id", ""), p.get("area_name", ""))
+
+    def label(self) -> str:
+        return self.device_id or self.needle or "?"
 
     def matches(self, s: dict) -> bool:
         if self.device_id:
@@ -111,6 +122,29 @@ class SessionMatcher:
                 return s
             best = best or s
         return best
+
+
+class PlayerSet:
+    """Several players in priority order; the first one that is playing wins."""
+
+    def __init__(self, matchers: list[SessionMatcher]):
+        self.matchers = matchers
+
+    @classmethod
+    def from_players(cls, players: list[dict]) -> "PlayerSet":
+        return cls([SessionMatcher.from_player(p) for p in players])
+
+    def pick(self, sessions: Iterable[dict]) -> tuple[dict | None, SessionMatcher | None]:
+        sessions = list(sessions or [])
+        first_seen: tuple[dict, SessionMatcher] | None = None
+        for m in self.matchers:
+            s = m.pick(sessions)
+            if s is None:
+                continue
+            if report_from_session(s) is not None:
+                return s, m
+            first_seen = first_seen or (s, m)
+        return first_seen if first_seen else (None, None)
 
 
 def report_from_session(s: dict) -> Report | None:
@@ -187,6 +221,7 @@ class PlaybackModel:
     stall_pos: float = 0.0
     stall_report_mono: float = 0.0
     last_debug: str = ""
+    device_id: str | None = None
 
     # -- queries ---------------------------------------------------------------------
     def position_at(self, now_mono: float) -> float:
@@ -280,12 +315,14 @@ class Observation:
     event: str | None              # new_item | seek | pause | resume | None
     report: Report | None
     stale: bool = False            # first report was older than MAX_INITIAL_AGE_S
+    player: SessionMatcher | None = None   # which followed player this is
 
 
 class SessionWatcher:
-    def __init__(self, matcher: SessionMatcher, jitter_tolerance_s: float = 1.5,
+    def __init__(self, matcher: "SessionMatcher | PlayerSet", jitter_tolerance_s: float = 1.5,
                  poll_interval_s: float = 0.5, stall_priors: dict[str, float] | None = None):
-        self.matcher = matcher
+        self.players = matcher if isinstance(matcher, PlayerSet) else PlayerSet([matcher])
+        self.matcher = self.players.matchers[0] if self.players.matchers else matcher
         self.jitter_tol = float(jitter_tolerance_s)
         self.poll_interval = float(poll_interval_s)
         self.clock = ClockOffset()
@@ -299,7 +336,7 @@ class SessionWatcher:
     def observe(self, sessions: list[dict], server_epoch: float | None,
                 local_epoch: float, now_mono: float) -> Observation:
         self.clock.add(server_epoch, local_epoch)
-        s = self.matcher.pick(sessions)
+        s, who = self.players.pick(sessions)
         prev_poll = self._prev_poll_mono
         self._prev_poll_mono = now_mono
         was_playing = self._playing_last_poll
@@ -310,17 +347,18 @@ class SessionWatcher:
         r = report_from_session(s)
         if r is None:
             self.model = None
-            return Observation(True, False, None, None, None)
+            return Observation(True, False, None, None, None, player=who)
         self._playing_last_poll = True
 
-        first = self.model is None or self.model.item_id != r.item_id
+        first = (self.model is None or self.model.item_id != r.item_id
+                 or (self.model.device_id or None) != (r.device_id or None))
         report_mono, stale = self._report_time(r, local_epoch, now_mono, prev_poll, first)
         if first:
             self.model = PlaybackModel(
                 item_id=r.item_id, media_source_id=r.media_source_id, name=r.name,
                 runtime_s=r.runtime_s, paused=r.paused,
                 anchor_pos=r.pos, anchor_mono=report_mono, stalls=self.stalls,
-                last_key=r.key, reports=1, last_report_mono=report_mono)
+                last_key=r.key, reports=1, last_report_mono=report_mono, device_id=r.device_id)
             # playback that just appeared (not: the daemon started mid-movie)
             # is a fresh start: the client reports its position, then buffers
             just_started = prev_poll is not None and not was_playing and (now_mono - report_mono) < 3.0
@@ -328,9 +366,9 @@ class SessionWatcher:
                 self.model.begin_stall("start", r.pos, report_mono)
             self.model.last_debug = "report #1 pos=%.2f age=%.2fs%s" % (
                 r.pos, now_mono - report_mono, " (start stall %.1fs)" % self.stalls.predict("start") if just_started else "")
-            return Observation(True, True, self.model, "new_item", r, stale)
+            return Observation(True, True, self.model, "new_item", r, stale, player=who)
         event = self.model.apply(r, report_mono, self.jitter_tol)
-        return Observation(True, True, self.model, event, r, False)
+        return Observation(True, True, self.model, event, r, False, player=who)
 
     def _report_time(self, r: Report, local_epoch: float, now_mono: float,
                      prev_poll: float | None, first: bool) -> tuple[float, bool]:

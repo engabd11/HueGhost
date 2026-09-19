@@ -25,7 +25,7 @@ from .engines import Engine, build_engine
 from .ghost import GhostPlayer, mpv_args
 from .jellyfin import JellyfinClient, JellyfinError
 from .lockstep import GhostObs, Params, Pause, Resume, Seek, decide
-from .watcher import Observation, SessionMatcher, SessionWatcher
+from .watcher import Observation, PlayerSet, SessionWatcher
 
 log = logging.getLogger("hue-ghost")
 
@@ -133,9 +133,8 @@ class Daemon:
 
     # -- setup ----------------------------------------------------------------
     def _make_watcher(self) -> SessionWatcher:
-        f = self.cfg.get("jellyfin.follow", {}) or {}
         return SessionWatcher(
-            SessionMatcher(f.get("device_id", ""), f.get("device_name_contains", ""), f.get("user", "")),
+            PlayerSet.from_players(self.cfg.players()),
             jitter_tolerance_s=float(self.cfg.get("sync.jitter_tolerance_s", 1.5)),
             poll_interval_s=float(self.cfg.get("jellyfin.poll_interval_s", 0.5)),
             stall_priors=self.cfg.get("sync.stall_estimates") or None)
@@ -159,9 +158,10 @@ class Daemon:
     # -- main loop --------------------------------------------------------------
     def run(self) -> None:
         self._start_control()
-        f = self.cfg.get("jellyfin.follow", {}) or {}
+        players = self.cfg.players()
         log.info("hue-ghost %s following %s on %s (engine=%s, poll %.2fs, offset %+.2fs)",
-                 __version__, f.get("device_id") or repr(f.get("device_name_contains")),
+                 __version__, ", ".join(("%s -> %s" % (p["device_id"] or p["device_name_contains"], p["area_name"] or "current area"))
+                                        for p in players) or "nobody",
                  self.cfg.get("jellyfin.url"), self.engine.name,
                  float(self.cfg.get("jellyfin.poll_interval_s", 0.5)), self.offset)
         next_poll = 0.0
@@ -237,6 +237,8 @@ class Daemon:
         if obs.playing and obs.model is not None and self.enabled:
             self._idle_since = None
             m = obs.model
+            if obs.player is not None and obs.player.area_id and obs.event == "new_item":
+                self.engine.set_area(obs.player.area_id)
             if obs.event == "new_item" and obs.stale:
                 log.warning("first report for '%s' is stale (>30 s old); position may be off", _asc(m.name))
             if self.ghost is not None and self.ghost.item_id != m.item_id:
@@ -443,6 +445,8 @@ class Daemon:
                     "runtime_s": m.runtime_s if m else None,
                     "paused": m.paused if m else None,
                     "buffering": m.frozen(now) if m else None,
+                    "area_id": (obs.player.area_id if obs and obs.player else None),
+                    "area_name": (obs.player.area_name if obs and obs.player else None),
                     "reports": m.reports if m else 0,
                     "stall_estimates": {k: round(v, 2) for k, v in self.watcher.stalls.est.items()},
                 },
@@ -486,7 +490,7 @@ class Daemon:
                 self.jf_ok = False
             if changed("jellyfin.url", "jellyfin.api_key", "jellyfin.follow.device_id",
                        "jellyfin.follow.device_name_contains", "jellyfin.follow.user",
-                       "jellyfin.poll_interval_s"):
+                       "jellyfin.follow_area_id", "jellyfin.players", "jellyfin.poll_interval_s"):
                 if self.ghost is not None:
                     self._stop_ghost("followed client changed")
                 stalls = self.watcher.stalls
