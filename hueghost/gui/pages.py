@@ -537,13 +537,16 @@ class PlayerPage(Page):
         self.by_name.clear()
 
     def _save(self) -> None:
+        import copy
+        from ..config import Config
         players = [r.value() for r in self.rows]
-        cfg = self.ctx.daemon.cfg
-        cfg.set_players(players)
+        # work on a copy: apply_config diffs old vs new to decide what to rebuild
+        tmp = Config(copy.deepcopy(self.ctx.daemon.cfg.data))
+        tmp.set_players(players)
         partial = {"jellyfin": {"url": self.url.text().strip().rstrip("/"), "api_key": self.key.text().strip(),
-                                "follow": cfg.get("jellyfin.follow"), "follow_area_id": cfg.get("jellyfin.follow_area_id"),
-                                "follow_area_name": cfg.get("jellyfin.follow_area_name"),
-                                "players": cfg.get("jellyfin.players")}}
+                                "follow": tmp.get("jellyfin.follow"), "follow_area_id": tmp.get("jellyfin.follow_area_id"),
+                                "follow_area_name": tmp.get("jellyfin.follow_area_name"),
+                                "players": tmp.get("jellyfin.players")}}
         self.save(partial, "Players saved")
 
 

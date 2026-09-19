@@ -153,3 +153,29 @@ def test_engine_stops_its_own_sync_before_switching_and_leaves_manual_syncs_alon
     finally:
         eng.close()
         app.close()
+
+
+def test_apply_config_rebuilds_watcher_even_if_live_config_was_mutated_first(tmp_path):
+    from hueghost.daemon import Daemon
+    cfg = Config({"jellyfin": {"url": "http://127.0.0.1:1", "api_key": "k", "follow": {"device_id": "old"}},
+                  "engine": {"type": "none"}, "control": {"port": 0}}, str(tmp_path / "c.json"))
+    d = Daemon(cfg)
+    try:
+        assert d.watcher.players.matchers[0].device_id == "old"
+        # the GUI used to mutate cfg before calling apply_config
+        d.cfg.set_players(PLAYERS)
+        d.apply_config({"jellyfin": {"follow": d.cfg.get("jellyfin.follow"), "players": d.cfg.get("jellyfin.players"),
+                                     "follow_area_id": d.cfg.get("jellyfin.follow_area_id")}})
+        ids = [m.device_id or m.needle for m in d.watcher.players.matchers]
+        assert ids == ["atv", "office", "phone"]
+        assert d.watcher.players.matchers[0].area_name == "Living room"
+    finally:
+        d.engine.close()
+
+
+def test_matcher_accepts_device_id_or_name():
+    from hueghost.watcher import SessionMatcher
+    m = SessionMatcher(device_id="old-id", name_contains="Apple TV")
+    assert m.matches({"DeviceId": "old-id", "DeviceName": "x"})
+    assert m.matches({"DeviceId": "new-id", "DeviceName": "Apple TV", "Client": "Moonfin"})   # id regenerated
+    assert not m.matches({"DeviceId": "new-id", "DeviceName": "AppleTV"})

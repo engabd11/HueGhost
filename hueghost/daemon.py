@@ -133,8 +133,9 @@ class Daemon:
 
     # -- setup ----------------------------------------------------------------
     def _make_watcher(self) -> SessionWatcher:
+        self._watcher_players = self.cfg.players()
         return SessionWatcher(
-            PlayerSet.from_players(self.cfg.players()),
+            PlayerSet.from_players(self._watcher_players),
             jitter_tolerance_s=float(self.cfg.get("sync.jitter_tolerance_s", 1.5)),
             poll_interval_s=float(self.cfg.get("jellyfin.poll_interval_s", 0.5)),
             stall_priors=self.cfg.get("sync.stall_estimates") or None)
@@ -488,9 +489,8 @@ class Daemon:
             if changed("jellyfin.url", "jellyfin.api_key"):
                 self.jf = JellyfinClient(self.cfg.get("jellyfin.url"), self.cfg.get("jellyfin.api_key"))
                 self.jf_ok = False
-            if changed("jellyfin.url", "jellyfin.api_key", "jellyfin.follow.device_id",
-                       "jellyfin.follow.device_name_contains", "jellyfin.follow.user",
-                       "jellyfin.follow_area_id", "jellyfin.players", "jellyfin.poll_interval_s"):
+            if changed("jellyfin.url", "jellyfin.api_key", "jellyfin.poll_interval_s") \
+                    or self.cfg.players() != getattr(self, "_watcher_players", None):
                 if self.ghost is not None:
                     self._stop_ghost("followed client changed")
                 stalls = self.watcher.stalls

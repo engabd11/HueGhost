@@ -90,6 +90,7 @@ class HueSyncEngine(Engine):
         self._started_by_us = False       # we sent the start_sync that is running
         self.want_area: str | None = None
         self._area_failed_at = float("-inf")
+        self._area_read_mono = float("-inf")
         self._refresh_area()
         self._thread = threading.Thread(target=self._run, name="huesync-engine", daemon=True)
         self._thread.start()
@@ -137,6 +138,7 @@ class HueSyncEngine(Engine):
     # -- area switching (overridable for tests) --------------------------------------
     def _refresh_area(self) -> None:
         aid, name = self._read_area()
+        self._area_read_mono = time.monotonic()
         self._set(area_id=aid, area_name=name)
 
     def _read_area(self):
@@ -278,7 +280,12 @@ class HueSyncEngine(Engine):
             want_mode, want_int, want_area = self.want_mode, self.want_intensity, self.want_area
         if st.state is None:
             return                       # no app_state_update yet
-        # area first: it restarts the app, everything else follows on reconnect
+        # area first: it restarts the app, everything else follows on reconnect.
+        # The user can change the area in the app at any time (it writes the
+        # file at once), so never trust the cached value for the decision.
+        if (want_area and want_area != st.area_id) or time.monotonic() - self._area_read_mono > 10:
+            self._refresh_area()
+            st = self.state()
         if want_area and st.area_id and want_area != st.area_id \
                 and time.monotonic() - self._area_failed_at > 60:
             self._switch_area(ws, want_area)
