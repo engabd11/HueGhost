@@ -5,4 +5,4 @@ playing, in lockstep, and the official Hue Sync app captures that ghost
 display and streams it to the entertainment area of the room where the
 other client lives.
 """
-__version__ = "2.1.1"
+__version__ = "2.1.2"

@@ -4,7 +4,7 @@
 #define AppName "Hue Ghost"
 #define AppVersion GetEnv("HUEGHOST_VERSION")
 #if AppVersion == ""
-  #define AppVersion "2.1.1"
+  #define AppVersion "2.1.2"
 #endif
 #define AppPublisher "engabd11"
 #define AppURL "https://github.com/engabd11/HueGhost"

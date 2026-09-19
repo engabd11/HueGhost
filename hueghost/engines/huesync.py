@@ -155,10 +155,11 @@ class HueSyncEngine(Engine):
 
     def _switch_area(self, ws: WebSocket, area_id: str) -> None:
         """Runs in the engine thread; the connection is torn down on purpose."""
-        names = {g["id"]: g["name"] for g in self.areas()}
-        log.info("switching Hue Sync to entertainment area '%s'", names.get(area_id, area_id))
+        log.info("switching Hue Sync to entertainment area %s", area_id)
         self._set(switching=True, error=None)
         try:
+            names = {g["id"]: g["name"] for g in self.areas()}
+            log.info("switch target: '%s'", names.get(area_id, area_id))
             st = self.state()
             if st.state == STATE_SYNCING and self._started_by_us:
                 try:
@@ -195,6 +196,9 @@ class HueSyncEngine(Engine):
         with self._lock:
             return EngineState(**dict(self._st.__dict__))
 
+    def alive(self) -> bool:
+        return self._thread.is_alive()
+
     def close(self) -> None:
         self._stop.set()
         self._wake.set()
@@ -225,7 +229,12 @@ class HueSyncEngine(Engine):
             self._last_sent.clear()
             self._refresh_area()
             self._set(connected=True, error=None)
-            self._session(ws)
+            try:
+                self._session(ws)
+            except Exception:
+                # never let the worker thread die: a dead thread means no more
+                # re-asserts of start_sync / mode / intensity until app restart
+                log.exception("engine session crashed - reconnecting")
             self._ws = None
             self._set(connected=False, syncing=False, state=None)
             if not self._stop.is_set() and not self._st.switching:
@@ -242,7 +251,11 @@ class HueSyncEngine(Engine):
                 pass
             except (WebSocketClosed, WebSocketError, OSError):
                 return
-            self._reconcile(ws)
+            try:
+                self._reconcile(ws)
+            except Exception:
+                # keep the connection: the next tick retries the reconcile
+                log.exception("reconcile failed - will retry")
             now = time.monotonic()
             if now - last_ping > PING_EVERY_S:
                 try:

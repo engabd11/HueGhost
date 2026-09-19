@@ -158,6 +158,9 @@ driven over its local "Public Control" WebSocket, documented in
 - **One streamer per entertainment area.** If something else (Hue app scene
   sync, Hue Synco music sync, a Sync Box) is streaming to the area, Hue Sync
   can't start. The Hue Synco integration handles the hand-over.
+- **Long pauses?** Optional: sync stops automatically after the TV is paused
+  for X minutes (Sync page > *Pause: stop sync after (min)*, 0 = never) and
+  comes back when you press play.
 - **Accuracy**: about +/-0.1-0.2 s in steady state; a seek on the TV is
   followed within ~1 s plus the TV's own buffering. A Sync Box is ~0.1 s.
   Bias/mood lighting: indistinguishable; frame-critical flashes: close.

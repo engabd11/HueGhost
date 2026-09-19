@@ -70,6 +70,11 @@ class Engine:
             time.sleep(0.1)
         return pred(self.state())
 
+    def alive(self) -> bool:
+        """Whether the engine's background worker is running. The daemon
+        watchdog rebuilds the engine when this turns False."""
+        return True
+
     def close(self) -> None:
         pass
 

@@ -294,6 +294,7 @@ class SyncPage(Page):
             ("sync.max_speed_delta", "Max speed change", 0.01, 0.15, 0.01, "+/- playback speed used for nudging (0.04 = 4%)."),
             ("sync.jitter_tolerance_s", "Seek detection (s)", 0.5, 5.0, 0.1, "Position jumps larger than this count as a real seek."),
             ("sync.idle_stop_delay_s", "Stop after idle (s)", 2.0, 120.0, 1.0, "Lights stop this long after the TV stops."),
+            ("sync.pause_stop_min", "Pause: stop sync after (min)", 0.0, 240.0, 1.0, "0 = never. Lights stop when the TV is paused this long, and return when playback resumes."),
             ("sync.seek_cooldown_s", "Seek cooldown (s)", 1.0, 15.0, 0.5, "Minimum time between drift-seeks."),
             ("jellyfin.poll_interval_s", "Jellyfin poll (s)", 0.25, 5.0, 0.25, "How often the TV's position is read from Jellyfin."),
         ]

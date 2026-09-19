@@ -46,6 +46,8 @@ DEFAULTS: dict[str, Any] = {
         "seek_cooldown_s": 3.0,
         "jitter_tolerance_s": 1.5,   # report vs model difference treated as jitter, not a seek
         "idle_stop_delay_s": 10.0,
+        "pause_stop_min": 0.0,       # stop syncing after the client is paused this
+                                     # many minutes (0 = never); resumes on play
         "stall_estimates": {},       # learned client buffering after seek/start/resume (auto-saved)
     },
     "ghost": {

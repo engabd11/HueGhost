@@ -46,6 +46,15 @@ def _get(d: dict, dotted: str):
     return d
 
 
+def pause_stop_due(paused_since: float | None, now: float, limit_min: float,
+                   already_stopped: bool) -> bool:
+    """True when sync should stop because the followed client has been paused
+    for ``limit_min`` minutes (0 disables the feature)."""
+    if already_stopped or paused_since is None or limit_min <= 0:
+        return False
+    return now - paused_since >= limit_min * 60.0
+
+
 class DriftStats:
     """Per-minute summary of ghost-vs-target drift, so sync quality is measured."""
 
@@ -109,6 +118,8 @@ class Daemon:
         self._jf_err_log = float("-inf")
         self._required_log = float("-inf")
         self._idle_since: float | None = None
+        self._paused_since: float | None = None
+        self._paused_stopped = False
         self._launches: deque[float] = deque()
         self._last_launch = 0.0
         self._last_launch_item: str | None = None
@@ -228,6 +239,19 @@ class Daemon:
             return
         self.last_obs = obs
 
+        if not self.engine.alive():
+            log.error("light engine thread died - rebuilding it")
+            try:
+                self.engine.close()
+            except Exception:
+                pass
+            self.engine = build_engine(self.cfg)
+            self._engine_started = False
+            self._paused_stopped = False
+            self._push_engine_prefs()
+            if obs.player is not None and obs.player.area_id:
+                self.engine.set_area(obs.player.area_id)
+
         if obs.model is not None and obs.model.last_debug and log.isEnabledFor(logging.DEBUG):
             if obs.model.reports != self._last_report_count or obs.event == "new_item":
                 log.debug("%s", obs.model.last_debug)
@@ -238,6 +262,16 @@ class Daemon:
         if obs.playing and obs.model is not None and self.enabled:
             self._idle_since = None
             m = obs.model
+            if m.paused and self.ghost is not None:
+                if self._paused_since is None:
+                    self._paused_since = now
+            elif self._paused_since is not None or self._paused_stopped:
+                if self._paused_stopped and self.ghost is not None:
+                    log.info("client resumed after a long pause -> sync back on")
+                    self.engine.start()
+                    self._engine_started = True
+                self._paused_since = None
+                self._paused_stopped = False
             if obs.player is not None and obs.player.area_id and obs.event == "new_item":
                 self.engine.set_area(obs.player.area_id)
             if obs.event == "new_item" and obs.stale:
@@ -345,6 +379,8 @@ class Daemon:
             self.ghost = None
             self.state = IDLE
             self.engine.stop()
+            self._paused_since = None
+            self._paused_stopped = False
             if reason == "eof":
                 self._eof_item = g.item_id
             if g.user_quit:
@@ -366,6 +402,14 @@ class Daemon:
 
         est = self.engine.state()
         self.state = SYNCING if (self._engine_started and est.syncing) else GHOSTING
+
+        if pause_stop_due(self._paused_since, now,
+                          float(self.cfg.get("sync.pause_stop_min", 0.0) or 0.0),
+                          self._paused_stopped) and self._engine_started:
+            log.info("client paused for %.0f min -> stopping sync (ghost holds, resumes on play)",
+                     (now - self._paused_since) / 60.0)
+            self.engine.stop()
+            self._paused_stopped = True
 
         target = m.position_at(now) + self.offset
         target_held = m.paused or m.frozen(now)     # client paused, or on a still frame after a seek
@@ -409,6 +453,8 @@ class Daemon:
         self.state = IDLE
         self._engine_started = False
         self._idle_since = None
+        self._paused_since = None
+        self._paused_stopped = False
         s = self.stats.flush()
         if s:
             log.info("sync quality (session tail): mean|drift| %.3fs p95 %.3fs max %.3fs seeks %d",
@@ -445,6 +491,8 @@ class Daemon:
                     "position_s": round(m.position_at(now), 2) if m else None,
                     "runtime_s": m.runtime_s if m else None,
                     "paused": m.paused if m else None,
+                    "paused_for_s": (round(now - self._paused_since, 1)
+                                     if (m and m.paused and self._paused_since is not None) else None),
                     "buffering": m.frozen(now) if m else None,
                     "area_id": (obs.player.area_id if obs and obs.player else None),
                     "area_name": (obs.player.area_name if obs and obs.player else None),
@@ -605,6 +653,9 @@ class Daemon:
             changed = True
         if "mode" in p:
             self.cfg.set("engine.huesync.mode", str(p["mode"]).lower())
+            changed = True
+        if "pause_stop_min" in p:
+            self.cfg.set("sync.pause_stop_min", max(0.0, round(float(p["pause_stop_min"]), 2)))
             changed = True
         if "offset_s" in p:
             self.cfg.set("sync.offset_s", round(float(p["offset_s"]), 3))
