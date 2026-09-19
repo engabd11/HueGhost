@@ -1,0 +1,69 @@
+# Home Assistant
+
+Expose the control API to the LAN first (`hue-ghost setup` asks, or set
+`control.bind` to `0.0.0.0` and `control.token` to a random string and
+restart). Note the PC's IP; the port is `control.port` (8787).
+
+## Option A - Hue Synco "Movie mode" (recommended)
+
+[Hue Synco](https://github.com/engabd11/syncoV2) (HACS) already streams music
+sync to Hue entertainment areas from Home Assistant. From v1.57 it can also
+drive hue-ghost:
+
+Settings > Devices & services > Hue Synco > **Configure** > fill in
+*Hue Ghost host / port / token*. A **Hue Ghost - Movie mode** device appears with:
+
+| entity | |
+|---|---|
+| `switch.hue_ghost_movie_mode` | hue-ghost master switch (`/on` `/off`) |
+| `sensor.hue_ghost_state` | `offline` / `idle` / `ghosting` / `syncing`, attributes: now playing, position, drift, engine state |
+| `select.hue_ghost_intensity` | subtle / moderate / high / extreme |
+| `number.hue_ghost_sync_offset` | the lead in seconds, live (tune from the couch) |
+
+Turning movie mode **on** first stops any active music-sync area (the bridge
+allows one streamer per entertainment area), then enables hue-ghost.
+Starting a music-sync area while movie mode is on turns movie mode off.
+
+Automation ideas: movie mode on at sunset and off at bedtime; a dashboard
+button next to the music-sync card; `sensor.hue_ghost_state == syncing` to
+dim other lights.
+
+## Option B - plain REST (no integration)
+
+```yaml
+# configuration.yaml
+switch:
+  - platform: rest
+    name: Hue Ghost movie mode
+    resource: http://192.168.0.50:8787/status
+    body_on: '{"enabled": true}'
+    body_off: '{"enabled": false}'
+    is_on_template: "{{ value_json.enabled }}"
+    headers:
+      Authorization: "Bearer YOUR_TOKEN"
+      Content-Type: application/json
+    method: post
+    # rest switch posts to `resource`; point it at /set which accepts {"enabled": bool}
+    # (set resource to http://192.168.0.50:8787/set and state_resource to /status)
+    state_resource: http://192.168.0.50:8787/status
+
+rest_command:
+  hue_ghost_offset_plus:
+    url: http://192.168.0.50:8787/set
+    method: post
+    headers: { Authorization: "Bearer YOUR_TOKEN" }
+    content_type: application/json
+    payload: '{"offset_delta": 0.25}'
+
+sensor:
+  - platform: rest
+    name: Hue Ghost state
+    resource: http://192.168.0.50:8787/status
+    headers: { Authorization: "Bearer YOUR_TOKEN" }
+    value_template: "{{ value_json.state }}"
+    json_attributes_path: "$.follow"
+    json_attributes: [item, position_s, paused]
+    scan_interval: 5
+```
+
+Replace `192.168.0.50` with the PC's IP and `YOUR_TOKEN` with `control.token`.
