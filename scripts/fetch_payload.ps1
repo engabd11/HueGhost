@@ -18,6 +18,9 @@ if (-not (Test-Path "$payload\mpv\mpv.exe")) {
     Write-Host "mpv: copying from $src"
     Copy-Item "$src\mpv.exe" "$payload\mpv\" -Force
     Get-ChildItem "$src\*.dll" -ErrorAction SilentlyContinue | Copy-Item -Destination "$payload\mpv\" -Force
+    & "$payload\mpv\mpv.exe" --version 2>&1 | Select-Object -First 2 | Set-Content "$payload\mpv\SOURCE.txt"
+    Add-Content "$payload\mpv\SOURCE.txt" "copied from: $src"
+    Add-Content "$payload\mpv\SOURCE.txt" "license: GPLv2+ - source: https://github.com/mpv-player/mpv"
   } else {
     Write-Host "mpv: downloading the latest shinchiro build"
     $hdr = @{}
@@ -33,6 +36,9 @@ if (-not (Test-Path "$payload\mpv\mpv.exe")) {
     if (-not $sz) { $sz = Get-Command "C:\Program Files\7-Zip\7z.exe" -ErrorAction SilentlyContinue }
     if (-not $sz) { throw "7z is needed to extract mpv (choco install 7zip)" }
     & $sz.Source x $tmp "-o$payload\mpv" mpv.exe *.dll -y | Out-Null
+    @("asset  : $($asset.name)", "release: $($rel.tag_name)  $($rel.html_url)",
+      "source : https://github.com/mpv-player/mpv (GPLv2+)",
+      "built by: https://github.com/shinchiro/mpv-winbuild-cmake") | Set-Content "$payload\mpv\SOURCE.txt"
   }
   Get-ChildItem "$payload\mpv" | ForEach-Object { "  {0,-24} {1,8:N1} MB" -f $_.Name, ($_.Length / 1MB) }
 } else { Write-Host "mpv: already in payload" }

@@ -176,6 +176,30 @@ driven over its local "Public Control" WebSocket, documented in
   and per-app display memory apply as with any second monitor. The installer's
   uninstaller removes the virtual display again.
 
+## Compliance & privacy
+
+- **No cloud, no telemetry.** Hue Ghost talks to exactly three things: your
+  Jellyfin server, the Hue Sync desktop app on the same machine (its local
+  Public Control WebSocket, which *you* enable in the app), and its own local
+  API on `127.0.0.1`. Nothing else. Bridge credentials never pass through
+  Hue Ghost — they stay inside the Hue Sync app.
+- **Philips Hue API.** Hue Ghost never talks to the Hue Bridge directly:
+  pairing, the entertainment session and the DTLS stream are handled by the
+  official Hue Sync app — the certified path. The Public Control WebSocket is
+  an undocumented but user-opt-in interface of that app, and switching
+  entertainment areas writes the app's own `bridge.json` selection while it
+  is closed. Both are documented in
+  [docs/hue-sync-public-control.md](docs/hue-sync-public-control.md) and may
+  change across Hue Sync versions.
+- **Trademark.** Hue Ghost is an independent project — not affiliated with,
+  endorsed by, or certified by Signify / Philips Hue or Jellyfin.
+- **Licenses.** Hue Ghost is MIT. The Windows installer bundles
+  [mpv](https://github.com/mpv-player/mpv) (GPLv2+; the exact build's
+  provenance ships as `mpv\SOURCE.txt` inside the installer) and the
+  [Virtual Display Driver](https://github.com/VirtualDrivers/Virtual-Display-Driver)
+  (MIT). Corresponding source for the GPL components is available from those
+  repositories.
+
 ## Development
 
 ```powershell
@@ -191,5 +215,5 @@ Layout: `hueghost/gui/` (PySide6 app), `daemon.py` (orchestration),
 IPC readback), `engines/huesync.py` (Hue Sync Public Control), `control.py` +
 `webapi.py` (HTTP API), `cli.py`, `installer/` (PyInstaller spec + Inno Setup).
 
-MIT licensed. Bundles mpv (GPL) and the Virtual Display Driver (MIT). Not
-affiliated with Signify / Philips Hue or Jellyfin.
+MIT licensed — see [Compliance & privacy](#compliance--privacy) for bundling,
+trademark and privacy notes.
