@@ -20,6 +20,7 @@ clocks; ``poll()`` is the thin HTTP wrapper.
 """
 from __future__ import annotations
 
+import statistics
 import time
 from collections import deque
 from dataclasses import dataclass, field
@@ -134,6 +135,40 @@ def report_from_session(s: dict) -> Report | None:
     )
 
 
+STALL_PRIORS = {"seek": 3.5, "start": 3.5, "resume": 1.0}   # seconds, learned per client
+STALL_MAX_S = 15.0
+RESIDUAL_WINDOW = 6
+RESIDUAL_GAIN = 0.5
+RESIDUAL_MAX_STEP = 0.25
+
+
+class StallEstimator:
+    """How long the followed client sits on a still frame after a seek / start /
+    resume before its position actually advances (buffering). Learned per event
+    kind from the first report that shows the position moving again."""
+
+    def __init__(self, priors: dict[str, float] | None = None):
+        self.est: dict[str, float] = dict(STALL_PRIORS)
+        if priors:
+            for k, v in priors.items():
+                if k in self.est and isinstance(v, (int, float)):
+                    self.est[k] = min(max(float(v), 0.0), STALL_MAX_S)
+        self.changed = False
+
+    def predict(self, kind: str) -> float:
+        return self.est.get(kind, 0.0)
+
+    def learn(self, kind: str, measured: float) -> None:
+        measured = min(max(measured, 0.0), STALL_MAX_S)
+        self.est[kind] = round(0.6 * self.est.get(kind, measured) + 0.4 * measured, 3)
+        self.changed = True
+
+    def at_least(self, kind: str, lower: float) -> None:
+        if lower > self.est.get(kind, 0.0):
+            self.est[kind] = round(min(lower, STALL_MAX_S), 3)
+            self.changed = True
+
+
 @dataclass
 class PlaybackModel:
     item_id: str
@@ -142,19 +177,38 @@ class PlaybackModel:
     runtime_s: float | None
     paused: bool
     anchor_pos: float
-    anchor_mono: float
+    anchor_mono: float          # extrapolation starts here (later than the report while stalled)
+    stalls: StallEstimator
     last_key: tuple = field(default_factory=tuple)
     reports: int = 0
     last_report_mono: float = 0.0
+    residuals: deque = field(default_factory=lambda: deque(maxlen=RESIDUAL_WINDOW))
+    stall_kind: str | None = None      # a stall window awaiting confirmation
+    stall_pos: float = 0.0
+    stall_report_mono: float = 0.0
+    last_debug: str = ""
 
+    # -- queries ---------------------------------------------------------------------
     def position_at(self, now_mono: float) -> float:
         if self.paused:
             return self.anchor_pos
-        return self.anchor_pos + (now_mono - self.anchor_mono)
+        return self.anchor_pos + max(0.0, now_mono - self.anchor_mono)
 
+    def frozen(self, now_mono: float) -> bool:
+        """Playing, but the client is (predicted to be) on a still frame."""
+        return (not self.paused) and now_mono < self.anchor_mono
+
+    # -- internals -------------------------------------------------------------------
     def _anchor(self, pos: float, mono: float) -> None:
         self.anchor_pos = float(pos)
         self.anchor_mono = float(mono)
+
+    def begin_stall(self, kind: str, pos: float, report_mono: float) -> None:
+        self._anchor(pos, report_mono + self.stalls.predict(kind))
+        self.stall_kind = kind
+        self.stall_pos = float(pos)
+        self.stall_report_mono = report_mono
+        self.residuals.clear()
 
     def apply(self, r: Report, report_mono: float, jitter_tol: float) -> str | None:
         """Fold a (new) report in. Returns an event name or None."""
@@ -166,27 +220,55 @@ class PlaybackModel:
         self.name = r.name
         if r.media_source_id:
             self.media_source_id = r.media_source_id
+        pred = self.position_at(report_mono)
+        delta = r.pos - pred
         event: str | None = None
+
         if r.paused and not self.paused:
             self.paused = True
+            self.stall_kind = None
             self._anchor(r.pos, report_mono)
             event = "pause"
         elif not r.paused and self.paused:
             self.paused = False
-            self._anchor(r.pos, report_mono)
+            self.begin_stall("resume", r.pos, report_mono)
             event = "resume"
         elif r.paused:
             if abs(r.pos - self.anchor_pos) > jitter_tol:
                 event = "seek"
             self._anchor(r.pos, report_mono)
-        else:
-            pred = self.position_at(report_mono)
-            delta = r.pos - pred
-            if abs(delta) <= jitter_tol:
-                self._anchor(pred + 0.5 * delta, report_mono)
+        elif self.stall_kind is not None:
+            advanced = r.pos - self.stall_pos
+            elapsed = report_mono - self.stall_report_mono
+            if advanced < 0.5:
+                # still on the still frame: the stall is at least this long
+                self.stalls.at_least(self.stall_kind, elapsed)
+                self._anchor(r.pos, max(self.anchor_mono, report_mono + 1.0))
+                event = "stalled"
             else:
+                measured = elapsed - advanced
+                self.stalls.learn(self.stall_kind, measured)
+                self.stall_kind = None
                 self._anchor(r.pos, report_mono)
+                if abs(delta) > jitter_tol:
+                    event = "resync"       # stall guess was off by more than the tolerance
+        else:
+            if abs(delta) > jitter_tol:
+                self.begin_stall("seek", r.pos, report_mono)
                 event = "seek"
+            else:
+                # steady state: the rate is exactly 1.0, only the intercept is
+                # uncertain - correct it slowly from the median residual so
+                # per-report position jitter does not reach the ghost
+                self.residuals.append(delta)
+                med = statistics.median(self.residuals)
+                corr = max(-RESIDUAL_MAX_STEP, min(RESIDUAL_MAX_STEP, med)) * RESIDUAL_GAIN
+                self._anchor(pred + corr, report_mono)
+                self.residuals = deque((x - corr for x in self.residuals), maxlen=RESIDUAL_WINDOW)
+        self.last_debug = ("report #%d pos=%.2f%s pred=%.2f delta=%+.2f%s stall=%s" % (
+            self.reports, r.pos, " paused" if r.paused else "", pred, delta,
+            (" -> " + event) if event else "",
+            {k: round(v, 1) for k, v in self.stalls.est.items()}))
         return event
 
 
@@ -201,14 +283,16 @@ class Observation:
 
 
 class SessionWatcher:
-    def __init__(self, matcher: SessionMatcher, jitter_tolerance_s: float = 0.75,
-                 poll_interval_s: float = 0.5):
+    def __init__(self, matcher: SessionMatcher, jitter_tolerance_s: float = 1.5,
+                 poll_interval_s: float = 0.5, stall_priors: dict[str, float] | None = None):
         self.matcher = matcher
         self.jitter_tol = float(jitter_tolerance_s)
         self.poll_interval = float(poll_interval_s)
         self.clock = ClockOffset()
+        self.stalls = StallEstimator(stall_priors)
         self.model: PlaybackModel | None = None
         self._prev_poll_mono: float | None = None
+        self._playing_last_poll = False
         self.last_error: str | None = None
 
     # -- pure core --------------------------------------------------------
@@ -218,6 +302,8 @@ class SessionWatcher:
         s = self.matcher.pick(sessions)
         prev_poll = self._prev_poll_mono
         self._prev_poll_mono = now_mono
+        was_playing = self._playing_last_poll
+        self._playing_last_poll = False
         if s is None:
             self.model = None
             return Observation(False, False, None, None, None)
@@ -225,6 +311,7 @@ class SessionWatcher:
         if r is None:
             self.model = None
             return Observation(True, False, None, None, None)
+        self._playing_last_poll = True
 
         first = self.model is None or self.model.item_id != r.item_id
         report_mono, stale = self._report_time(r, local_epoch, now_mono, prev_poll, first)
@@ -232,8 +319,15 @@ class SessionWatcher:
             self.model = PlaybackModel(
                 item_id=r.item_id, media_source_id=r.media_source_id, name=r.name,
                 runtime_s=r.runtime_s, paused=r.paused,
-                anchor_pos=r.pos, anchor_mono=report_mono, last_key=r.key, reports=1,
-                last_report_mono=report_mono)
+                anchor_pos=r.pos, anchor_mono=report_mono, stalls=self.stalls,
+                last_key=r.key, reports=1, last_report_mono=report_mono)
+            # playback that just appeared (not: the daemon started mid-movie)
+            # is a fresh start: the client reports its position, then buffers
+            just_started = prev_poll is not None and not was_playing and (now_mono - report_mono) < 3.0
+            if just_started and not r.paused:
+                self.model.begin_stall("start", r.pos, report_mono)
+            self.model.last_debug = "report #1 pos=%.2f age=%.2fs%s" % (
+                r.pos, now_mono - report_mono, " (start stall %.1fs)" % self.stalls.predict("start") if just_started else "")
             return Observation(True, True, self.model, "new_item", r, stale)
         event = self.model.apply(r, report_mono, self.jitter_tol)
         return Observation(True, True, self.model, event, r, False)

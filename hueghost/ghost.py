@@ -159,6 +159,26 @@ class MpvIpc:
             pass
 
 
+def resolve_screen(screen_name: str, screen_index) -> int | None:
+    """Turn the stable display name into today's enumeration index.
+
+    mpv's --fs-screen-name does not match Windows device names, but its
+    --fs-screen=N index follows EnumDisplayMonitors order - the same order
+    winutil.list_displays() reports - so the name is resolved at launch time and
+    survives displays being added/removed.
+    """
+    if screen_name and sys.platform == "win32":
+        from .winutil import list_displays
+        for d in list_displays():
+            if d.name.lower() == screen_name.lower():
+                return d.index
+        log.warning("display %s not present; falling back to %s", screen_name,
+                    "index %s" % screen_index if screen_index not in (None, "") else "current display")
+    if screen_index is not None and str(screen_index) != "":
+        return int(screen_index)
+    return None
+
+
 def mpv_args(cfg, title: str) -> list[str]:
     g = cfg.section("ghost")
     args = [g.get("mpv_path") or "mpv", "--no-config", "--no-border",
@@ -171,12 +191,11 @@ def mpv_args(cfg, title: str) -> list[str]:
             "--demuxer-readahead-secs=5",
             "--input-default-bindings=no",
             "--input-conf=" + INPUT_CONF]
-    screen_name = g.get("screen_name") or ""
-    screen_idx = g.get("screen_index")
-    if screen_name:
-        args += ["--screen-name=" + screen_name, "--fs-screen-name=" + screen_name]
-    elif screen_idx is not None and str(screen_idx) != "":
-        args += ["--screen=%d" % int(screen_idx), "--fs-screen=%d" % int(screen_idx)]
+    idx = resolve_screen(g.get("screen_name") or "", g.get("screen_index"))
+    if idx is not None:
+        args += ["--screen=%d" % idx, "--fs-screen=%d" % idx]
+    elif g.get("screen_name") and sys.platform != "win32":
+        args += ["--screen-name=" + g["screen_name"], "--fs-screen-name=" + g["screen_name"]]
     if g.get("fullscreen", True):
         args += ["--fullscreen=yes"]
     else:

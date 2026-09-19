@@ -106,6 +106,8 @@ class Daemon:
         self._pending_seek = False
         self._engine_started = False
         self._eof_item: str | None = None
+        self._last_report_count = 0
+        self._stalls_saved_mono = 0.0
         self._startup_latency = 1.0   # EMA of launch -> first time-pos
         self._launch_mono = 0.0
         self._stop = threading.Event()
@@ -120,8 +122,9 @@ class Daemon:
         f = self.cfg.get("jellyfin.follow", {}) or {}
         return SessionWatcher(
             SessionMatcher(f.get("device_id", ""), f.get("device_name_contains", ""), f.get("user", "")),
-            jitter_tolerance_s=float(self.cfg.get("sync.jitter_tolerance_s", 0.75)),
-            poll_interval_s=float(self.cfg.get("jellyfin.poll_interval_s", 0.5)))
+            jitter_tolerance_s=float(self.cfg.get("sync.jitter_tolerance_s", 1.5)),
+            poll_interval_s=float(self.cfg.get("jellyfin.poll_interval_s", 0.5)),
+            stall_priors=self.cfg.get("sync.stall_estimates") or None)
 
     def _start_control(self) -> None:
         c = self.cfg.section("control")
@@ -194,6 +197,13 @@ class Daemon:
             return
         self.last_obs = obs
 
+        if obs.model is not None and obs.model.last_debug and log.isEnabledFor(logging.DEBUG):
+            if obs.model.reports != self._last_report_count or obs.event == "new_item":
+                log.debug("%s", obs.model.last_debug)
+                obs.model.last_debug = ""
+            self._last_report_count = obs.model.reports
+        self._persist_stalls(now)
+
         if obs.playing and obs.model is not None and self.enabled:
             self._idle_since = None
             m = obs.model
@@ -204,10 +214,15 @@ class Daemon:
                 self._stop_ghost("item changed")
             if self.ghost is None:
                 self._maybe_launch(now, obs)
-            elif obs.event in ("seek", "resume", "new_item"):
+            elif obs.event in ("seek", "resume", "new_item", "resync"):
                 self._pending_seek = True
                 if obs.event == "seek":
-                    log.info("followed client seeked to %.1fs", m.position_at(now))
+                    log.info("followed client seeked to %.1fs (holding %.1fs for buffering)",
+                             m.anchor_pos, max(0.0, m.anchor_mono - now))
+                elif obs.event == "resync":
+                    log.info("client resumed earlier/later than predicted -> resync to %.1fs", m.position_at(now))
+            elif obs.event == "stalled":
+                log.info("followed client still buffering at %.1fs", m.anchor_pos)
         else:
             if self.ghost is not None:
                 if self._idle_since is None:
@@ -217,6 +232,19 @@ class Daemon:
                     self._stop_ghost("followed client idle")
             elif not self.enabled and self.state != IDLE:
                 self.state = IDLE
+
+    def _persist_stalls(self, now: float) -> None:
+        st = self.watcher.stalls
+        if not st.changed or now - self._stalls_saved_mono < 60 or not self.cfg.path:
+            return
+        st.changed = False
+        self._stalls_saved_mono = now
+        self.cfg.set("sync.stall_estimates", dict(st.est))
+        try:
+            self.cfg.save()
+            log.info("learned client buffering: %s", {k: round(v, 1) for k, v in st.est.items()})
+        except OSError as e:
+            log.warning("could not persist stall estimates: %s", e)
 
     def _maybe_launch(self, now: float, obs: Observation) -> None:
         m = obs.model
@@ -246,7 +274,8 @@ class Daemon:
         if not cooldown_ok:
             return
         target = m.position_at(now) + self.offset
-        start = target + (0.0 if m.paused else self._startup_latency)
+        held = m.paused or m.frozen(now)
+        start = target + (0.0 if held else self._startup_latency)
         log.info("'%s' playing on %s -> ghost at %.1fs (offset %+.2fs, startup est %.2fs)",
                  _asc(m.name), _asc(obs.report.device_label if obs.report else "?"), start,
                  self.offset, self._startup_latency)
@@ -267,7 +296,7 @@ class Daemon:
         self._engine_started = False
         self._pending_seek = False
         self.state = GHOSTING
-        if m.paused:
+        if held:
             self.ghost.apply([Pause()], now)
 
     # -- lockstep tick ------------------------------------------------------------
@@ -306,10 +335,11 @@ class Daemon:
         self.state = SYNCING if (self._engine_started and est.syncing) else GHOSTING
 
         target = m.position_at(now) + self.offset
+        target_held = m.paused or m.frozen(now)     # client paused, or on a still frame after a seek
         gobs = GhostObs(pos=g.pos, paused=g.paused, buffering=(g.buffering or g.stalled),
                         speed=g.speed, last_seek_mono=g.last_seek_mono)
         force = self._pending_seek and g.has_position
-        actions = decide(target, m.paused, gobs, self.params, now, force_seek=force)
+        actions = decide(target, target_held, gobs, self.params, now, force_seek=force)
         if force:
             self._pending_seek = False
         if actions:
@@ -320,10 +350,11 @@ class Daemon:
                     log.info("drift %+.2fs -> seek to %.1fs%s", d, a.pos, " (client event)" if force else "")
                     self.stats.seeks += 1
                 elif isinstance(a, Pause):
-                    log.info("followed client paused -> ghost paused")
+                    log.info("%s -> ghost holds at %.1fs", "followed client paused" if m.paused
+                             else "client buffering after seek", target)
                 elif isinstance(a, Resume):
-                    log.info("followed client resumed -> ghost resumed at %.1fs", target)
-        if gobs.pos is not None and not m.paused and not gobs.buffering and not gobs.paused:
+                    log.info("client playing again -> ghost resumes at %.1fs", target)
+        if gobs.pos is not None and not target_held and not gobs.buffering and not gobs.paused:
             self.stats.add(gobs.pos - target, abs(g.speed - 1.0) > 1e-6)
         if self.stats.due(now):
             s = self.stats.flush()
@@ -378,7 +409,9 @@ class Daemon:
                     "position_s": round(m.position_at(now), 2) if m else None,
                     "runtime_s": m.runtime_s if m else None,
                     "paused": m.paused if m else None,
+                    "buffering": m.frozen(now) if m else None,
                     "reports": m.reports if m else 0,
+                    "stall_estimates": {k: round(v, 2) for k, v in self.watcher.stalls.est.items()},
                 },
                 "ghost": {
                     "alive": bool(g and g.alive()),
@@ -429,7 +462,7 @@ class Daemon:
     def reload(self) -> None:
         self.cfg.reload()
         self.params = Params.from_config(self.cfg)
-        self.watcher.jitter_tol = float(self.cfg.get("sync.jitter_tolerance_s", 0.75))
+        self.watcher.jitter_tol = float(self.cfg.get("sync.jitter_tolerance_s", 1.5))
         self.watcher.poll_interval = float(self.cfg.get("jellyfin.poll_interval_s", 0.5))
         self._push_engine_prefs()
         log.info("config reloaded (offset %+.2fs, intensity %s)", self.offset,

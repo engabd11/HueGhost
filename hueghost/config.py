@@ -38,8 +38,9 @@ DEFAULTS: dict[str, Any] = {
         "converge_s": 5.0,           # proportional controller time constant
         "max_speed_delta": 0.04,     # +/- speed clamp for nudging
         "seek_cooldown_s": 3.0,
-        "jitter_tolerance_s": 0.75,  # report vs model difference treated as jitter, not a seek
+        "jitter_tolerance_s": 1.5,   # report vs model difference treated as jitter, not a seek
         "idle_stop_delay_s": 10.0,
+        "stall_estimates": {},       # learned client buffering after seek/start/resume (auto-saved)
     },
     "ghost": {
         "mpv_path": "mpv",
