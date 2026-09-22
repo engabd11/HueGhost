@@ -48,12 +48,13 @@ Hue Sync for macOS is untested; Linux has no Hue Sync app - see *Limitations*).
 
 ## Set up (5 minutes, all in the app)
 
-Launch **Hue Ghost** (Start menu). The first run opens on the **Player** page:
+Launch **Hue Ghost** (Start menu). The first run opens on the **Sources** page:
 
-1. **Players** - enter your Jellyfin URL and an API key (Jellyfin Dashboard >
+1. **Sources** - enter your Jellyfin URL and an API key (Jellyfin Dashboard >
    API Keys > +). Click *Test connection and list players*, play something on
-   the TV, select it, *Add selected player*, *Save players*. Add every device
-   you want followed (top of the list wins if several play at once).
+   the TV, select it, *Add selected player*, *Save sources*. Add every device
+   you want followed, and any app on this PC you want to light up too (top of
+   the list wins if several play at once).
 2. **Display** - pick the ghost display (the virtual display, or a dummy plug)
    and click *Show test pattern* to be sure it's the right one. mpv is detected
    automatically.
@@ -68,14 +69,55 @@ That's it. Close the window - Hue Ghost keeps running in the tray (the ghost
 icon changes colour with the state: grey idle, blue ghost playing, green
 syncing, red = Hue Sync unreachable).
 
+## What the lights can follow
+
+The **Sources** page is one ordered list. Two kinds of thing go in it:
+
+- **A Jellyfin client** - a TV, an Apple TV, a phone. The picture is somewhere
+  Hue Sync cannot see, so Hue Ghost mirrors it with the ghost, as always.
+- **An app on this PC** - a browser playing YouTube, VLC, Plex's desktop app, a
+  game. The picture is *already* on a screen Hue Sync can capture, so there is
+  no ghost at all: Hue Ghost simply points the app at your real monitor and
+  starts the sync. Pick the app from the list of what is running (what is in
+  front and what is making sound come first), or type its `.exe` for a game you
+  have not launched yet.
+
+Each one gets an **on/off switch** - ignore a player for a while without
+deleting it - and an **entertainment area**. Only one thing syncs at a time
+(Hue Sync has a single area and a single capture display), so when several are
+playing, **the one highest in the list wins**; drag a row to change that.
+
+For a PC app you also choose what Hue Sync should react to (**Video**, **Music**
+or **Game**) and how Hue Ghost can tell it is playing: **Sound** (it is making
+some), **Fullscreen** (it is the window you are looking at, full screen) or
+either. Video defaults to sound, games to fullscreen. Nothing is scanned or
+guessed - only the executables you actually add are ever looked at, and an
+install with no PC sources does no detection work at all.
+
+### Music
+
+Jellyfin music used to be invisible: the watcher dropped everything that was
+not video, so an album playing on the TV never even reached *Now Playing*. It
+is followed like a film now, and it can drive the lights too - but the ghost
+has to do the opposite of its usual job. It plays the track's **sound** (no
+window at all) into an output **you cannot hear**, and Hue Sync runs in music
+mode against that same output. Choose it under *Display > Ghost audio output*:
+a spare HDMI or optical port with nothing plugged in, or a virtual audio cable.
+Leave it empty and music is shown but not synced — the alternative would be
+playing your TV's music out of the PC's speakers.
+
+Music playing **on the PC itself** needs none of that: the sound is already
+here, so Hue Sync just listens to its own output.
+
 ## One PC, several rooms
 
-Each player can be bound to a Hue **entertainment area** on the Players page
-(`lights:` dropdown). When the Apple TV in the living room plays, Hue Sync
-targets the living-room area; when the office TV plays, the office lights -
-fully automatic. The Hue Sync app has no API for selecting an area, so Hue
-Ghost switches it the only way possible: it stops its sync, restarts the app
-silently with the new selection (~3 s) and resumes.
+When the Apple TV in the living room plays, Hue Sync targets the living-room
+area; when the office TV plays, the office lights; when a game starts, your
+gaming area - fully automatic. The Hue Sync app has no API for any of this, so
+Hue Ghost switches it the only way possible: it stops its sync, restarts the
+app silently with the new selection (~3 s) and resumes. The entertainment area,
+the capture display, the music input and the audio switch are all applied in
+that **one** restart, once per viewing session.
 
 **The app stays yours.** That restart only ever happens while Hue Ghost is
 actually starting a sync, and only once per viewing session. Change the area
@@ -144,12 +186,16 @@ token, save, restart. Then either:
 - **[Hue Synco](https://github.com/engabd11/syncoV2)** (HACS): *Configure >
   Hue Ghost host / port / token* gives you a **Movie mode** switch, a state
   sensor (idle / ghosting / syncing with now-playing and drift attributes),
-  **mode** and **intensity** selects, a **use audio for effects** switch and
-  the sync-offset number - and turning movie mode on hands the entertainment
-  area over from music sync automatically.
+  **mode** and **intensity** selects, a **use audio for effects** switch, the
+  sync-offset number, a **brightness light** for the entertainment area and a
+  **switch per source** (with an `active` attribute saying which one is
+  driving the lights right now) - and turning movie mode on hands the
+  entertainment area over from music sync automatically.
 - Plain REST (see [docs/home-assistant.md](docs/home-assistant.md)):
   `POST /on`, `/off`, `/set {"offset_delta": 0.25}`, `GET /status`, all with
-  `Authorization: Bearer <token>`.
+  `Authorization: Bearer <token>`. `/set` also takes `{"brightness": 0-100}`
+  and `{"binding": {"key": "<id>", "enabled": false}}`; `/status` lists every
+  source under `bindings`.
 
 ## Command line
 
@@ -163,7 +209,8 @@ hue-ghost doctor               checks Jellyfin, mpv, displays, Hue Sync, the con
 hue-ghost status [--json]      what the running app sees
 hue-ghost on | off | toggle    master switch
 hue-ghost set --offset-delta 0.25 | --mode music | --intensity high
-               --use-audio on|off|app | --brightness-step -10
+               --use-audio on|off|app | --brightness 60 | --brightness-step -10
+               --enable-source <id> | --disable-source <id>
 hue-ghost setup                text-mode setup wizard (headless machines)
 hue-ghost install-autostart    start at sign-in (the installer's checkbox does the same)
 ```
@@ -249,6 +296,17 @@ automation.
 
 ## Changelog
 
+- **2.4.0** - **The lights follow more than a TV.** Add an app on this PC - a
+  browser playing YouTube, a player, a game - and it lights its own
+  entertainment area with no ghost involved, because Hue Sync can capture your
+  real screen directly. **Jellyfin music** is followed and synced (the ghost
+  plays the track into an output you cannot hear, which is what Hue Sync's
+  music mode then listens to); music playing on the PC itself needs nothing but
+  a binding. Every source has an **on/off switch**, so one can be ignored
+  without being deleted. **Home Assistant** gets an area-brightness light and a
+  switch per source. The window opens big enough for its own content and
+  remembers its size. Brightness is a real slider, and setting it while Hue
+  Sync is closed no longer fails.
 - **2.3.0** - Hue Sync's **mode** (Video / Music / Games) and its **use audio
   for effects** switch are Hue Ghost settings now, next to the intensity - on
   Home, on Sync, over the API and in Home Assistant. **Fixed:** changing the
@@ -307,9 +365,11 @@ powershell -File scripts\build_installer.ps1   # dist\installer\HueGhost-Setup-<
 ```
 
 Layout: `hueghost/gui/` (PySide6 app), `daemon.py` (orchestration),
-`watcher.py` (position model), `lockstep.py` (pure policy), `ghost.py` (mpv +
-IPC readback), `engines/huesync.py` (Hue Sync Public Control), `control.py` +
-`webapi.py` (HTTP API), `cli.py`, `installer/` (PyInstaller spec + Inno Setup).
+`sources/` (where "something is playing" comes from: Jellyfin, this PC),
+`watcher.py` (position model), `pcwatch.py` (PC playback detection),
+`lockstep.py` (pure policy), `ghost.py` (mpv + IPC readback),
+`engines/huesync.py` (Hue Sync Public Control), `control.py` + `webapi.py`
+(HTTP API), `cli.py`, `installer/` (PyInstaller spec + Inno Setup).
 
 MIT licensed — see [Compliance & privacy](#compliance--privacy) for bundling,
 trademark and privacy notes.
