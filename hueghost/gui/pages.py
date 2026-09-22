@@ -3,6 +3,7 @@ refresh(status) (called every 500 ms while visible) and on_show()."""
 from __future__ import annotations
 
 import socket
+import sys
 from dataclasses import dataclass
 from typing import Callable
 
@@ -205,7 +206,13 @@ class HomePage(Page):
         bri.addWidget(label("Brightness", "hint"))
         self.bri_val = chip("--")
         bri.addWidget(self.bri_val)
-        bri.addStretch(1)
+        self.bri = QSlider(Qt.Horizontal)
+        self.bri.setRange(0, 100)
+        self.bri.setSingleStep(5)
+        self.bri.setPageStep(10)
+        self.bri.setToolTip("How bright the entertainment area runs while syncing")
+        self.bri.sliderReleased.connect(self._bri_apply)
+        bri.addWidget(self.bri, 1)
         bri.addWidget(button("-10", "small", lambda: self._bri(-10)))
         bri.addWidget(button("+10", "small", lambda: self._bri(10)))
         h_card.body.addLayout(bri)
@@ -245,6 +252,11 @@ class HomePage(Page):
 
     def _bri(self, step: int) -> None:
         run_async(lambda: self.ctx.daemon.action("set", {"brightness_step": step}),
+                  on_error=lambda e: self.ctx.toast("Brightness: %s" % e, "warn"))
+
+    def _bri_apply(self) -> None:
+        level = int(self.bri.value())
+        run_async(lambda: self.ctx.daemon.action("set", {"brightness": level}),
                   on_error=lambda e: self.ctx.toast("Brightness: %s" % e, "warn"))
 
     def _offset(self, delta: float) -> None:
@@ -370,6 +382,9 @@ class HomePage(Page):
             set_pill(self.hs_pill, "not reachable", theme.BAD if e.get("name") == "huesync" else theme.STATE_COLORS["idle"])
             self.hs_text.setText(e.get("error") or ("engine: %s" % e.get("name")))
         self.bri_val.setText("%s %%" % e["bri"] if e.get("bri") is not None else "--")
+        # refresh runs every 500 ms: never fight a drag in progress
+        if e.get("bri") is not None and not self.bri.isSliderDown():
+            self.bri.setValue(int(e["bri"]))
         self.intensity.set_value(st.get("intensity"))
         self.mode.set_value(st.get("mode"))
         self.audio.set_value(st.get("use_audio"), (st.get("engine") or {}).get("use_audio"))
@@ -553,22 +568,65 @@ class SyncPage(Page):
 
 
 # ============================================================================================
+MODE_LABELS = [("video", "Video"), ("music", "Music"), ("games", "Game")]
+DETECT_LABELS = [("audio", "Sound"), ("fullscreen", "Fullscreen"), ("either", "Either")]
+
+
 class PlayerRow(QWidget):
-    """One followed player: label + entertainment-area picker + remove."""
+    """One binding: on/off + what it is + which lights it drives.
+
+    Two kinds share the row - a Jellyfin client on the network, and an app on
+    this PC. The middle changes; the ends (the switch, the area, the ordering)
+    are the same for both."""
 
     def __init__(self, player: dict, areas: list[dict], on_remove, on_move):
         super().__init__()
         self.player = dict(player)
+        self.is_pc = player.get("source") == "pc"
         lay = QHBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
         lay.setSpacing(8)
-        name = player.get("device_name_contains") or player.get("device_id") or "?"
-        how = "device" if player.get("device_id") else "name match"
-        lay.addWidget(icon("tv", 14, theme.MUTED))
-        self.lbl = QLabel("%s   <span style='color:%s'>%s%s</span>" % (
-            name, theme.MUTED, how, (", user " + player["user"]) if player.get("user") else ""))
+
+        self.enabled = ToggleSwitch()
+        self.enabled.setChecked(bool(player.get("enabled", True)))
+        self.enabled.setToolTip("Follow this one (off = ignore it, without deleting it)")
+        self.enabled.clicked.connect(self._restyle)
+        lay.addWidget(self.enabled)
+
+        name = (player.get("name") or player.get("exe") or player.get("device_name_contains")
+                or player.get("device_id") or "?")
+        if self.is_pc:
+            how = "on this PC"
+            glyph = "display"
+        else:
+            how = "device" if player.get("device_id") else "name match"
+            glyph = "tv"
+            if player.get("user"):
+                how += ", user " + player["user"]
+        lay.addWidget(icon(glyph, 14, theme.MUTED))
+        self.lbl = QLabel("%s   <span style='color:%s'>%s</span>" % (name, theme.MUTED, how))
         self.lbl.setTextFormat(Qt.RichText)
         lay.addWidget(self.lbl, 1)
+
+        self.mode = self.detect = None
+        if self.is_pc:
+            self.mode = QComboBox()
+            for v, t in MODE_LABELS:
+                self.mode.addItem(t, v)
+            self.mode.setCurrentIndex(max(0, self.mode.findData(player.get("mode") or "video")))
+            self.mode.setToolTip("What Hue Sync should react to while this app plays")
+            self.mode.currentIndexChanged.connect(self._mode_changed)
+            lay.addWidget(self.mode)
+            self.detect = QComboBox()
+            for v, t in DETECT_LABELS:
+                self.detect.addItem(t, v)
+            self.detect.setCurrentIndex(max(0, self.detect.findData(player.get("detect") or "audio")))
+            self.detect.setToolTip("How Hue Ghost can tell it is playing:\n"
+                                   "Sound - it is making some\n"
+                                   "Fullscreen - it is the window you are looking at, full screen\n"
+                                   "Either - whichever happens first")
+            lay.addWidget(self.detect)
+
         lay.addWidget(label("lights", "hint"))
         self.area = QComboBox()
         self.area.addItem("Hue Sync's current area", "")
@@ -579,21 +637,42 @@ class PlayerRow(QWidget):
         if player.get("area_id") and idx < 0:
             self.area.addItem(player.get("area_name") or player["area_id"], player["area_id"])
             self.area.setCurrentIndex(self.area.count() - 1)
-        self.area.setMinimumWidth(190)
+        self.area.setMinimumWidth(170)
         lay.addWidget(self.area)
         lay.addWidget(icon_button("up", "Higher priority", lambda: on_move(self, -1)))
         lay.addWidget(icon_button("down", "Lower priority", lambda: on_move(self, 1)))
-        lay.addWidget(icon_button("remove", "Remove this player", lambda: on_remove(self)))
+        lay.addWidget(icon_button("remove", "Remove this one", lambda: on_remove(self)))
+        self._restyle()
+
+    def _mode_changed(self) -> None:
+        # the sensible default follows the mode: a video makes sound, a game
+        # owns the screen. The user can still override it.
+        if self.detect is not None:
+            want = "fullscreen" if self.mode.currentData() == "games" else "audio"
+            self.detect.setCurrentIndex(max(0, self.detect.findData(want)))
+
+    def _restyle(self) -> None:
+        on = self.enabled.isChecked()
+        self.lbl.setStyleSheet("" if on else "color:%s;" % theme.FAINT)
+        for w in (self.area, self.mode, self.detect):
+            if w is not None:
+                w.setEnabled(on)
 
     def value(self) -> dict:
         p = dict(self.player)
+        p["enabled"] = self.enabled.isChecked()
         p["area_id"] = self.area.currentData() or ""
         p["area_name"] = self.area.currentText() if p["area_id"] else ""
+        if self.mode is not None:
+            p["mode"] = self.mode.currentData()
+        if self.detect is not None:
+            p["detect"] = self.detect.currentData()
         return p
 
 
 class PlayerPage(Page):
-    key, title, subtitle = "player", "Players", "Which Jellyfin clients the ghost follows, and which lights they drive"
+    key, title = "player", "Sources"
+    subtitle = "What the lights follow - your TV, and what plays on this PC"
 
     def __init__(self, ctx: Context):
         super().__init__(ctx)
@@ -612,10 +691,13 @@ class PlayerPage(Page):
                   self.server_status, stretch_last=False)
         self.lay.addWidget(c)
 
-        c2 = Card("Players to follow", "top = priority when several play at once")
-        c2.add(label("Each player can be bound to an entertainment area: when it plays, Hue Sync switches to those "
+        c2 = Card("Sources to follow", "top = priority when several play at once")
+        c2.add(label("Each one can be bound to an entertainment area: when it plays, Hue Sync switches to those "
                      "lights automatically (the app restarts silently for ~3 s the first time a movie moves rooms). "
-                     "'Hue Sync's current area' leaves the selection alone.", "hint", wrap=True))
+                     "'Hue Sync's current area' leaves the selection alone. Only one thing syncs at a time - Hue "
+                     "Sync has a single area and a single capture display - so when several are playing, the one "
+                     "highest in this list wins. Switch one off to ignore it without deleting it.",
+                     "hint", wrap=True))
         self.rows_box = QVBoxLayout()
         self.rows_box.setSpacing(8)
         c2.body.addLayout(self.rows_box)
@@ -635,7 +717,23 @@ class PlayerPage(Page):
         c3.add_row(button("Add selected player", None, self._add_selected, icon_name="add"), label("or", "hint"),
                    self.by_name, button("Add by name", None, self._add_by_name))
         self.lay.addWidget(c3)
-        self.footer(button("Save players", "primary", self._save, icon_name="check"))
+
+        c4 = Card("Add an app on this PC", "a browser, a player, a game")
+        c4.add(label("Anything playing on this PC's own screen is already something Hue Sync can capture - "
+                     "no ghost needed. Pick the app (start it so it shows up, or type its .exe for a game you "
+                     "have not launched yet), say what Hue Sync should react to, and bind it to an area.",
+                     "hint", wrap=True))
+        self.proc_list = QListWidget()
+        self.proc_list.setMinimumHeight(150)
+        c4.add(self.proc_list)
+        self.by_exe = QLineEdit()
+        self.by_exe.setPlaceholderText("or type the .exe ... e.g. eldenring.exe")
+        c4.add_row(button("Refresh list", None, self._load_processes, icon_name="search"),
+                   button("Add selected app", None, self._add_process, icon_name="add"),
+                   label("or", "hint"), self.by_exe, button("Add by name", None, self._add_by_exe))
+        self.lay.addWidget(c4)
+
+        self.footer(button("Save sources", "primary", self._save, icon_name="check"))
         self.lay.addStretch(1)
         self._areas: list[dict] = []
 
@@ -644,9 +742,11 @@ class PlayerPage(Page):
         self.url.setText(cfg.get("jellyfin.url") or "")
         self.key.setText(cfg.get("jellyfin.api_key") or "")
         self._areas = list(self.ctx.daemon.engine.areas() or [])
-        self._set_rows(cfg.players())
+        self._set_rows(cfg.bindings())
         if self.url.text() and self.key.text() and self.list.count() == 0:
             self._test()
+        if self.proc_list.count() == 0:
+            self._load_processes()
 
     def _set_rows(self, players: list[dict]) -> None:
         for r in self.rows:
@@ -710,28 +810,79 @@ class PlayerPage(Page):
         if any(r.player.get("device_id") == s["device_id"] for r in self.rows if s.get("device_id")):
             self.ctx.toast("That player is already in the list", "warn")
             return
-        self._append_row({"device_id": s.get("device_id") or "", "device_name_contains": s.get("device_name") or "",
+        self._append_row({"source": "jellyfin", "device_id": s.get("device_id") or "",
+                          "device_name_contains": s.get("device_name") or "", "name": s.get("device_name") or "",
                           "user": "", "area_id": "", "area_name": ""})
 
     def _add_by_name(self) -> None:
         name = self.by_name.text().strip()
         if not name:
             return
-        self._append_row({"device_id": "", "device_name_contains": name, "user": "", "area_id": "", "area_name": ""})
+        self._append_row({"source": "jellyfin", "device_id": "", "device_name_contains": name,
+                          "user": "", "area_id": "", "area_name": ""})
         self.by_name.clear()
+
+    # -- apps on this PC ------------------------------------------------------
+    def _load_processes(self) -> None:
+        self.proc_list.clear()
+        self.proc_list.addItem("looking...")
+
+        def done(res):
+            self.proc_list.clear()
+            for p in res["processes"]:
+                if p["exe"] in ("[system process]", "system"):
+                    continue
+                why = []
+                if p.get("foreground"):
+                    why.append("in front")
+                if p.get("playing_audio"):
+                    why.append("playing sound")
+                txt = p["exe"] + (("   -   " + ", ".join(why)) if why else "")
+                if p.get("title"):
+                    txt += "\n    " + p["title"][:80]
+                it = QListWidgetItem(txt)
+                it.setData(Qt.UserRole, p)
+                self.proc_list.addItem(it)
+
+        run_async(lambda: self.ctx.api.handle("GET", "/api/processes", {}, {}), done,
+                  lambda e: self.ctx.toast("Could not list the running apps: %s" % e, "bad"))
+
+    def _add_exe(self, exe: str, name: str = "") -> None:
+        exe = (exe or "").strip().lower()
+        if not exe:
+            return
+        if not exe.endswith(".exe") and sys.platform == "win32":
+            exe += ".exe"
+        if any((r.player.get("exe") or "") == exe for r in self.rows):
+            self.ctx.toast("That app is already in the list", "warn")
+            return
+        self._append_row({"source": "pc", "exe": exe, "name": name or exe, "mode": "video",
+                          "detect": "audio", "area_id": "", "area_name": ""})
+
+    def _add_process(self) -> None:
+        items = self.proc_list.selectedItems()
+        if not items or not isinstance(items[0].data(Qt.UserRole), dict):
+            self.ctx.toast("Select an app in the list first", "warn")
+            return
+        self._add_exe(items[0].data(Qt.UserRole)["exe"])
+
+    def _add_by_exe(self) -> None:
+        self._add_exe(self.by_exe.text())
+        self.by_exe.clear()
 
     def _save(self) -> None:
         import copy
         from ..config import Config
-        players = [r.value() for r in self.rows]
+        binds = [r.value() for r in self.rows]
         # work on a copy: apply_config diffs old vs new to decide what to rebuild
         tmp = Config(copy.deepcopy(self.ctx.daemon.cfg.data))
-        tmp.set_players(players)
-        partial = {"jellyfin": {"url": self.url.text().strip().rstrip("/"), "api_key": self.key.text().strip(),
+        tmp.set_bindings(binds)
+        partial = {"sources": tmp.get("sources"),
+                   "jellyfin": {"url": self.url.text().strip().rstrip("/"), "api_key": self.key.text().strip(),
                                 "follow": tmp.get("jellyfin.follow"), "follow_area_id": tmp.get("jellyfin.follow_area_id"),
                                 "follow_area_name": tmp.get("jellyfin.follow_area_name"),
                                 "players": tmp.get("jellyfin.players")}}
-        self.save(partial, "Players saved")
+        self.save(partial, "Sources saved")
 
 
 # ============================================================================================
@@ -765,6 +916,25 @@ class DisplayPage(Page):
                      "hint", wrap=True))
         self.lay.addWidget(c1)
 
+        c5 = Card("Ghost audio output", "for music: the one thing the ghost has to be heard on")
+        c5.add(label("Music has no picture to copy, so the ghost plays the track's sound instead and Hue Sync "
+                     "runs in music mode against it. That only works if you cannot hear it: pick an output with "
+                     "nothing plugged into it (a spare HDMI/optical port, or a virtual audio cable). Hue Sync's "
+                     "own music input is pointed at the same device. Left empty, music from your TV is shown but "
+                     "not synced - the alternative would be playing it out loud.", "hint", wrap=True))
+        self.audio_out = QComboBox()
+        self.audio_out.setMinimumWidth(280)
+        c5.form("Play music into", self.audio_out)
+        self.audio_note = label("", "muted", wrap=True)
+        c5.add(self.audio_note)
+        self.music_volume = QSpinBox()
+        self.music_volume.setRange(0, 100)
+        self.music_volume.setFixedWidth(110)
+        self.music_volume.setSuffix(" %")
+        c5.form("Ghost volume on it", self.music_volume,
+                hint="Hue Sync reacts to the level it hears, so full volume gives it the most to work with.")
+        self.lay.addWidget(c5)
+
         c2 = Card("mpv player", "the ghost is a muted mpv, driven over its IPC")
         self.mpv_path = QLineEdit()
         self.mpv_path.setPlaceholderText("mpv (auto-detect)")
@@ -787,8 +957,32 @@ class DisplayPage(Page):
         self.hwdec.setCurrentText(cfg.get("ghost.hwdec") or "auto")
         mode = str(cfg.get("ghost.keep_awake") or "playing").lower()
         self.keep_awake.set_value(mode if mode in KEEP_AWAKE_MODES else "playing")
+        self.music_volume.setValue(int(cfg.get("ghost.music_volume", 100) or 100))
         self._load_displays()
+        self._load_audio_outputs()
         self._check_mpv()
+
+    def _load_audio_outputs(self) -> None:
+        want = self.ctx.daemon.cfg.get("ghost.audio_device") or ""
+        self.audio_out.clear()
+        self.audio_out.addItem("None - do not sync music from the TV", "")
+        try:
+            res = self.ctx.api.handle("GET", "/api/audio", {}, {})
+        except Exception as e:
+            self.audio_note.setText("Could not list the audio outputs: %s" % e)
+            return
+        for a in res["outputs"]:
+            self.audio_out.addItem(a["name"] + ("   (your default - you WOULD hear this)" if a["default"] else ""),
+                                   a["id"])
+        idx = self.audio_out.findData(want)
+        if want and idx < 0:                    # configured but not plugged in right now
+            self.audio_out.addItem(want + "   (not available)", want)
+            idx = self.audio_out.count() - 1
+        self.audio_out.setCurrentIndex(max(0, idx))
+        self.audio_note.setText(
+            "Test it: play music on the TV and make sure you hear nothing from this PC."
+            if self.audio_out.currentData() else
+            "Music from the TV will be shown on Home but will not drive the lights.")
 
     def _load_displays(self) -> None:
         want = (self.ctx.daemon.cfg.get("ghost.screen_name") or "").lower()
@@ -833,6 +1027,8 @@ class DisplayPage(Page):
         partial = {"ghost": {"fullscreen": self.fullscreen.isChecked(), "geometry": self.geometry.text().strip() or "28%x28%-40-40",
                              "mpv_path": self.mpv_path.text().strip() or "mpv", "hwdec": self.hwdec.currentText(),
                              "keep_awake": self.keep_awake.value() or "playing",
+                             "audio_device": self.audio_out.currentData() or "",
+                             "music_volume": int(self.music_volume.value()),
                              "screen_name": d["name"] if d else "", "screen_index": d["index"] if d else None}}
         self.save(partial, "Display settings saved (used at the next playback)")
 

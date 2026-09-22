@@ -15,8 +15,10 @@ from typing import TYPE_CHECKING, Any
 from . import __version__
 from .config import INTENSITIES, MODES, app_data_dir, log_path
 from .jellyfin import JellyfinClient, JellyfinError, item_display_name
-from .winutil import (autostart_installed, find_mpv, hue_sync_info, install_autostart,
-                      list_displays, tray_command, uninstall_autostart)
+from .pcwatch import list_processes
+from .winutil import (autostart_installed, default_audio_output_id, find_mpv, hue_sync_info,
+                      install_autostart, list_audio_outputs, list_displays, tray_command,
+                      uninstall_autostart)
 
 if TYPE_CHECKING:
     from .daemon import Daemon
@@ -50,6 +52,13 @@ class WebApi:
             ("GET", "/api/sessions"): self.sessions,
             ("GET", "/api/displays"): lambda p, q: {"displays": [d.__dict__ for d in list_displays()]},
             ("GET", "/api/areas"): lambda p, q: {"areas": self.d.engine.areas(), "players": self.d.cfg.players()},
+            ("GET", "/api/bindings"): lambda p, q: {"bindings": self.d._binding_status(),
+                                                    "areas": self.d.engine.areas()},
+            ("POST", "/api/bindings"): self.set_bindings,
+            ("GET", "/api/processes"): lambda p, q: {"processes": list_processes()},
+            ("GET", "/api/audio"): lambda p, q: {"outputs": [a.__dict__ | {"mpv_device": a.mpv_device}
+                                                             for a in list_audio_outputs()],
+                                                 "default": default_audio_output_id()},
             ("GET", "/api/modes"): lambda p, q: {"modes": list(MODES), "intensities": list(INTENSITIES)},
             ("GET", "/api/huesync"): self.huesync,
             ("GET", "/api/mpv"): self.mpv,
@@ -137,6 +146,26 @@ class WebApi:
             except Exception:
                 version = None
         return {"path": path, "version": version, "found": bool(path)}
+
+    def set_bindings(self, p: dict, q: dict) -> dict:
+        """Replace the whole bindings list, in priority order. One binding can
+        also be flipped on its own with POST /set {"binding": {...}}."""
+        binds = p.get("bindings")
+        if not isinstance(binds, list):
+            raise ApiError('expected {"bindings": [...]}')
+        import copy
+
+        from .config import Config
+
+        # a throwaway copy, so apply_config still sees a real change to diff
+        tmp = Config(copy.deepcopy(self.d.cfg.data))
+        tmp.set_bindings(binds)
+        res = self.d.apply_config({"sources": tmp.get("sources"), "jellyfin": {
+            "follow": tmp.get("jellyfin.follow"),
+            "follow_area_id": tmp.get("jellyfin.follow_area_id"),
+            "follow_area_name": tmp.get("jellyfin.follow_area_name"),
+            "players": tmp.get("jellyfin.players")}})
+        return dict(res, bindings=self.d._binding_status())
 
     def autostart(self, p: dict, q: dict) -> dict:
         want = bool(p.get("enabled"))
