@@ -73,23 +73,30 @@ def status_key(st: dict) -> str:
 
 
 class NavButton(QPushButton):
+    """Nav item. The icon and text are child widgets in a layout, so all
+    spacing lives in the layout (not in stylesheet margin/padding, which the
+    painted highlight would honour but the children would not)."""
+
     def __init__(self, glyph: str, text: str):
         super().__init__()
         self.setObjectName("navBtn")
         self.setCheckable(True)
         self.setCursor(Qt.PointingHandCursor)
+        self.setFixedHeight(40)
         lay = QHBoxLayout(self)
-        lay.setContentsMargins(4, 0, 0, 0)
+        lay.setContentsMargins(14, 0, 14, 0)
         lay.setSpacing(12)
         self.ic = icon(glyph, 15)
         self.ic.setObjectName("navIcon")
-        self.ic.setFixedWidth(20)
+        self.ic.setFixedSize(20, 40)
+        self.ic.setAlignment(Qt.AlignCenter)
         self.ic.setAttribute(Qt.WA_TransparentForMouseEvents)
-        lay.addWidget(self.ic)
+        lay.addWidget(self.ic, 0, Qt.AlignVCenter)
         lb = QLabel(text)
+        lb.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
         lb.setAttribute(Qt.WA_TransparentForMouseEvents)
         lb.setStyleSheet("background:transparent;")
-        lay.addWidget(lb, 1)
+        lay.addWidget(lb, 1, Qt.AlignVCenter)
         self.lb = lb
         self.toggled.connect(self._restyle)
         self._restyle(False)
@@ -145,6 +152,11 @@ class MainWindow(QMainWindow):
         brand_row.addLayout(bcol, 1)
         nv.addLayout(brand_row)
         nv.addSpacing(18)
+        # the buttons' own box is the highlight: inset the column, not the button
+        self.nav_col = QVBoxLayout()
+        self.nav_col.setContentsMargins(10, 0, 10, 0)
+        self.nav_col.setSpacing(2)
+        nv.addLayout(self.nav_col)
         self.nav_buttons: dict[str, NavButton] = {}
         h.addWidget(nav)
 
@@ -190,7 +202,7 @@ class MainWindow(QMainWindow):
             b = NavButton(cls.key, cls.title)
             b.clicked.connect(lambda _=False, k=cls.key: self.goto(k))
             self.nav_buttons[cls.key] = b
-            nv.addWidget(b)
+            self.nav_col.addWidget(b)
         nv.addStretch(1)
         foot = QVBoxLayout()
         foot.setContentsMargins(18, 0, 14, 0)

@@ -85,7 +85,7 @@ QLabel#brandSub {{ color: {MUTED}; font-size: 11px; }}
 QLabel#brandFoot {{ color: {FAINT}; font-size: 11px; }}
 QLabel#brandFootStrong {{ color: {MUTED}; font-size: 11px; font-weight: 600; }}
 QPushButton#navBtn {{
-    text-align: left; padding: 9px 14px 9px 14px; border: none; border-radius: 10px; margin: 1px 10px;
+    text-align: left; padding: 0; margin: 0; border: none; border-radius: 10px;
     background: transparent; color: {TEXT_2}; font-size: 13.5px;
 }}
 QPushButton#navBtn:hover {{ background: {CARD}; color: {TEXT}; }}
