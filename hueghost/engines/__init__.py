@@ -30,6 +30,10 @@ class EngineState:
     error: str | None = None
     area_id: str | None = None     # entertainment area the engine currently targets
     area_name: str | None = None
+    monitor_id: str | None = None  # display the engine's app captures
+    monitor_name: str | None = None
+    audio_device_id: str | None = None    # render endpoint it listens to in music mode
+    audio_device_name: str | None = None
     switching: bool = False        # area switch in progress
     updated_mono: float = field(default_factory=time.monotonic)
 
@@ -39,8 +43,41 @@ class EngineState:
         return d
 
 
+AUTO = "auto"      # "let the app choose again", as opposed to pinning a value
+
+
+@dataclass(frozen=True)
+class Plan:
+    """What the engine must be set to for one activity. ``None`` anywhere means
+    "leave whatever the app has"; ``AUTO`` means "hand the choice back to it"."""
+    area_id: str | None = None
+    mode: str | None = None
+    monitor: str | None = None          # AUTO | a monitor DeviceID
+    audio_device: str | None = None     # AUTO | a render endpoint id
+    use_audio: bool | None = None
+    intensity: str | None = None
+
+    def as_dict(self) -> dict:
+        return asdict(self)
+
+
 class Engine:
     name = "none"
+
+    def apply_plan(self, plan: Plan) -> None:
+        """Set everything one activity wants, at once. Engines that restart an
+        app to apply start-up-only settings must do this under a single lock:
+        applied piecemeal, a new area and a new display are two restarts."""
+        if plan.mode:
+            self.set_mode(plan.mode)
+        if plan.intensity:
+            self.set_intensity(plan.intensity)
+        self.set_use_audio(plan.use_audio)
+        self.set_area(plan.area_id)
+
+    def set_brightness(self, level: int) -> None:
+        """Absolute 0-100. The Hue Sync protocol only has a signed step, so this
+        is synthesised from the level the app reports."""
 
     def start(self) -> None:
         """Ask for sync ON (idempotent; engines reconcile in the background)."""
@@ -155,6 +192,8 @@ def build_engine(cfg) -> Engine:
             mode=h.get("mode", "video"), intensity=h.get("intensity", ""),
             use_audio=None if use_audio is None else bool(use_audio),
             manage_area=bool(h.get("manage_area", True)),
+            manage_monitor=bool(h.get("manage_monitor", True)),
+            manage_audio_device=bool(h.get("manage_audio_device", True)),
             launch_exe=h.get("launch_exe", ""))
     if kind == "httphook":
         url = cfg.get("engine.httphook.url", "")

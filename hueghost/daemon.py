@@ -797,6 +797,11 @@ class Daemon:
             changed = True
         if "brightness_step" in p:
             self.engine.adjust_brightness(int(p["brightness_step"]))
+        if "brightness" in p:
+            level = int(p["brightness"])
+            if not 0 <= level <= 100:
+                raise ValueError("brightness must be 0-100")
+            self.engine.set_brightness(level)
         if changed:
             self._push_engine_prefs()
             if self.cfg.path:

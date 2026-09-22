@@ -65,9 +65,12 @@ def test_watcher_switches_model_when_the_playing_device_changes():
 class SwitchableEngine(HueSyncEngine):
     """HueSyncEngine with the OS side replaced by a scripted fake app."""
 
-    def __init__(self, app: MockHueSync, area="area-office", audio=False, **kw):
+    def __init__(self, app: MockHueSync, area="area-office", audio=False,
+                 monitor="MONITOR\\VDD\\0002", audio_device="{0.0.0.0}.{spk}", **kw):
         self.fake_area = area
         self.fake_audio = {"video": audio, "games": audio}
+        self.fake_monitor = monitor
+        self.fake_audio_device = audio_device
         self.ops: list[str] = []
         self.app = app
         super().__init__("127.0.0.1", app.port, mode="video", intensity="", **kw)
@@ -85,6 +88,20 @@ class SwitchableEngine(HueSyncEngine):
     def _write_use_audio(self, mode, on):
         self.ops.append("audio:%s=%s" % (mode, "on" if on else "off"))
         self.fake_audio[mode] = on
+
+    def _read_monitor(self):
+        return self.fake_monitor
+
+    def _write_monitor(self, monitor):
+        self.ops.append("monitor:" + monitor)
+        self.fake_monitor = monitor
+
+    def _read_audio_device(self):
+        return self.fake_audio_device
+
+    def _write_audio_device(self, endpoint):
+        self.ops.append("audiodev:" + endpoint)
+        self.fake_audio_device = endpoint
 
     def _kill_app(self):
         self.ops.append("kill")
@@ -134,6 +151,111 @@ def test_engine_switches_area_then_syncs():
     finally:
         eng.close()
         app.close()
+
+
+def test_every_startup_only_setting_lands_in_one_restart():
+    from hueghost.engines import Plan
+    app = MockHueSync()
+    eng = SwitchableEngine(app, area="area-office", audio=False)
+    try:
+        assert wait(lambda: eng.state().connected and eng.state().monitor_id == "MONITOR\\VDD\\0002")
+        # a PC video binding: another area, the real display, audio effects on
+        eng.apply_plan(Plan(area_id="area-living", mode="video", monitor="MONITOR\\REAL\\0001",
+                            use_audio=True))
+        eng.start()
+        assert wait(lambda: eng.state().syncing and eng.state().area_id == "area-living", 8.0)
+        assert eng.ops == ["kill", "write:area-living", "audio:video=on",
+                           "monitor:MONITOR\\REAL\\0001", "launch"]
+        assert eng.ops.count("kill") == 1 and eng.ops.count("launch") == 1
+        assert eng.state().monitor_id == "MONITOR\\REAL\\0001"
+        # settled: re-asserting the same wishes restarts nothing
+        eng.apply_plan(Plan(area_id="area-living", mode="video", monitor="MONITOR\\REAL\\0001",
+                            use_audio=True))
+        time.sleep(0.8)
+        assert eng.ops.count("kill") == 1
+    finally:
+        eng.close()
+        app.close()
+
+
+def test_a_display_the_user_picks_in_the_app_is_not_fought():
+    from hueghost.engines import Plan
+    app = MockHueSync()
+    eng = SwitchableEngine(app, area="area-office")
+    try:
+        assert wait(lambda: eng.state().connected)
+        eng.apply_plan(Plan(area_id="area-office", mode="video", monitor="MONITOR\\VDD\\0002"))
+        eng.start()
+        assert wait(lambda: eng.state().syncing, 8.0)
+        assert eng.ops == []                       # already where we want it
+        # the user picks another display in the app, mid-session
+        eng.fake_monitor = "MONITOR\\OTHER\\0003"
+        time.sleep(0.8)
+        assert eng.ops == []                       # ours was applied once; theirs stands
+        assert wait(lambda: eng.state().monitor_id == "MONITOR\\OTHER\\0003")
+    finally:
+        eng.close()
+        app.close()
+
+
+def test_manage_monitor_off_leaves_the_display_alone():
+    from hueghost.engines import Plan
+    app = MockHueSync()
+    eng = SwitchableEngine(app, area="area-office", manage_monitor=False)
+    try:
+        assert wait(lambda: eng.state().connected)
+        eng.apply_plan(Plan(area_id="area-office", mode="video", monitor="MONITOR\\REAL\\0001"))
+        eng.start()
+        assert wait(lambda: eng.state().syncing, 8.0)
+        time.sleep(0.5)
+        assert eng.ops == [] and eng.fake_monitor == "MONITOR\\VDD\\0002"
+    finally:
+        eng.close()
+        app.close()
+
+
+def test_music_never_drags_the_capture_display_along():
+    from hueghost.engines import Plan
+    app = MockHueSync(mode="music")
+    eng = SwitchableEngine(app, area="area-office")
+    try:
+        assert wait(lambda: eng.state().connected)
+        # a Jellyfin-music session: pin the endpoint the ghost plays into, but
+        # music mode captures no screen, so the display must not cause a restart
+        eng.apply_plan(Plan(area_id="area-office", mode="music", monitor="MONITOR\\REAL\\0001",
+                            audio_device="{0.0.0.0}.{cable}"))
+        eng.start()
+        assert wait(lambda: "audiodev:{0.0.0.0}.{cable}" in eng.ops, 8.0)
+        assert not any(o.startswith("monitor:") for o in eng.ops)
+        assert eng.ops.count("kill") == 1
+    finally:
+        eng.close()
+        app.close()
+
+
+def test_brightness_survives_a_closed_app_and_lands_as_a_step():
+    app = MockHueSync(bri=56)
+    eng = SwitchableEngine(app, area="area-office")
+    try:
+        assert wait(lambda: eng.state().connected and eng.state().bri == 56)
+        eng.set_brightness(30)             # absolute: the protocol only has a step
+        assert wait(lambda: app.bri == 30, 5.0)          # 56 - 26, computed from the app's own level
+        assert app.commands().count("inc_bri") == 1
+        eng.adjust_brightness(-10)
+        assert wait(lambda: app.bri == 20, 5.0)
+    finally:
+        eng.close()
+        app.close()
+
+
+def test_brightness_with_no_connection_is_not_an_error():
+    # the LAN API used to turn this into an HTTP 500 when Hue Sync was closed
+    eng = HueSyncEngine("127.0.0.1", 1, mode="video")
+    try:
+        eng.adjust_brightness(10)
+        eng.set_brightness(40)
+    finally:
+        eng.close()
 
 
 def test_engine_stops_its_own_sync_before_switching_and_leaves_manual_syncs_alone():
