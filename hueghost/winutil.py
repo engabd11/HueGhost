@@ -298,13 +298,18 @@ def _guid(s: str):
 
 def _vcall(ptr, index: int, *argtypes):
     """Bind method ``index`` of a COM object's vtable. 0/1/2 are the IUnknown
-    three: QueryInterface, AddRef, Release."""
+    three: QueryInterface, AddRef, Release.
+
+    The result type is ``c_long``, not ``ctypes.HRESULT``: HRESULT makes ctypes
+    *raise* on a failing call, and failing calls are normal here - a PC with no
+    sound card has no default endpoint, and that must read as "no devices", not
+    as an exception out of the engine's constructor."""
     import ctypes
     from ctypes import POINTER, c_void_p
 
     vtbl = ctypes.cast(ptr, POINTER(c_void_p))[0]
     fn = ctypes.cast(vtbl, POINTER(c_void_p))[index]
-    return ctypes.WINFUNCTYPE(ctypes.HRESULT, c_void_p, *argtypes)(fn)
+    return ctypes.WINFUNCTYPE(ctypes.c_long, c_void_p, *argtypes)(fn)
 
 
 def co_initialize() -> None:
@@ -335,9 +340,17 @@ def mpv_audio_device(endpoint_id: str) -> str:
 
 
 def default_audio_output_id() -> str:
-    """Endpoint id Windows currently plays to, or "" when it cannot be read."""
+    """Endpoint id Windows currently plays to, or "" when there is none (a PC
+    with no sound card, or the audio service stopped)."""
     if sys.platform != "win32":
         return ""
+    try:
+        return _default_audio_output_id()
+    except Exception:
+        return ""
+
+
+def _default_audio_output_id() -> str:
     import ctypes
     from ctypes import POINTER, byref, c_int, c_void_p
 
@@ -365,7 +378,8 @@ def default_audio_output_id() -> str:
 def list_audio_outputs() -> list[AudioOutput]:
     """Active WASAPI render endpoints, read from the registry (no COM, no
     PROPVARIANT marshalling). This is the list the ghost can play music into and
-    the list the Hue Sync app can listen to in music mode."""
+    the list the Hue Sync app can listen to in music mode. Empty on a PC with
+    no sound card - which is a normal state, not an error."""
     if sys.platform != "win32":
         return []
     import winreg
