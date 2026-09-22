@@ -912,10 +912,11 @@ class HomeAssistantPage(Page):
         c.form("Token", self.token, trailing=tok_btns)
         self.addr = label("", "muted", wrap=True)
         c.add(self.addr)
+        c.add(label("Enter the host exactly as shown - no http:// - Hue Synco adds the scheme itself.", "hint", wrap=True))
         self.lay.addWidget(c)
         c2 = Card("Hue Synco integration", "recommended")
         c2.add(label("In Home Assistant: Settings > Devices & services > Hue Synco > Configure > enter this PC's "
-                     "address, port and token. You get a Movie mode switch, a state sensor, an intensity select and "
+                     "host, port and token. You get a Movie mode switch, a state sensor, an intensity select and "
                      "a sync-offset number - and movie mode hands the entertainment area over from music sync "
                      "automatically.", "muted", wrap=True))
         c2.add(label("Without Hue Synco: POST /on, /off, /set {\"offset_delta\": 0.25}; GET /status. "
@@ -933,7 +934,7 @@ class HomeAssistantPage(Page):
             ip = socket.gethostbyname(socket.gethostname())
         except OSError:
             ip = "?"
-        self.addr.setText("This PC: %s  →  http://%s:%d" % (socket.gethostname(), ip, self.port.value()))
+        self.addr.setText("This PC: %s   ·   host  %s   ·   port  %d" % (socket.gethostname(), ip, self.port.value()))
 
     def refresh(self, st: dict) -> None:
         self.restart_banner.setVisible("control" in (st.get("restart_required") or []))
