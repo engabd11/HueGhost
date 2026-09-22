@@ -11,9 +11,12 @@ from hueghost import winutil
 # Shaped like the real file: sorted keys, 4-space indent, a "Default": "Video"
 # *string* that must not be mistaken for the "Video" object, and nested objects
 # inside Games so the brace matching has something to chew on.
-SAMPLE = '''{
+SAMPLE = r'''{
     "App": {
         "LastSyncMode": 2,
+        "PreferredMonitor": [
+            "MONITOR\\MTT1337\\{4d36e96e-e325-11ce-bfc1-08002be10318}\\0002"
+        ],
         "WithAudio": "decoy at the wrong level"
     },
     "Core": {
@@ -21,6 +24,7 @@ SAMPLE = '''{
             "Default": "Video",
             "Games": {
                 "CaptureOption": "Games Default",
+                "PreferredAudioDevice": "decoy one level down",
                 "Presets": [
                     {"Name": "Subtle", "WithAudio": false},
                     {"Name": "High"}
@@ -36,10 +40,16 @@ SAMPLE = '''{
                 "WithAudio": false
             }
         },
+        "AutomaticAudioDevice": true,
+        "AutomaticDisplay": true,
+        "PreferredAudioDevice": "{0.0.0.00000000}.{aaaaaaaa-1111-2222-3333-444444444444}",
         "SyncDelay": 0
     }
 }
 '''
+
+VDD = r"MONITOR\MTT1337\{4d36e96e-e325-11ce-bfc1-08002be10318}\0002"
+REAL = r"MONITOR\DELA212\{4d36e96e-e325-11ce-bfc1-08002be10318}\0001"
 
 
 @pytest.fixture
@@ -99,6 +109,78 @@ def test_missing_key_is_reported_not_guessed(tmp_path, monkeypatch):
     assert winutil.hue_sync_with_audio("video") is None
     with pytest.raises(RuntimeError):
         winutil.hue_sync_write_with_audio("video", True)
+
+
+def test_reads_the_capture_display_and_the_music_input(appdir):
+    # the stored value is JSON-escaped; callers want the real device id back
+    assert winutil.hue_sync_preferred_monitor() == VDD
+    assert winutil.hue_sync_audio_device() == "{0.0.0.00000000}.{aaaaaaaa-1111-2222-3333-444444444444}"
+
+
+def test_switching_the_capture_display_also_pins_it(appdir):
+    before = read(appdir)
+    assert winutil.hue_sync_write_preferred_monitor(REAL) is True
+    after = read(appdir)
+    # exactly two tokens moved: the device id and the automatic flag
+    assert after == before.replace(VDD.replace("\\", "\\\\"), REAL.replace("\\", "\\\\")) \
+                          .replace('"AutomaticDisplay": true', '"AutomaticDisplay": false')
+    assert json.loads(after)["App"]["PreferredMonitor"] == [REAL]
+    assert winutil.hue_sync_preferred_monitor() == REAL
+    assert digest(appdir) == str(winutil._fnv1a64(after.encode("utf-8")))
+
+
+def test_audio_device_write_ignores_the_decoy_one_level_down(appdir):
+    want = "{0.0.0.00000000}.{bbbbbbbb-0000-0000-0000-000000000000}"
+    assert winutil.hue_sync_write_audio_device(want) is True
+    after = json.loads(read(appdir))
+    assert after["Core"]["PreferredAudioDevice"] == want
+    assert after["Core"]["AppMode"]["Games"]["PreferredAudioDevice"] == "decoy one level down"
+    assert after["Core"]["AutomaticAudioDevice"] is False
+
+
+def test_auto_hands_the_choice_back_to_the_app(appdir):
+    winutil.hue_sync_write_audio_device("{0.0.0.00000000}.{cccccccc-0000-0000-0000-000000000000}")
+    assert json.loads(read(appdir))["Core"]["AutomaticAudioDevice"] is False
+    # a PC-music session wants the app's own default output again
+    assert winutil.hue_sync_patch(audio_device=winutil.AUTO) is True
+    after = json.loads(read(appdir))
+    assert after["Core"]["AutomaticAudioDevice"] is True
+    assert after["Core"]["PreferredAudioDevice"] == "{0.0.0.00000000}.{cccccccc-0000-0000-0000-000000000000}"
+
+
+def test_one_restart_means_one_write_and_one_digest(appdir):
+    assert winutil.hue_sync_patch(with_audio=("video", True), monitor=REAL,
+                                  audio_device="{0.0.0.00000000}.{dddddddd-0000-0000-0000-000000000000}") is True
+    after = read(appdir)
+    parsed = json.loads(after)
+    assert parsed["Core"]["AppMode"]["Video"]["WithAudio"] is True
+    assert parsed["App"]["PreferredMonitor"] == [REAL]
+    assert parsed["Core"]["PreferredAudioDevice"].endswith("{dddddddd-0000-0000-0000-000000000000}")
+    assert parsed["Core"]["AutomaticDisplay"] is False and parsed["Core"]["AutomaticAudioDevice"] is False
+    assert digest(appdir) == str(winutil._fnv1a64(after.encode("utf-8")))
+
+
+def test_pinning_the_display_it_already_shows_still_turns_automatic_off(appdir):
+    # same device id, but the app was picking its own - that flag is the whole point
+    assert winutil.hue_sync_patch(monitor=VDD) is True
+    assert json.loads(read(appdir))["Core"]["AutomaticDisplay"] is False
+    assert winutil.hue_sync_preferred_monitor() == VDD
+
+
+def test_patching_values_it_already_has_changes_nothing(appdir):
+    winutil.hue_sync_patch(monitor=VDD)                  # settle: id pinned, automatic off
+    before, before_hash = read(appdir), digest(appdir)
+    assert winutil.hue_sync_patch(monitor=VDD) is False
+    assert read(appdir) == before and digest(appdir) == before_hash
+
+
+def test_missing_display_key_is_reported_not_guessed(tmp_path, monkeypatch):
+    (tmp_path / "config.json").write_text('{"App": {"LastSyncMode": 2}, "Core": {"SyncDelay": 0}}',
+                                          encoding="utf-8")
+    monkeypatch.setattr(winutil, "hue_sync_dir", lambda: str(tmp_path))
+    assert winutil.hue_sync_preferred_monitor() is None
+    with pytest.raises(RuntimeError):
+        winutil.hue_sync_write_preferred_monitor(REAL)
 
 
 def test_fnv1a64_matches_the_apps_digest():
