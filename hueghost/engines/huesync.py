@@ -56,6 +56,7 @@ MODES = ("video", "games", "music", "scenes")
 RESEND_AFTER_S = 2.5        # wait this long for an app_state_update before re-sending a command
 BACKOFF_MIN_S, BACKOFF_MAX_S = 1.0, 30.0
 PING_EVERY_S = 20.0
+SESSION_POLL_S = 0.3        # recv timeout = how quickly a start()/stop() request reaches the app
 
 
 def build_command(name: str, **data) -> str:
@@ -240,7 +241,7 @@ class HueSyncEngine(Engine):
                 log.warning("Hue Sync connection lost; reconnecting")
 
     def _session(self, ws: WebSocket) -> None:
-        ws.settimeout(1.0)
+        ws.settimeout(SESSION_POLL_S)
         last_ping = time.monotonic()
         while not self._stop.is_set():
             try:
