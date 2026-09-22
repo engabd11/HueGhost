@@ -18,6 +18,7 @@ import time
 from typing import Any, Callable
 
 from .lockstep import Action, Pause, Resume, Seek, Speed
+from .winutil import mpv_audio_device
 
 log = logging.getLogger("hue-ghost.ghost")
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -179,10 +180,16 @@ def resolve_screen(screen_name: str, screen_index) -> int | None:
     return None
 
 
-def mpv_args(cfg, title: str) -> list[str]:
+def mpv_args(cfg, title: str, audio_only: bool = False, audio_device: str = "") -> list[str]:
+    """The ghost's command line.
+
+    A video ghost is muted and on screen - Hue Sync reacts to its picture. A
+    music ghost is the other way round: no window at all, and the sound is the
+    whole point, so it is played (at full volume) into a device you cannot
+    hear, which is the device Hue Sync's music mode listens to."""
     g = cfg.section("ghost")
     args = [g.get("mpv_path") or "mpv", "--no-config", "--no-border",
-            "--mute=yes", "--volume=0", "--osd-level=0", "--osc=no",
+            "--osd-level=0", "--osc=no",
             "--sub-visibility=no", "--sub-auto=no", "--audio-file-auto=no",
             "--hwdec=" + str(g.get("hwdec") or "auto"),
             "--keep-open=no", "--hr-seek=yes", "--focus-on=never",
@@ -191,6 +198,17 @@ def mpv_args(cfg, title: str) -> list[str]:
             "--demuxer-readahead-secs=5",
             "--input-default-bindings=no",
             "--input-conf=" + INPUT_CONF]
+    if audio_only:
+        vol = max(0, min(100, int(g.get("music_volume", 100) or 100)))
+        args += ["--mute=no", "--volume=%d" % vol, "--vid=no", "--force-window=no",
+                 "--audio-client-name=hue-ghost"]
+        dev = mpv_audio_device(audio_device)
+        if dev:
+            args += ["--audio-device=" + dev]
+        args += list(g.get("extra_args") or [])
+        args += ["--input-ipc-server=" + cfg.get("ghost.ipc"), "--title=" + title]
+        return args
+    args += ["--mute=yes", "--volume=0"]
     idx = resolve_screen(g.get("screen_name") or "", g.get("screen_index"))
     if idx is not None:
         args += ["--screen=%d" % idx, "--fs-screen=%d" % idx]
@@ -232,8 +250,9 @@ class GhostPlayer:
     # -- lifecycle -----------------------------------------------------------
     @classmethod
     def launch(cls, cfg, url: str, http_header: str, start_pos: float, item_id: str,
-               err_path: str | None = None) -> "GhostPlayer":
-        args = mpv_args(cfg, "hue-ghost")
+               err_path: str | None = None, audio_only: bool = False,
+               audio_device: str = "") -> "GhostPlayer":
+        args = mpv_args(cfg, "hue-ghost", audio_only=audio_only, audio_device=audio_device)
         args += ["--http-header-fields=" + http_header, "--start=%.3f" % max(0.0, start_pos), url]
         errf = open(err_path, "wb") if err_path else subprocess.DEVNULL
         creation = 0

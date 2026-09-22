@@ -327,6 +327,13 @@ def _device_enumerator():
     return None if (hr or not enum) else enum
 
 
+def mpv_audio_device(endpoint_id: str) -> str:
+    """Windows names a render endpoint ``{0.0.0.00000000}.{guid}``; mpv calls
+    the same device ``wasapi/{guid}``."""
+    m = re.search(r"\{[0-9a-fA-F-]{36}\}$", endpoint_id or "")
+    return "wasapi/" + m.group(0) if m else ""
+
+
 def default_audio_output_id() -> str:
     """Endpoint id Windows currently plays to, or "" when it cannot be read."""
     if sys.platform != "win32":

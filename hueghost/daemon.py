@@ -151,6 +151,7 @@ class Daemon:
         self._stalls_saved_mono = float("-inf")
         self._startup_latency = 1.0   # EMA of launch -> first time-pos
         self._launch_mono = 0.0
+        self._ghost_audio_only = False
         self._stop = threading.Event()
         self._lock = threading.RLock()
         self.control: ControlServer | None = None
@@ -264,7 +265,11 @@ class Daemon:
         execution-state flag is per thread, so this only ever runs on the
         daemon loop thread."""
         mode = self.keep_awake_mode()
-        want = mode == "always" or (mode == "playing" and self.ghost is not None)
+        # a music ghost has no picture, and a PC source is on a screen the user
+        # is already looking at: neither needs a display held awake for us
+        playing_on_a_display = (self.ghost is not None and not self._ghost_audio_only) \
+            or (self.ghost is None and self._engine_started)
+        want = mode == "always" or (mode == "playing" and playing_on_a_display)
         if want == self._awake:
             return
         if keep_awake(want):
@@ -506,6 +511,7 @@ class Daemon:
         if spec is None or not spec.audio_only:
             self._prepare_display()      # music has no picture: no display to wake
         extra = {"audio_only": True, "audio_device": spec.audio_device} if spec.audio_only else {}
+        self._ghost_audio_only = bool(spec.audio_only)
         try:
             self.ghost = GhostPlayer.launch(self.cfg, spec.url, spec.http_header, start,
                                             m.item_id, err_path=self._mpv_err, **extra)
