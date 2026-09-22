@@ -388,6 +388,12 @@ class Config:
     def enabled_bindings(self) -> list[dict]:
         return [b for b in self.bindings() if b.get("enabled", True)]
 
+    def music_output(self, binding: dict | None = None) -> str:
+        """Where a ghost should play music: the binding's own choice, else the
+        global one. Empty means remote music cannot be synced (it would come
+        out of the speakers), only shown."""
+        return str((binding or {}).get("audio_device") or self.get("ghost.audio_device", "") or "")
+
     # -- validation -------------------------------------------------------
     def binding_problems(self, b: dict) -> list[str]:
         """What stops one binding working. Non-fatal: the daemon skips it and
@@ -407,10 +413,12 @@ class Config:
                 out.append("jellyfin.url is empty")
             if not str(self.get("jellyfin.api_key", "")).strip():
                 out.append("jellyfin.api_key is empty (Jellyfin Dashboard > API Keys > +)")
-            if b.get("kinds") == ["music"] or "music" in (b.get("kinds") or []):
-                if not (b.get("audio_device") or self.get("ghost.audio_device")):
-                    out.append("music needs an output for the ghost to play into "
-                               "(Sources > Audio input, or Display > Ghost audio output)")
+            # Music needs somewhere silent for the ghost to play into. Only
+            # fatal for a music-*only* binding: one that also follows video
+            # simply does not sync music until an output is chosen.
+            if list(b.get("kinds") or []) == ["music"] and not self.music_output(b):
+                out.append("music needs an output for the ghost to play into "
+                           "(Sources > Audio input, or Display > Ghost audio output)")
         return out
 
     def problems(self) -> list[str]:

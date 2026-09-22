@@ -277,51 +277,82 @@ class AudioOutput:
         return self.name + ("  [default]" if self.default else "")
 
 
-def default_audio_output_id() -> str:
-    """Endpoint id Windows currently plays to, or "" when it cannot be read."""
-    if sys.platform != "win32":
-        return ""
-    import ctypes
-    from ctypes import c_void_p, c_int, POINTER, byref
+# -- just enough COM to talk to the audio endpoints, in plain ctypes ----------
+CLSID_MMDeviceEnumerator = "{BCDE0395-E52F-467C-8E3D-C4579291692E}"
+IID_IMMDeviceEnumerator = "{A95664D2-9614-4F35-A746-DE8DB63617E6}"
+IID_IAudioSessionManager2 = "{77AA99A0-1BD6-484F-8BC7-2C654C9A9B6F}"
+IID_IAudioMeterInformation = "{C02216F6-8C67-4B5B-9D00-D008E73E0064}"
 
-    ole32 = ctypes.windll.ole32
+
+def _guid(s: str):
+    import ctypes
 
     class GUID(ctypes.Structure):
         _fields_ = [("d1", ctypes.c_ulong), ("d2", ctypes.c_ushort),
                     ("d3", ctypes.c_ushort), ("d4", ctypes.c_ubyte * 8)]
 
-    def guid(s):
-        g = GUID()
-        ole32.CLSIDFromString(ctypes.c_wchar_p(s), byref(g))
-        return g
+    g = GUID()
+    ctypes.windll.ole32.CLSIDFromString(ctypes.c_wchar_p(s), ctypes.byref(g))
+    return g
 
-    def vcall(p, idx, *argtypes):
-        vtbl = ctypes.cast(p, POINTER(c_void_p))[0]
-        fn = ctypes.cast(vtbl, POINTER(c_void_p))[idx]
-        return ctypes.WINFUNCTYPE(ctypes.HRESULT, c_void_p, *argtypes)(fn)
 
-    ole32.CoInitializeEx(None, 0)
+def _vcall(ptr, index: int, *argtypes):
+    """Bind method ``index`` of a COM object's vtable. 0/1/2 are the IUnknown
+    three: QueryInterface, AddRef, Release."""
+    import ctypes
+    from ctypes import POINTER, c_void_p
+
+    vtbl = ctypes.cast(ptr, POINTER(c_void_p))[0]
+    fn = ctypes.cast(vtbl, POINTER(c_void_p))[index]
+    return ctypes.WINFUNCTYPE(ctypes.HRESULT, c_void_p, *argtypes)(fn)
+
+
+def co_initialize() -> None:
+    """Per-thread, idempotent. The daemon loop thread is the only caller in the
+    poll path; the web API calls it on its own threads."""
+    import ctypes
+
+    ctypes.windll.ole32.CoInitializeEx(None, 0)
+
+
+def _device_enumerator():
+    """A fresh IMMDeviceEnumerator, or None. Caller releases it."""
+    import ctypes
+    from ctypes import byref, c_void_p
+
+    co_initialize()
     enum = c_void_p()
-    hr = ole32.CoCreateInstance(byref(guid("{BCDE0395-E52F-467C-8E3D-C4579291692E}")), None, 1,
-                                byref(guid("{A95664D2-9614-4F35-A746-DE8DB63617E6}")), byref(enum))
-    if hr or not enum:
+    hr = ctypes.windll.ole32.CoCreateInstance(byref(_guid(CLSID_MMDeviceEnumerator)), None, 1,
+                                              byref(_guid(IID_IMMDeviceEnumerator)), byref(enum))
+    return None if (hr or not enum) else enum
+
+
+def default_audio_output_id() -> str:
+    """Endpoint id Windows currently plays to, or "" when it cannot be read."""
+    if sys.platform != "win32":
+        return ""
+    import ctypes
+    from ctypes import POINTER, byref, c_int, c_void_p
+
+    enum = _device_enumerator()
+    if enum is None:
         return ""
     try:
         dev = c_void_p()
         # GetDefaultAudioEndpoint(eRender=0, eConsole=0)
-        if vcall(enum, 4, c_int, c_int, POINTER(c_void_p))(enum, 0, 0, byref(dev)) or not dev:
+        if _vcall(enum, 4, c_int, c_int, POINTER(c_void_p))(enum, 0, 0, byref(dev)) or not dev:
             return ""
         try:
             out = ctypes.c_wchar_p()
-            if vcall(dev, 5, POINTER(ctypes.c_wchar_p))(dev, byref(out)):   # IMMDevice::GetId
+            if _vcall(dev, 5, POINTER(ctypes.c_wchar_p))(dev, byref(out)):   # IMMDevice::GetId
                 return ""
             val = out.value or ""
-            ole32.CoTaskMemFree(out)
+            ctypes.windll.ole32.CoTaskMemFree(out)
             return val
         finally:
-            vcall(dev, 2)(dev)      # Release
+            _vcall(dev, 2)(dev)      # Release
     finally:
-        vcall(enum, 2)(enum)
+        _vcall(enum, 2)(enum)
 
 
 def list_audio_outputs() -> list[AudioOutput]:

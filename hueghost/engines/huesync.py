@@ -184,6 +184,16 @@ class HueSyncEngine(Engine):
             self.manage_area = bool(on)
         self._wake.set()
 
+    def set_manage_monitor(self, on: bool) -> None:
+        with self._lock:
+            self.manage_monitor = bool(on)
+        self._wake.set()
+
+    def set_manage_audio_device(self, on: bool) -> None:
+        with self._lock:
+            self.manage_audio_device = bool(on)
+        self._wake.set()
+
     def adjust_brightness(self, step: int) -> None:
         """Nudge the level. Declarative like everything else here: a closed app
         is not an error, the step is simply flushed once it is back."""

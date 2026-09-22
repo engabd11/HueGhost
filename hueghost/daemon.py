@@ -28,6 +28,7 @@ from .engines import Engine, build_engine
 from .ghost import GhostPlayer, mpv_args
 from .jellyfin import JellyfinClient, JellyfinError
 from .lockstep import GhostObs, Params, Pause, Resume, Seek, decide
+from .sources import IDLE as IDLE_ACTIVITY, build_sources
 from .watcher import Observation, PlayerSet, SessionWatcher
 from .winutil import desktop_locked, keep_awake, wake_display
 
@@ -117,8 +118,7 @@ class DriftStats:
 class Daemon:
     def __init__(self, cfg: Config):
         self.cfg = cfg
-        self.jf = JellyfinClient(cfg.get("jellyfin.url"), cfg.get("jellyfin.api_key"))
-        self.watcher = self._make_watcher()
+        self.sources = build_sources(cfg)
         self.params = Params.from_config(cfg)
         self.engine: Engine = build_engine(cfg)
         self.ghost: GhostPlayer | None = None
@@ -126,6 +126,9 @@ class Daemon:
         self.state = IDLE
         self.stats = DriftStats()
         self.last_obs: Observation | None = None
+        self.last_act = IDLE_ACTIVITY
+        self._idle_watcher = None
+        self._bindings_snapshot = cfg.bindings()
         self.jf_ok = False
         self.jf_error: str | None = None
         self._jf_err_log = float("-inf")
@@ -160,13 +163,53 @@ class Daemon:
         self._mpv_err = os.path.join(base, "mpv_ghost.err")
 
     # -- setup ----------------------------------------------------------------
-    def _make_watcher(self) -> SessionWatcher:
-        self._watcher_players = self.cfg.players()
-        return SessionWatcher(
-            PlayerSet.from_players(self._watcher_players),
-            jitter_tolerance_s=float(self.cfg.get("sync.jitter_tolerance_s", 1.5)),
-            poll_interval_s=float(self.cfg.get("jellyfin.poll_interval_s", 0.5)),
-            stall_priors=self.cfg.get("sync.stall_estimates") or None)
+    @property
+    def _jelly(self):
+        """The Jellyfin source, when one is configured."""
+        return next((s for s in self.sources.sources if s.id == "jellyfin"), None)
+
+    @property
+    def _pc(self):
+        return next((s for s in self.sources.sources if s.id == "pc"), None)
+
+    # The daemon used to own these two directly. Keeping them as properties is
+    # what lets every existing caller - status(), the CLI, the web API and the
+    # virtual-clock tests - go on using `d.watcher` and `d.jf` unchanged.
+    @property
+    def jf(self):
+        s = self._jelly
+        return s.client if s is not None else JellyfinClient(self.cfg.get("jellyfin.url"),
+                                                             self.cfg.get("jellyfin.api_key"))
+
+    @property
+    def watcher(self):
+        s = self._jelly
+        if s is not None:
+            return s.watcher
+        if self._idle_watcher is None:      # PC-only install: nothing follows Jellyfin
+            self._idle_watcher = SessionWatcher(PlayerSet.from_players([]))
+        return self._idle_watcher
+
+    @watcher.setter
+    def watcher(self, w) -> None:
+        s = self._jelly
+        if s is not None:
+            s.watcher = w
+        else:
+            self._idle_watcher = w
+
+    def _rebuild_sources(self, keep_client: bool = True) -> None:
+        """Rebuild after a config change, carrying the learned client buffering
+        over - it is expensive to relearn and has nothing to do with bindings."""
+        stalls = getattr(self.watcher, "stalls", None)
+        old = self._jelly
+        self.sources.close()
+        self.sources = build_sources(self.cfg,
+                                     jf_client=(old.client if (old and keep_client) else None))
+        self._bindings_snapshot = self.cfg.bindings()
+        s = self._jelly
+        if s is not None and stalls is not None:
+            s.watcher.stalls = stalls
 
     def _start_control(self) -> None:
         c = self.cfg.section("control")
@@ -187,11 +230,12 @@ class Daemon:
     # -- main loop --------------------------------------------------------------
     def run(self) -> None:
         self._start_control()
-        players = self.cfg.players()
-        log.info("hue-ghost %s following %s on %s (engine=%s, poll %.2fs, offset %+.2fs)",
-                 __version__, ", ".join(("%s -> %s" % (p["device_id"] or p["device_name_contains"], p["area_name"] or "current area"))
-                                        for p in players) or "nobody",
-                 self.cfg.get("jellyfin.url"), self.engine.name,
+        binds = self.cfg.enabled_bindings()
+        log.info("hue-ghost %s following %s (engine=%s, poll %.2fs, offset %+.2fs)",
+                 __version__,
+                 ", ".join("%s -> %s" % (b["name"] or b["id"], b["area_name"] or "current area")
+                           for b in binds) or "nothing",
+                 self.engine.name,
                  float(self.cfg.get("jellyfin.poll_interval_s", 0.5)), self.offset)
         next_poll = 0.0
         try:
@@ -266,17 +310,25 @@ class Daemon:
                 log.warning("setup required (%s) - open the UI at %s", problems[0], self.ui_url())
                 self._setup_log = now
             return
-        try:
-            obs = self.watcher.poll(self.jf)
-            if not self.jf_ok:
-                log.info("Jellyfin reachable")
-            self.jf_ok, self.jf_error = True, None
-        except JellyfinError as e:
-            self.jf_ok, self.jf_error = False, str(e)
-            if now - self._jf_err_log > 30:
-                log.warning("Jellyfin unreachable (%s) - keeping ghost as-is", _asc(str(e)))
-                self._jf_err_log = now
-            return
+        pc = self._pc
+        if pc is not None:
+            pc.ignore_pid(self.ghost.proc.pid if (self.ghost and self.ghost.proc) else None)
+        act = self.sources.poll(now)
+        jelly = self._jelly
+        if jelly is not None:
+            if jelly.ok:
+                if not self.jf_ok:
+                    log.info("Jellyfin reachable")
+                self.jf_ok, self.jf_error = True, None
+            else:
+                self.jf_ok, self.jf_error = False, jelly.error
+                if now - self._jf_err_log > 30:
+                    log.warning("Jellyfin unreachable (%s) - keeping ghost as-is", _asc(str(jelly.error)))
+                    self._jf_err_log = now
+                if act is self.last_act:
+                    return               # nothing new to act on; leave the ghost alone
+        self.last_act = act
+        obs = act.obs
         self.last_obs = obs
 
         if not self.engine.alive():
@@ -288,62 +340,100 @@ class Daemon:
             self.engine = build_engine(self.cfg)
             self._engine_started = False
             self._push_engine_prefs()
-            if obs.player is not None and obs.player.area_id:
-                self.engine.set_area(obs.player.area_id)
+            if act.playing:
+                self.engine.apply_plan(act.plan)
 
-        if obs.model is not None and obs.model.last_debug and log.isEnabledFor(logging.DEBUG):
-            if obs.model.reports != self._last_report_count or obs.event == "new_item":
+        if obs is not None and obs.model is not None and obs.model.last_debug \
+                and log.isEnabledFor(logging.DEBUG):
+            if obs.model.reports != self._last_report_count or act.event == "new_item":
                 log.debug("%s", obs.model.last_debug)
                 obs.model.last_debug = ""
             self._last_report_count = obs.model.reports
         self._persist_stalls(now)
 
-        if obs.playing and obs.model is not None and self.enabled:
-            m = obs.model
-            if self._idle_since is not None:
-                self._idle_since = None
-                if self.ghost is not None and self._standby == "stopped" and self.ghost.item_id == m.item_id:
-                    self._lights_on("followed client is back")
-            if m.paused and self.ghost is not None:
-                if self._paused_since is None:
-                    self._paused_since = now
-            elif self._paused_since is not None or self._standby == "paused":
-                if self._standby == "paused" and self.ghost is not None:
-                    self._lights_on("client resumed after a long pause")
-                self._paused_since = None
-            if obs.player is not None and obs.player.area_id and obs.event == "new_item":
-                self.engine.set_area(obs.player.area_id)
-            if obs.event == "new_item" and obs.stale:
-                log.warning("first report for '%s' is stale (>30 s old); position may be off", _asc(m.name))
-            if self.ghost is not None and self.ghost.item_id != m.item_id:
-                log.info("followed client switched to '%s' -> relaunching ghost", _asc(m.name))
-                self._stop_ghost("item changed")
-            if self.ghost is None:
-                self._maybe_launch(now, obs)
-            elif obs.event in ("seek", "resume", "new_item", "resync"):
-                self._pending_seek = True
-                if obs.event == "seek":
-                    log.info("followed client seeked to %.1fs (holding %.1fs for buffering)",
-                             m.anchor_pos, max(0.0, m.anchor_mono - now))
-                elif obs.event == "resync":
-                    log.info("client resumed earlier/later than predicted -> resync to %.1fs", m.position_at(now))
-            elif obs.event == "stalled":
-                log.info("followed client still buffering at %.1fs", m.anchor_pos)
+        if act.playing and self.enabled:
+            self._playing(now, act)
         else:
-            if self.ghost is not None:
-                if self._idle_since is None:
-                    self._idle_since = now
-                    log.info("followed client %s", "stopped" if obs.seen else "gone")
-                idle = now - self._idle_since
-                close_after = float(self.cfg.get("sync.idle_stop_delay_s", 10.0))
-                if self._standby != "stopped" and idle >= self.lights_off_delay:
-                    self._lights_off("stopped", now)
-                    log.info("lights off - TV stopped %.1fs ago; ghost on standby for %.0fs in case it comes back",
-                             idle, max(0.0, close_after - idle))
-                if idle >= close_after:
-                    self._stop_ghost("followed client idle")
-            elif not self.enabled and self.state != IDLE:
+            self._idle(now, act)
+
+    def _playing(self, now: float, act) -> None:
+        """Something is playing. What that costs us depends on where it is: a
+        client on the network has to be mirrored, an app on this PC does not."""
+        if act.event == "new_item":
+            self.engine.apply_plan(act.plan)
+        if not act.needs_ghost:
+            self._follow_ghostless(now, act)
+            return
+        obs, m = act.obs, act.obs.model
+        if self._idle_since is not None:
+            self._idle_since = None
+            if self.ghost is not None and self._standby == "stopped" and self.ghost.item_id == m.item_id:
+                self._lights_on("followed client is back")
+        if m.paused and self.ghost is not None:
+            if self._paused_since is None:
+                self._paused_since = now
+        elif self._paused_since is not None or self._standby == "paused":
+            if self._standby == "paused" and self.ghost is not None:
+                self._lights_on("client resumed after a long pause")
+            self._paused_since = None
+        if act.event == "new_item" and obs.stale:
+            log.warning("first report for '%s' is stale (>30 s old); position may be off", _asc(m.name))
+        if self.ghost is not None and self.ghost.item_id != m.item_id:
+            log.info("followed client switched to '%s' -> relaunching ghost", _asc(m.name))
+            self._stop_ghost("item changed")
+        if self.ghost is None:
+            self._maybe_launch(now, act)
+        elif act.event in ("seek", "resume", "new_item", "resync"):
+            self._pending_seek = True
+            if act.event == "seek":
+                log.info("followed client seeked to %.1fs (holding %.1fs for buffering)",
+                         m.anchor_pos, max(0.0, m.anchor_mono - now))
+            elif act.event == "resync":
+                log.info("client resumed earlier/later than predicted -> resync to %.1fs", m.position_at(now))
+        elif act.event == "stalled":
+            log.info("followed client still buffering at %.1fs", m.anchor_pos)
+
+    def _follow_ghostless(self, now: float, act) -> None:
+        """An app on this PC: nothing to launch, nothing to keep in step - the
+        picture is already on a screen Hue Sync captures. Just light it."""
+        self._idle_since = None
+        self._paused_since = None
+        if self._standby is not None:
+            self._lights_on("%s is playing again" % (act.title or "the app"))
+        if not self._engine_started:
+            log.info("%s is playing on this PC -> engine start", _asc(act.title or "an app"))
+            self.engine.start()
+            self._engine_started = True
+        est = self.engine.state()
+        self.state = SYNCING if est.syncing else GHOSTING
+
+    def _idle(self, now: float, act) -> None:
+        if self.ghost is not None:
+            if self._idle_since is None:
+                self._idle_since = now
+                log.info("followed client %s", "stopped" if act.seen else "gone")
+            idle = now - self._idle_since
+            close_after = float(self.cfg.get("sync.idle_stop_delay_s", 10.0))
+            if self._standby != "stopped" and idle >= self.lights_off_delay:
+                self._lights_off("stopped", now)
+                log.info("lights off - TV stopped %.1fs ago; ghost on standby for %.0fs in case it comes back",
+                         idle, max(0.0, close_after - idle))
+            if idle >= close_after:
+                self._stop_ghost("followed client idle")
+        elif self._engine_started:
+            # a PC source stopped: there is no ghost to park, only lights to stop
+            if self._idle_since is None:
+                self._idle_since = now
+                log.info("nothing playing on this PC any more")
+            if now - self._idle_since >= self.lights_off_delay:
+                self.engine.stop()
+                self._engine_started = False
+                self._standby = None
+                self._idle_since = None
                 self.state = IDLE
+                log.info("lights off")
+        elif not self.enabled and self.state != IDLE:
+            self.state = IDLE
 
     @property
     def lights_off_delay(self) -> float:
@@ -378,9 +468,11 @@ class Daemon:
         except OSError as e:
             log.warning("could not persist stall estimates: %s", e)
 
-    def _maybe_launch(self, now: float, obs: Observation) -> None:
+    def _maybe_launch(self, now: float, act) -> None:
+        obs = act.obs
         m = obs.model
         assert m is not None
+        spec = act.ghost
         g = self.cfg.section("ghost")
         if bool(self.cfg.get("engine.huesync.required", False)) and self.engine.name == "huesync":
             if not self.engine.state().connected:
@@ -411,11 +503,12 @@ class Daemon:
         log.info("'%s' playing on %s -> ghost at %.1fs (offset %+.2fs, startup est %.2fs)",
                  _asc(m.name), _asc(obs.report.device_label if obs.report else "?"), start,
                  self.offset, self._startup_latency)
-        self._prepare_display()
-        url = self.jf.stream_url(m.item_id, m.media_source_id)
+        if spec is None or not spec.audio_only:
+            self._prepare_display()      # music has no picture: no display to wake
+        extra = {"audio_only": True, "audio_device": spec.audio_device} if spec.audio_only else {}
         try:
-            self.ghost = GhostPlayer.launch(self.cfg, url, self.jf.auth_header_for_mpv(), start,
-                                            m.item_id, err_path=self._mpv_err)
+            self.ghost = GhostPlayer.launch(self.cfg, spec.url, spec.http_header, start,
+                                            m.item_id, err_path=self._mpv_err, **extra)
         except Exception as e:
             log.error("ghost launch failed: %s", _asc(str(e)))
             self._last_launch = now
@@ -554,9 +647,57 @@ class Daemon:
                      s["mean_abs"], s["p95_abs"], s["max_abs"], s["seeks"])
 
     # -- control surface ----------------------------------------------------------
+    def _binding_status(self) -> list[dict]:
+        """Every binding, whether it is on, and which one is driving the lights.
+        Home Assistant turns this into a switch each."""
+        act = self.last_act
+        live = (act.binding or {}).get("id") if act.playing else None
+        out = []
+        for b in self.cfg.bindings():
+            probs = self.cfg.binding_problems(b)
+            out.append({
+                "id": b["id"],
+                "name": b["name"] or b["id"],
+                "source": b["source"],
+                "enabled": bool(b["enabled"]),
+                "active": b["id"] == live,
+                "area_id": b["area_id"] or None,
+                "area_name": b["area_name"] or None,
+                "mode": b["mode"] or None,
+                "exe": b["exe"] or None,
+                "device": b["device_id"] or b["device_name_contains"] or None,
+                "problems": probs,
+            })
+        return out
+
+    def set_binding_enabled(self, key: str, on: bool) -> dict:
+        """Turn one binding on or off by id (or by name, for convenience)."""
+        binds = self.cfg.bindings()
+        want = str(key or "").strip().lower()
+        hit = next((b for b in binds if b["id"].lower() == want), None) or \
+            next((b for b in binds if (b["name"] or "").lower() == want), None)
+        if hit is None:
+            raise ValueError("no binding %r (have: %s)" % (key, ", ".join(b["id"] for b in binds)))
+        if bool(hit["enabled"]) != bool(on):
+            hit["enabled"] = bool(on)
+            self.cfg.set_bindings(binds)
+            if self.cfg.path:
+                try:
+                    self.cfg.save()
+                except OSError as e:
+                    log.warning("could not persist bindings: %s", e)
+            if self.ghost is not None and not on and \
+                    (self.last_act.binding or {}).get("id") == hit["id"]:
+                self._stop_ghost("binding switched off")
+            self._rebuild_sources()
+            self.last_act = IDLE_ACTIVITY
+            log.info("binding '%s' %s", hit["name"] or hit["id"], "on" if on else "off")
+        return {"id": hit["id"], "enabled": bool(on)}
+
     def status(self) -> dict:
         with self._lock:
             obs = self.last_obs
+            act = self.last_act
             m = obs.model if obs else None
             now = time.monotonic()
             g = self.ghost
@@ -573,6 +714,13 @@ class Daemon:
                 "ui_url": self.ui_url(),
                 "jellyfin": {"url": self.cfg.get("jellyfin.url"), "ok": self.jf_ok, "error": self.jf_error,
                              "clock_offset_s": self.watcher.clock.value},
+                "bindings": self._binding_status(),
+                "source": {
+                    "kind": act.kind,
+                    "name": act.title or None,
+                    "needs_ghost": act.needs_ghost,
+                    "binding": (act.binding or {}).get("id") or None,
+                },
                 "follow": {
                     "device_id": f.get("device_id", ""),
                     "device_name_contains": f.get("device_name_contains", ""),
@@ -639,17 +787,16 @@ class Daemon:
             def changed(*keys):
                 return any(self.cfg.get(k) != _get(old, k) for k in keys)
 
-            if changed("jellyfin.url", "jellyfin.api_key"):
-                self.jf = JellyfinClient(self.cfg.get("jellyfin.url"), self.cfg.get("jellyfin.api_key"))
+            server_moved = changed("jellyfin.url", "jellyfin.api_key")
+            if server_moved:
                 self.jf_ok = False
-            if changed("jellyfin.url", "jellyfin.api_key", "jellyfin.poll_interval_s") \
-                    or self.cfg.players() != getattr(self, "_watcher_players", None):
+            if server_moved or changed("jellyfin.poll_interval_s", "pc") \
+                    or self.cfg.bindings() != self._bindings_snapshot:
                 if self.ghost is not None:
                     self._stop_ghost("followed client changed")
-                stalls = self.watcher.stalls
-                self.watcher = self._make_watcher()
-                self.watcher.stalls = stalls
+                self._rebuild_sources(keep_client=not server_moved)
                 self.last_obs = None
+                self.last_act = IDLE_ACTIVITY
             self.watcher.jitter_tol = float(self.cfg.get("sync.jitter_tolerance_s", 1.5))
             self.params = Params.from_config(self.cfg)
             if changed("engine.type", "engine.huesync.host", "engine.huesync.port",
@@ -749,11 +896,14 @@ class Daemon:
             e.set_use_audio(self.cfg.get("engine.huesync.use_audio"))
         except (ValueError, RuntimeError):
             pass
-        if hasattr(e, "set_manage_area"):
-            try:
-                e.set_manage_area(bool(self.cfg.get("engine.huesync.manage_area", True)))
-            except (ValueError, RuntimeError):
-                pass
+        for attr, key in (("set_manage_area", "manage_area"),
+                          ("set_manage_monitor", "manage_monitor"),
+                          ("set_manage_audio_device", "manage_audio_device")):
+            if hasattr(e, attr):
+                try:
+                    getattr(e, attr)(bool(self.cfg.get("engine.huesync." + key, True)))
+                except (ValueError, RuntimeError):
+                    pass
 
     def _apply_settings(self, p: dict) -> None:
         changed = False
@@ -802,6 +952,11 @@ class Daemon:
             if not 0 <= level <= 100:
                 raise ValueError("brightness must be 0-100")
             self.engine.set_brightness(level)
+        if "binding" in p:
+            b = p["binding"] or {}
+            if not isinstance(b, dict) or "key" not in b:
+                raise ValueError('binding must be {"key": "<id>", "enabled": true|false}')
+            self.set_binding_enabled(str(b["key"]), bool(b.get("enabled", True)))
         if changed:
             self._push_engine_prefs()
             if self.cfg.path:

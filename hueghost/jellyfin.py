@@ -99,9 +99,12 @@ class JellyfinClient:
             self._msid_cache[item_id] = (items[0].get("MediaSources") or []) if items else []
         return self._msid_cache[item_id]
 
-    def stream_url(self, item_id: str, media_source_id: str | None = None) -> str:
-        """Direct-stream URL of the original file (no Jellyfin playback session)."""
-        url = "%s/Videos/%s/stream?static=true" % (self.base, item_id)
+    def stream_url(self, item_id: str, media_source_id: str | None = None, kind: str = "video") -> str:
+        """Direct-stream URL of the original file (no Jellyfin playback session).
+
+        Music lives under /Audio; the ghost plays it with no video at all."""
+        where = "Audio" if kind == "music" else "Videos"
+        url = "%s/%s/%s/stream?static=true" % (self.base, where, item_id)
         msid = media_source_id
         if not msid:
             try:
