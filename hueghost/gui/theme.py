@@ -57,6 +57,12 @@ STATE_LABELS = {
     "error": "Jellyfin unreachable",
 }
 
+MODE_COLORS = {
+    "video": "#60a5fa",
+    "music": "#a78bfa",
+    "games": "#3ddc97",
+}
+
 INTENSITY_COLORS = {
     "subtle": "#38bdf8",
     "moderate": "#a78bfa",

@@ -13,7 +13,7 @@ import time
 import urllib.request
 
 from . import __author__, __version__
-from .config import Config, INTENSITIES, app_data_dir, log_path, resolve_config_path
+from .config import Config, INTENSITIES, MODES, app_data_dir, log_path, resolve_config_path
 from .jellyfin import JellyfinClient, JellyfinError, session_label
 from .winutil import (autostart_installed, find_mpv, hue_sync_info, install_autostart,
                       list_displays, tray_command, uninstall_autostart)
@@ -152,7 +152,9 @@ def cmd_status(args) -> int:
     print("  engine   : %s  connected=%s  state=%s  mode=%s  intensity=%s  bri=%s%s" % (
         e["name"], e["connected"], e["state"], e["mode"], e["intensity"], e["bri"],
         ("  error=" + e["error"]) if e.get("error") else ""))
-    print("  offset   : %+.2fs   intensity pref: %s" % (st["offset_s"], st["intensity"]))
+    print("  offset   : %+.2fs   wanted: mode %s, intensity %s, audio %s" % (
+        st["offset_s"], st.get("mode"), st["intensity"],
+        {True: "on", False: "off"}.get(st.get("use_audio"), "app's own")))
     dl = st.get("drift_last_minute")
     if dl:
         print("  last min : mean|drift| %.3fs  p95 %.3fs  max %.3fs  seeks %d" % (
@@ -181,6 +183,10 @@ def cmd_set(args) -> int:
         payload["offset_delta"] = args.offset_delta
     if args.intensity:
         payload["intensity"] = args.intensity
+    if args.mode:
+        payload["mode"] = args.mode
+    if args.use_audio:
+        payload["use_audio"] = args.use_audio
     if args.brightness_step is not None:
         payload["brightness_step"] = args.brightness_step
     if not payload:
@@ -397,8 +403,13 @@ def cmd_setup(args) -> int:
     cfg.set("engine.type", "huesync")
     if hs["exe"] and _ask_yn("Start Hue Sync automatically if it is not running?", False):
         cfg.set("engine.huesync.launch_exe", hs["exe"])
+    mode = _ask("Hue Sync mode for movies (%s)" % "/".join(MODES), cfg.get("engine.huesync.mode"))
+    cfg.set("engine.huesync.mode", mode if mode in MODES else "video")
     lvl = _ask("Intensity for movies (%s)" % "/".join(INTENSITIES), cfg.get("engine.huesync.intensity"))
     cfg.set("engine.huesync.intensity", lvl if lvl in INTENSITIES else "high")
+    aud = _ask("Use audio for light effects (on/off/app = leave it to the Hue Sync app)",
+               {True: "on", False: "off"}.get(cfg.get("engine.huesync.use_audio"), "app"))
+    cfg.set("engine.huesync.use_audio", {"on": True, "off": False}.get((aud or "").strip().lower()))
     cfg.set("sync.offset_s", float(_ask("Sync offset in seconds (ghost runs ahead by this)", str(cfg.get("sync.offset_s")))))
 
     # 6. control API
@@ -514,6 +525,9 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--offset", type=float, help="sync offset in seconds")
     s.add_argument("--offset-delta", type=float, help="add to the current offset (e.g. 0.25 or -0.25)")
     s.add_argument("--intensity", choices=INTENSITIES)
+    s.add_argument("--mode", choices=MODES, help="what Hue Sync reacts to")
+    s.add_argument("--use-audio", choices=("on", "off", "app"),
+                   help="use audio for light effects in video/games mode ('app' = leave the Hue Sync app's own setting)")
     s.add_argument("--brightness-step", type=int, help="Hue Sync brightness step (signed)")
     s.set_defaults(fn=cmd_set)
     s = sub.add_parser("test-mpv", help="check the mpv IPC plumbing with a local file")

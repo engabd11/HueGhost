@@ -22,7 +22,7 @@ import time
 from collections import deque
 
 from . import __version__
-from .config import Config, INTENSITIES, KEEP_AWAKE_MODES, _deep_merge, app_data_dir, source_root
+from .config import Config, INTENSITIES, KEEP_AWAKE_MODES, MODES, _deep_merge, app_data_dir, source_root
 from .control import ControlServer
 from .engines import Engine, build_engine
 from .ghost import GhostPlayer, mpv_args
@@ -48,6 +48,15 @@ def _get(d: dict, dotted: str):
             return None
         d = d[p]
     return d
+
+
+def _tri_state(v) -> bool | None:
+    """None / "" / "auto" = leave it to the app; anything else is a bool."""
+    if v is None or (isinstance(v, str) and v.strip().lower() in ("", "auto", "app", "none")):
+        return None
+    if isinstance(v, str):
+        return v.strip().lower() in ("1", "true", "yes", "on")
+    return bool(v)
 
 
 def pause_stop_due(paused_since: float | None, now: float, limit_min: float,
@@ -607,6 +616,8 @@ class Daemon:
                 "offset_s": self.offset,
                 "intensity": self.cfg.get("engine.huesync.intensity"),
                 "mode": self.cfg.get("engine.huesync.mode"),
+                "use_audio": self.cfg.get("engine.huesync.use_audio"),
+                "manage_area": bool(self.cfg.get("engine.huesync.manage_area", True)),
                 "lights_off_delay_s": self.lights_off_delay,
             }
 
@@ -724,14 +735,23 @@ class Daemon:
 
     def _push_engine_prefs(self) -> None:
         e = self.engine
-        if hasattr(e, "set_intensity") and self.cfg.get("engine.huesync.intensity"):
+        if self.cfg.get("engine.huesync.intensity"):
             try:
                 e.set_intensity(self.cfg.get("engine.huesync.intensity"))
             except (ValueError, RuntimeError):
                 pass
-        if hasattr(e, "set_mode") and self.cfg.get("engine.huesync.mode"):
+        if self.cfg.get("engine.huesync.mode"):
             try:
-                e.set_mode(self.cfg.get("engine.huesync.mode"))  # type: ignore[attr-defined]
+                e.set_mode(self.cfg.get("engine.huesync.mode"))
+            except (ValueError, RuntimeError):
+                pass
+        try:
+            e.set_use_audio(self.cfg.get("engine.huesync.use_audio"))
+        except (ValueError, RuntimeError):
+            pass
+        if hasattr(e, "set_manage_area"):
+            try:
+                e.set_manage_area(bool(self.cfg.get("engine.huesync.manage_area", True)))
             except (ValueError, RuntimeError):
                 pass
 
@@ -746,7 +766,16 @@ class Daemon:
             self.cfg.set("engine.huesync.intensity", lvl)
             changed = True
         if "mode" in p:
-            self.cfg.set("engine.huesync.mode", str(p["mode"]).lower())
+            mode = str(p["mode"]).lower()
+            if mode not in MODES:
+                raise ValueError("mode must be one of " + ", ".join(MODES))
+            self.cfg.set("engine.huesync.mode", mode)
+            changed = True
+        if "use_audio" in p:
+            self.cfg.set("engine.huesync.use_audio", _tri_state(p["use_audio"]))
+            changed = True
+        if "manage_area" in p:
+            self.cfg.set("engine.huesync.manage_area", bool(p["manage_area"]))
             changed = True
         if "pause_stop_min" in p:
             self.cfg.set("sync.pause_stop_min", max(0.0, round(float(p["pause_stop_min"]), 2)))

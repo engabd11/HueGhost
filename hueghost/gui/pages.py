@@ -13,12 +13,20 @@ from PySide6.QtWidgets import (QCheckBox, QComboBox, QDoubleSpinBox, QFileDialog
                                QScrollArea, QSlider, QSpinBox, QVBoxLayout, QWidget)
 
 from .. import __author__, __url__
-from ..config import INTENSITIES, KEEP_AWAKE_MODES
+from ..config import INTENSITIES, KEEP_AWAKE_MODES, MODES
 from . import theme
-from .widgets import (GLYPHS, Banner, Card, Divider, DriftBar, Poster, Segmented, Sparkline, ToggleSwitch, button,
-                      chip, icon, icon_button, icon_family, label, pill, run_async, set_pill)
+from .widgets import (GLYPHS, AudioTriToggle, Banner, Card, Divider, DriftBar, Poster, Segmented, Sparkline,
+                      ToggleSwitch, button, chip, icon, icon_button, icon_family, label, pill, run_async,
+                      set_pill)
 
 INTENSITY_OPTIONS = [(i, i.capitalize()) for i in INTENSITIES]
+MODE_OPTIONS = [(m, m.capitalize()) for m in MODES]
+MODE_HINT = ("Video reacts to the picture, Music to the sound, Games to fast movement. "
+             "Hue Ghost sets this on every sync it starts, so it no longer depends on what "
+             "the Hue Sync app was last left on.")
+AUDIO_HINT = ("The same switch as Hue Sync's own \u201cuse audio for light effects\u201d: the lights "
+              "react to the soundtrack as well as the picture. It is the one setting the app only "
+              "reads at start-up, so changing it restarts Hue Sync (~3 s) the next time sync starts.")
 KEEP_AWAKE_OPTIONS = [("off", "Off"), ("playing", "While the ghost plays"), ("always", "Always")]
 KEEP_AWAKE_COLORS = {"off": theme.FAINT, "playing": theme.ACCENT, "always": theme.WARN}
 
@@ -176,10 +184,23 @@ class HomePage(Page):
         self.hs_text = label("", "muted", wrap=True)
         h_card.add_row(self.hs_pill, stretch_last=True)
         h_card.add(self.hs_text)
+        h_card.add(label("Mode", "hint"))
+        self.mode = Segmented(MODE_OPTIONS, theme.MODE_COLORS)
+        self.mode.setToolTip(MODE_HINT)
+        self.mode.changed.connect(self._set_mode)
+        h_card.add(self.mode)
         h_card.add(label("Intensity", "hint"))
         self.intensity = Segmented(INTENSITY_OPTIONS, theme.INTENSITY_COLORS)
         self.intensity.changed.connect(self._set_intensity)
         h_card.add(self.intensity)
+        arow = QHBoxLayout()
+        arow.addWidget(label("Use audio for effects", "hint"))
+        arow.addStretch(1)
+        self.audio = AudioTriToggle()
+        self.audio.setToolTip(AUDIO_HINT)
+        self.audio.changed.connect(self._set_audio)
+        arow.addWidget(self.audio)
+        h_card.body.addLayout(arow)
         bri = QHBoxLayout()
         bri.addWidget(label("Brightness", "hint"))
         self.bri_val = chip("--")
@@ -212,6 +233,14 @@ class HomePage(Page):
 
     def _set_intensity(self, level: str) -> None:
         run_async(lambda: self.ctx.daemon.action("set", {"intensity": level}),
+                  on_error=lambda e: self.ctx.toast(e, "bad"))
+
+    def _set_mode(self, mode: str) -> None:
+        run_async(lambda: self.ctx.daemon.action("set", {"mode": mode}),
+                  on_error=lambda e: self.ctx.toast(e, "bad"))
+
+    def _set_audio(self, value) -> None:
+        run_async(lambda: self.ctx.daemon.action("set", {"use_audio": value}),
                   on_error=lambda e: self.ctx.toast(e, "bad"))
 
     def _bri(self, step: int) -> None:
@@ -326,19 +355,24 @@ class HomePage(Page):
             c.setVisible(bool(v))
 
         if e.get("switching"):
-            set_pill(self.hs_pill, "switching area...", theme.WARN)
-            self.hs_text.setText("restarting Hue Sync for %s" % (f.get("area_name") or "the bound area"))
+            set_pill(self.hs_pill, "restarting Hue Sync...", theme.WARN)
+            self.hs_text.setText("applying the area and audio settings for %s"
+                                 % (f.get("area_name") or "the bound area"))
         elif e.get("connected"):
             hs_state = e.get("state") or "connected"
             set_pill(self.hs_pill, hs_state.replace("_", " "),
                      theme.GOOD if e.get("syncing") else theme.INFO if hs_state == "bridge_connected" else theme.WARN)
-            self.hs_text.setText("area %s   ·   mode %s   ·   intensity %s" % (
-                e.get("area_name") or "?", e.get("mode") or "?", e.get("intensity") or "?"))
+            audio = e.get("use_audio")
+            self.hs_text.setText("area %s   ·   mode %s   ·   intensity %s%s" % (
+                e.get("area_name") or "?", e.get("mode") or "?", e.get("intensity") or "?",
+                "" if audio is None else ("   ·   audio %s" % ("on" if audio else "off"))))
         else:
             set_pill(self.hs_pill, "not reachable", theme.BAD if e.get("name") == "huesync" else theme.STATE_COLORS["idle"])
             self.hs_text.setText(e.get("error") or ("engine: %s" % e.get("name")))
         self.bri_val.setText("%s %%" % e["bri"] if e.get("bri") is not None else "--")
         self.intensity.set_value(st.get("intensity"))
+        self.mode.set_value(st.get("mode"))
+        self.audio.set_value(st.get("use_audio"), (st.get("engine") or {}).get("use_audio"))
         self.offset_lbl.setText("%+.2f s" % (st.get("offset_s") or 0.0))
         q = st.get("drift_last_minute")
         if q:
@@ -377,12 +411,26 @@ class SyncPage(Page):
                     "increase it; if early, decrease. Applies instantly.", "hint", wrap=True))
         self.lay.addWidget(c)
 
-        c2 = Card("Intensity for movies", "how strongly Hue Sync reacts to the picture")
+        c2 = Card("What Hue Sync does with the ghost", "mode, intensity and audio for every sync Hue Ghost starts")
+        c2.add(label("Mode", "hint"))
+        self.mode = Segmented(MODE_OPTIONS, theme.MODE_COLORS)
+        self.mode.changed.connect(lambda v: run_async(lambda: ctx.daemon.action("set", {"mode": v}),
+                                                      on_error=lambda e: ctx.toast(e, "bad")))
+        c2.add(self.mode)
+        c2.add(label(MODE_HINT, "hint", wrap=True))
+        c2.add(Divider())
+        c2.add(label("Intensity", "hint"))
         self.intensity = Segmented(INTENSITY_OPTIONS, theme.INTENSITY_COLORS)
         self.intensity.changed.connect(lambda v: run_async(lambda: ctx.daemon.action("set", {"intensity": v}),
                                                            on_error=lambda e: ctx.toast(e, "bad")))
         c2.add(self.intensity)
-        c2.add(label("Applied to the Hue Sync session whenever a movie starts (and live while syncing).", "hint", wrap=True))
+        c2.add(label("How strongly the lights react. Applied to the Hue Sync session whenever a movie "
+                     "starts (and live while syncing).", "hint", wrap=True))
+        c2.add(Divider())
+        self.audio = AudioTriToggle()
+        self.audio.changed.connect(lambda v: run_async(lambda: ctx.daemon.action("set", {"use_audio": v}),
+                                                       on_error=lambda e: ctx.toast(e, "bad")))
+        c2.form("Use audio for effects", self.audio, AUDIO_HINT)
         self.lay.addWidget(c2)
 
         c3 = Card("Stopping", "what happens when the TV stops or pauses")
@@ -465,6 +513,8 @@ class SyncPage(Page):
         self.slider.setValue(int(round(float(cfg.get("sync.offset_s", 0.0)) * 100)))
         self.slider.blockSignals(False)
         self.intensity.set_value(cfg.get("engine.huesync.intensity"))
+        self.mode.set_value(cfg.get("engine.huesync.mode"))
+        self.audio.set_value(cfg.get("engine.huesync.use_audio"))
         self._loaded = True
 
     def refresh(self, st: dict) -> None:
@@ -480,6 +530,8 @@ class SyncPage(Page):
                 self.slider.setValue(int(round(v * 100)))
                 self.slider.blockSignals(False)
         self.intensity.set_value(st.get("intensity"))
+        self.mode.set_value(st.get("mode"))
+        self.audio.set_value(st.get("use_audio"), (st.get("engine") or {}).get("use_audio"))
 
     def _apply_offset(self) -> None:
         v = round(self.spin.value(), 2)
@@ -801,7 +853,8 @@ class HueSyncPage(Page):
         c2 = Card("Checklist", "in the Hue Sync app, once")
         for t in ("Settings > Allow public control: ON  (this is how Hue Ghost starts and stops sync)",
                   "Display: pick the ghost display (the virtual display / dummy plug)",
-                  "Select the entertainment area of the room where the TV is",
+                  "Select the entertainment area of the room where the TV is (yours to change "
+                  "at any time - Hue Ghost only sets it when a movie starts)",
                   "Start syncing when Hue Sync launches: OFF  (it would sync your desktop)"):
             row = QHBoxLayout()
             row.setSpacing(8)
@@ -821,14 +874,15 @@ class HueSyncPage(Page):
         self.port.setRange(1, 65535)
         self.port.setFixedWidth(110)
         c3.form("Public control port", self.port)
-        self.mode = QComboBox()
-        self.mode.addItems(["video", "games", "music"])
-        self.mode.setFixedWidth(140)
-        c3.form("Hue Sync mode for movies", self.mode)
         self.launch = ToggleSwitch()
         c3.form("Start Hue Sync if it is not running", self.launch)
         self.required = ToggleSwitch()
         c3.form("Only run the ghost when Hue Sync is reachable", self.required)
+        self.manage_area = ToggleSwitch()
+        c3.form("Select the entertainment area for me", self.manage_area,
+                "Hue Ghost points Hue Sync at the area bound to the TV that is playing (Players page). "
+                "It only does so when a movie starts, and never while it is idle - so you can still pick "
+                "an area in the Hue Sync app yourself. Off: Hue Ghost never touches your selection.")
         self.hook_url = QLineEdit()
         self.hook_url.setPlaceholderText("http://127.0.0.1:8989")
         c3.form("HTTP hook URL", self.hook_url)
@@ -841,9 +895,9 @@ class HueSyncPage(Page):
         idx = self.engine.findData(cfg.get("engine.type") or "huesync")
         self.engine.setCurrentIndex(max(0, idx))
         self.port.setValue(int(cfg.get("engine.huesync.port") or 24851))
-        self.mode.setCurrentText(cfg.get("engine.huesync.mode") or "video")
         self.launch.setChecked(bool(cfg.get("engine.huesync.launch_exe")))
         self.required.setChecked(bool(cfg.get("engine.huesync.required")))
+        self.manage_area.setChecked(bool(cfg.get("engine.huesync.manage_area", True)))
         self.hook_url.setText(cfg.get("engine.httphook.url") or "")
         self._probe()
 
@@ -865,6 +919,10 @@ class HueSyncPage(Page):
                     "ON" if info["public_control_enabled"] else "OFF - enable it in Hue Sync > Settings", info.get("public_control_port")))
             if info.get("selected_area"):
                 lines.append("Entertainment area selected in Hue Sync: %s" % info["selected_area"])
+            wa = info.get("with_audio") or {}
+            if wa.get("video") is not None:
+                lines.append("Use audio for light effects (in the app): video %s, games %s" % (
+                    "ON" if wa.get("video") else "OFF", "ON" if wa.get("games") else "OFF"))
             if info.get("automatic_display"):
                 lines.append("Display: Automatic - pick the ghost display manually in Hue Sync > Display")
             if pr.get("error") and not pr.get("reachable"):
@@ -876,9 +934,10 @@ class HueSyncPage(Page):
     def _save(self) -> None:
         from ..winutil import hue_sync_exe
         partial = {"engine": {"type": self.engine.currentData(),
-                              "huesync": {"port": int(self.port.value()), "mode": self.mode.currentText(),
+                              "huesync": {"port": int(self.port.value()),
                                           "launch_exe": (hue_sync_exe() or "") if self.launch.isChecked() else "",
-                                          "required": self.required.isChecked()},
+                                          "required": self.required.isChecked(),
+                                          "manage_area": self.manage_area.isChecked()},
                               "httphook": {"url": self.hook_url.text().strip()}}}
         self.save(partial, "Hue Sync settings saved")
         self._probe()
@@ -916,11 +975,12 @@ class HomeAssistantPage(Page):
         self.lay.addWidget(c)
         c2 = Card("Hue Synco integration", "recommended")
         c2.add(label("In Home Assistant: Settings > Devices & services > Hue Synco > Configure > enter this PC's "
-                     "host, port and token. You get a Movie mode switch, a state sensor, an intensity select and "
-                     "a sync-offset number - and movie mode hands the entertainment area over from music sync "
-                     "automatically.", "muted", wrap=True))
-        c2.add(label("Without Hue Synco: POST /on, /off, /set {\"offset_delta\": 0.25}; GET /status. "
-                     "Header: Authorization: Bearer <token>.", "hint", wrap=True))
+                     "host, port and token. You get a Movie mode switch, a state sensor, mode and intensity "
+                     "selects, a “use audio for effects” switch and a sync-offset number - and movie mode "
+                     "hands the entertainment area over from music sync automatically.", "muted", wrap=True))
+        c2.add(label("Without Hue Synco: POST /on, /off, /set {\"mode\": \"music\", \"use_audio\": true, "
+                     "\"offset_delta\": 0.25}; GET /status. Header: Authorization: Bearer <token>.",
+                     "hint", wrap=True))
         self.lay.addWidget(c2)
         self.footer(button("Save network settings", "primary", self._save, icon_name="check"))
         self.lay.addStretch(1)

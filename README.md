@@ -75,10 +75,34 @@ Each player can be bound to a Hue **entertainment area** on the Players page
 targets the living-room area; when the office TV plays, the office lights -
 fully automatic. The Hue Sync app has no API for selecting an area, so Hue
 Ghost switches it the only way possible: it stops its sync, restarts the app
-silently with the new selection (~3 s) and resumes. That happens only when
-playback moves to a device bound to a *different* area, i.e. once per
-viewing session, never mid-movie. Players left on "Hue Sync's current area"
-don't touch the selection.
+silently with the new selection (~3 s) and resumes.
+
+**The app stays yours.** That restart only ever happens while Hue Ghost is
+actually starting a sync, and only once per viewing session. Change the area
+in the Hue Sync app yourself - while nothing is playing, or in the middle of a
+movie - and Hue Ghost adopts it instead of putting its own choice back; it
+re-asserts the player's area at the next sync. Players left on "Hue Sync's
+current area" never touch the selection at all, and *Hue Sync > Select the
+entertainment area for me* turns the whole thing off.
+
+## Mode, intensity and audio
+
+Hue Ghost sets **what Hue Sync does** with the ghost picture on every sync it
+starts, so it no longer depends on what the app was last left on:
+
+- **Mode** - Video (reacts to the picture), Music (to the sound) or Games.
+- **Intensity** - Subtle / Moderate / High / Extreme.
+- **Use audio for effects** - the app's own switch for video and games mode:
+  the lights react to the soundtrack as well as the picture. Leave it on
+  *App's own* and Hue Ghost never touches it.
+
+Mode and intensity go over the Public Control socket and apply live, mid-movie.
+The audio switch is the one setting the app only reads at start-up, so choosing
+On or Off means Hue Sync is restarted (~3 s) the next time sync starts - it is
+applied in the same restart as an area change, never twice.
+
+All three are on **Home** and on the **Sync** page, and are exposed to Home
+Assistant and the CLI.
 
 ## Tuning the timing (from the couch)
 
@@ -119,9 +143,10 @@ token, save, restart. Then either:
 
 - **[Hue Synco](https://github.com/engabd11/syncoV2)** (HACS): *Configure >
   Hue Ghost host / port / token* gives you a **Movie mode** switch, a state
-  sensor (idle / ghosting / syncing with now-playing and drift attributes), an
-  intensity select and the sync-offset number - and turning movie mode on
-  hands the entertainment area over from music sync automatically.
+  sensor (idle / ghosting / syncing with now-playing and drift attributes),
+  **mode** and **intensity** selects, a **use audio for effects** switch and
+  the sync-offset number - and turning movie mode on hands the entertainment
+  area over from music sync automatically.
 - Plain REST (see [docs/home-assistant.md](docs/home-assistant.md)):
   `POST /on`, `/off`, `/set {"offset_delta": 0.25}`, `GET /status`, all with
   `Authorization: Bearer <token>`.
@@ -137,7 +162,8 @@ hue-ghost run                  headless daemon, logs to the console
 hue-ghost doctor               checks Jellyfin, mpv, displays, Hue Sync, the control API
 hue-ghost status [--json]      what the running app sees
 hue-ghost on | off | toggle    master switch
-hue-ghost set --offset-delta 0.25 | --intensity high | --brightness-step -10
+hue-ghost set --offset-delta 0.25 | --mode music | --intensity high
+               --use-audio on|off|app | --brightness-step -10
 hue-ghost setup                text-mode setup wizard (headless machines)
 hue-ghost install-autostart    start at sign-in (the installer's checkbox does the same)
 ```
@@ -223,6 +249,14 @@ automation.
 
 ## Changelog
 
+- **2.3.0** - Hue Sync's **mode** (Video / Music / Games) and its **use audio
+  for effects** switch are Hue Ghost settings now, next to the intensity - on
+  Home, on Sync, over the API and in Home Assistant. **Fixed:** changing the
+  entertainment area in the Hue Sync app while Hue Ghost was idle made Hue
+  Ghost restart the app to put its own area back, which looked like Hue Sync
+  crashing; the area (and the audio switch) are now only applied while Hue
+  Ghost is starting a sync, once per session, and a change you make in the app
+  stands.
 - **2.2.0** - Lights go off ~2 s after the TV stops (two-stage stop: the ghost
   stays on standby for 10 s and re-lights instantly if the TV comes back).
   Wakes and holds the displays awake while the ghost plays, so a PC that sat
@@ -247,9 +281,10 @@ automation.
 - **Philips Hue API.** Hue Ghost never talks to the Hue Bridge directly:
   pairing, the entertainment session and the DTLS stream are handled by the
   official Hue Sync app — the certified path. The Public Control WebSocket is
-  an undocumented but user-opt-in interface of that app, and switching
-  entertainment areas writes the app's own `bridge.json` selection while it
-  is closed. Both are documented in
+  an undocumented but user-opt-in interface of that app. Two settings it does
+  not cover - the entertainment area and "use audio for light effects" - are
+  applied by writing the app's own `bridge.json` / `config.json` (one value
+  each, digest kept in step) while it is closed. Both are documented in
   [docs/hue-sync-public-control.md](docs/hue-sync-public-control.md) and may
   change across Hue Sync versions.
 - **Trademark.** Hue Ghost is an independent project — not affiliated with,

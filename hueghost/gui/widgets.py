@@ -248,6 +248,25 @@ class Segmented(QWidget):
             self._restyle()
 
 
+class AudioTriToggle(Segmented):
+    """On / Off / leave it to the Hue Sync app (the default). Hue Ghost only
+    writes this setting when it is told to, so "App's own" shows what the app
+    currently has rather than pretending we chose it."""
+
+    OPTIONS = [("on", "On"), ("off", "Off"), ("app", "App's own")]
+
+    def __init__(self, parent=None):
+        super().__init__(self.OPTIONS, {"on": theme.GOOD, "off": theme.FAINT, "app": theme.ACCENT}, parent)
+
+    def set_value(self, configured, actual=None) -> None:     # type: ignore[override]
+        super().set_value({True: "on", False: "off"}.get(configured, "app"))
+        b = self._buttons["app"]
+        suffix = "" if (configured is not None or actual is None) else (" · %s" % ("on" if actual else "off"))
+        want = "App's own" + suffix
+        if b.text() != want:
+            b.setText(want)
+
+
 # -- layout helpers ------------------------------------------------------------------------
 class Card(QFrame):
     def __init__(self, title: str = "", subtitle: str = "", action: QWidget | None = None, parent=None):

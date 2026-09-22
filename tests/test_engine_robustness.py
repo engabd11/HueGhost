@@ -92,7 +92,7 @@ def test_area_switch_crash_is_surfaced_then_retried(app):
         assert wait(lambda: eng.state().error, 8.0)      # failure surfaced...
         assert eng.alive()                               # ...thread still with us
         del eng.areas                                    # heal the fault
-        eng._area_failed_at = float("-inf")              # skip the 60 s retry guard
+        eng._restart_failed_at = float("-inf")           # skip the 60 s retry guard
         assert wait(lambda: eng.state().syncing and eng.state().area_id == "area-living", 10.0)
     finally:
         eng.close()

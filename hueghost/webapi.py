@@ -13,7 +13,7 @@ import sys
 from typing import TYPE_CHECKING, Any
 
 from . import __version__
-from .config import INTENSITIES, app_data_dir, log_path
+from .config import INTENSITIES, MODES, app_data_dir, log_path
 from .jellyfin import JellyfinClient, JellyfinError, item_display_name
 from .winutil import (autostart_installed, find_mpv, hue_sync_info, install_autostart,
                       list_displays, tray_command, uninstall_autostart)
@@ -50,6 +50,7 @@ class WebApi:
             ("GET", "/api/sessions"): self.sessions,
             ("GET", "/api/displays"): lambda p, q: {"displays": [d.__dict__ for d in list_displays()]},
             ("GET", "/api/areas"): lambda p, q: {"areas": self.d.engine.areas(), "players": self.d.cfg.players()},
+            ("GET", "/api/modes"): lambda p, q: {"modes": list(MODES), "intensities": list(INTENSITIES)},
             ("GET", "/api/huesync"): self.huesync,
             ("GET", "/api/mpv"): self.mpv,
             ("POST", "/api/ghost/test"): lambda p, q: self.d.test_ghost(p.get("screen_name"), int(p.get("seconds", 8))),
@@ -183,6 +184,7 @@ class WebApi:
             "executable": sys.executable,
             "autostart": autostart_installed(),
             "intensities": list(INTENSITIES),
+            "modes": list(MODES),
             "ui_url": self.d.ui_url(),
             "restart_required": list(self.d.restart_required),
         }

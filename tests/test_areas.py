@@ -65,11 +65,12 @@ def test_watcher_switches_model_when_the_playing_device_changes():
 class SwitchableEngine(HueSyncEngine):
     """HueSyncEngine with the OS side replaced by a scripted fake app."""
 
-    def __init__(self, app: MockHueSync, area="area-office"):
+    def __init__(self, app: MockHueSync, area="area-office", audio=False, **kw):
         self.fake_area = area
+        self.fake_audio = {"video": audio, "games": audio}
         self.ops: list[str] = []
         self.app = app
-        super().__init__("127.0.0.1", app.port, mode="video", intensity="")
+        super().__init__("127.0.0.1", app.port, mode="video", intensity="", **kw)
 
     def _read_area(self):
         return self.fake_area, {"area-office": "Office", "area-living": "Living room"}.get(self.fake_area)
@@ -77,6 +78,13 @@ class SwitchableEngine(HueSyncEngine):
     def _write_area(self, area_id):
         self.ops.append("write:" + area_id)
         self.fake_area = area_id
+
+    def _read_use_audio(self, mode):
+        return self.fake_audio.get(mode)
+
+    def _write_use_audio(self, mode, on):
+        self.ops.append("audio:%s=%s" % (mode, "on" if on else "off"))
+        self.fake_audio[mode] = on
 
     def _kill_app(self):
         self.ops.append("kill")
@@ -97,6 +105,7 @@ def fast(monkeypatch):
     monkeypatch.setattr(hs, "RESEND_AFTER_S", 0.3)
     monkeypatch.setattr(hs, "BACKOFF_MIN_S", 0.1)
     monkeypatch.setattr(hs, "BACKOFF_MAX_S", 0.3)
+    monkeypatch.setattr(hs, "APP_READ_EVERY_S", 0.3)
 
 
 def wait(pred, timeout=5.0):
@@ -179,3 +188,132 @@ def test_matcher_accepts_device_id_or_name():
     assert m.matches({"DeviceId": "old-id", "DeviceName": "x"})
     assert m.matches({"DeviceId": "new-id", "DeviceName": "Apple TV", "Client": "Moonfin"})   # id regenerated
     assert not m.matches({"DeviceId": "new-id", "DeviceName": "AppleTV"})
+
+
+# -- the app belongs to the user unless we are actually syncing -------------------------
+def test_idle_engine_never_touches_the_area_the_user_picks_in_the_app():
+    """The reported crash: changing the area in Hue Sync while Hue Ghost idled
+    got the app killed and put back on Hue Ghost's area."""
+    app = MockHueSync()
+    eng = SwitchableEngine(app, area="area-office")
+    try:
+        assert wait(lambda: eng.state().connected)
+        eng.set_area("area-living")          # bound player wants the living room...
+        time.sleep(1.0)                      # ...but nothing is playing
+        assert eng.ops == []
+        # the user now picks another area in the app itself
+        eng.fake_area = "area-living"
+        assert wait(lambda: eng.state().area_name == "Living room", 12.0)
+        assert eng.ops == []
+    finally:
+        eng.close()
+        app.close()
+
+
+def test_an_area_change_made_in_the_app_mid_session_is_adopted_not_fought():
+    app = MockHueSync()
+    eng = SwitchableEngine(app, area="area-office")
+    try:
+        assert wait(lambda: eng.state().connected)
+        eng.set_area("area-office")          # already there: no restart needed
+        eng.start()
+        assert wait(lambda: eng.state().syncing)
+        assert eng.ops == []
+        eng.fake_area = "area-living"        # user changes it in Hue Sync
+        time.sleep(1.2)
+        assert eng.ops == []                 # app not killed
+        assert eng.state().syncing           # and our sync carries on
+        assert eng.state().area_name == "Living room"   # ... reporting where the lights are
+        # ... but the next session puts our own area back
+        eng.stop()
+        assert wait(lambda: not eng.state().syncing)
+        eng.start()
+        assert wait(lambda: "write:area-office" in eng.ops, 8.0)
+    finally:
+        eng.close()
+        app.close()
+
+
+def test_manage_area_off_leaves_the_area_alone_even_while_syncing():
+    app = MockHueSync()
+    eng = SwitchableEngine(app, area="area-office", manage_area=False)
+    try:
+        assert wait(lambda: eng.state().connected)
+        eng.set_area("area-living")
+        eng.start()
+        assert wait(lambda: eng.state().syncing, 8.0)
+        time.sleep(0.8)
+        assert eng.ops == [] and eng.state().area_id == "area-office"
+    finally:
+        eng.close()
+        app.close()
+
+
+# -- "use audio for light effects" ------------------------------------------------------
+def test_audio_switch_and_area_are_applied_in_one_restart():
+    app = MockHueSync()
+    eng = SwitchableEngine(app, area="area-office", audio=False)
+    try:
+        assert wait(lambda: eng.state().connected)
+        eng.set_area("area-living")
+        eng.set_use_audio(True)
+        eng.start()
+        assert wait(lambda: eng.state().syncing and eng.state().area_id == "area-living", 8.0)
+        assert eng.ops == ["kill", "write:area-living", "audio:video=on", "launch"]
+        assert eng.state().use_audio is True
+    finally:
+        eng.close()
+        app.close()
+
+
+def test_audio_switch_alone_restarts_the_app_once_per_session():
+    app = MockHueSync()
+    eng = SwitchableEngine(app, area="area-office", audio=True)
+    try:
+        assert wait(lambda: eng.state().connected)
+        eng.set_use_audio(False)
+        eng.start()
+        assert wait(lambda: "audio:video=off" in eng.ops, 8.0)
+        assert eng.ops == ["kill", "audio:video=off", "launch"]
+        assert wait(lambda: eng.state().syncing, 8.0)
+        time.sleep(0.8)
+        assert eng.ops.count("kill") == 1
+        # the user turns it back on in the app: not fought
+        eng.fake_audio["video"] = True
+        time.sleep(1.2)
+        assert eng.ops.count("kill") == 1
+    finally:
+        eng.close()
+        app.close()
+
+
+def test_audio_none_means_leave_the_apps_own_setting_alone():
+    app = MockHueSync()
+    eng = SwitchableEngine(app, area="area-office", audio=True)
+    try:
+        assert wait(lambda: eng.state().connected)
+        eng.set_use_audio(None)
+        eng.start()
+        assert wait(lambda: eng.state().syncing, 8.0)
+        time.sleep(0.8)
+        assert eng.ops == [] and eng.fake_audio["video"] is True
+    finally:
+        eng.close()
+        app.close()
+
+
+def test_music_mode_has_no_audio_switch_to_apply():
+    app = MockHueSync()
+    eng = SwitchableEngine(app, area="area-office", audio=False)
+    try:
+        assert wait(lambda: eng.state().connected)
+        eng.set_mode("music")
+        eng.set_use_audio(True)
+        eng.start()
+        assert wait(lambda: eng.state().syncing, 8.0)
+        time.sleep(0.8)
+        assert eng.ops == []
+        assert wait(lambda: eng.state().mode == "music", 5.0)
+    finally:
+        eng.close()
+        app.close()
