@@ -36,7 +36,7 @@ def test_config_players_roundtrip_and_legacy_follow():
     assert len(cfg.get("jellyfin.players")) == 2
     assert cfg.players() == PLAYERS
     cfg.set_players([])
-    assert cfg.players() == [] and "no player" in cfg.problems()[-1]
+    assert cfg.players() == [] and "nothing to follow" in " ".join(cfg.problems())
 
 
 def test_first_playing_player_wins_in_priority_order():

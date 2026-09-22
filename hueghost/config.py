@@ -15,6 +15,7 @@ from __future__ import annotations
 import copy
 import json
 import os
+import re
 import sys
 from typing import Any
 
@@ -36,6 +37,16 @@ DEFAULTS: dict[str, Any] = {
         "follow_area_id": "",
         "follow_area_name": "",
         "poll_interval_s": 0.5,
+    },
+    # Everything that can drive the lights, in priority order - Jellyfin clients
+    # and apps on this PC. Canonical; empty means "derive from jellyfin.follow
+    # and jellyfin.players above", which is what a config written before 2.4 has.
+    "sources": [],
+    "pc": {
+        "poll_interval_s": 1.0,      # detection rate; the 0.25 s tick never touches it
+        "audio_peak": 0.002,         # a session louder than this counts as playing
+        "audio_hold_s": 3.0,         # keep "playing" through dialogue gaps and track changes
+        "start_confirm_s": 1.0,      # ignore anything shorter (alt-tab, a notification chime)
     },
     "sync": {
         "offset_s": 1.5,             # ghost runs this far AHEAD of the followed client
@@ -61,6 +72,9 @@ DEFAULTS: dict[str, Any] = {
         "hwdec": "auto",
         "keep_awake": "playing",     # off | playing | always: hold the displays awake (Windows idle timeout
                                      # switches the virtual ghost display off -> Hue Sync captures nothing)
+        "audio_device": "",          # render endpoint a music ghost plays into, and that Hue Sync
+                                     # listens to in music mode: pick one you cannot hear
+        "music_volume": 100,
         "relaunch_cooldown_s": 5.0,
         "relaunch_max_per_5min": 6,
         "extra_args": [],
@@ -75,6 +89,8 @@ DEFAULTS: dict[str, Any] = {
             "use_audio": None,       # "use audio for light effects" in video/games mode:
                                      # None = leave the app's own setting alone, True/False = enforce
             "manage_area": True,     # False -> never take the app's entertainment area over
+            "manage_monitor": True,  # False -> never change which display it captures
+            "manage_audio_device": True,   # False -> never change its music-mode input
             "required": False,       # True -> ghost only runs when Hue Sync is reachable
             "launch_exe": "",        # optional path to HueSync.exe to start when absent
         },
@@ -91,6 +107,58 @@ INTENSITIES = ("subtle", "moderate", "high", "extreme")
 MODES = ("video", "music", "games")      # Hue Sync also has "scenes"; it syncs nothing
 ENGINE_TYPES = ("huesync", "httphook", "none")
 KEEP_AWAKE_MODES = ("off", "playing", "always")
+
+DETECT_MODES = ("audio", "fullscreen", "either")
+SOURCE_KINDS = ("jellyfin", "pc")
+MEDIA_KINDS = ("video", "music")
+
+
+def _slug(text: str) -> str:
+    s = re.sub(r"[^a-z0-9]+", "-", (text or "").lower()).strip("-")
+    return s[:40] or "binding"
+
+
+def _binding_selector(b: dict) -> str:
+    """What identifies the thing: an exe for a PC app, a device for Jellyfin."""
+    if b.get("source") == "pc":
+        return str(b.get("exe", "") or "")
+    return str(b.get("device_id", "") or b.get("device_name_contains", "") or "")
+
+
+def _binding(b: dict) -> dict:
+    """One binding, every key present. New fields must be defaulted here and
+    nowhere else - this is the only shape the rest of the app ever sees."""
+    src = b.get("source") if b.get("source") in SOURCE_KINDS else "jellyfin"
+    mode = str(b.get("mode", "") or "").lower()
+    if src == "pc" and mode not in MODES:
+        mode = "video"
+    detect = str(b.get("detect", "") or "").lower()
+    if detect not in DETECT_MODES:
+        # sound is what tells a playing video from an open window; a game is
+        # usually silent-ish in menus but always foreground and fullscreen
+        detect = "fullscreen" if mode == "games" else "audio"
+    kinds = [k for k in (b.get("kinds") or MEDIA_KINDS) if k in MEDIA_KINDS] or list(MEDIA_KINDS)
+    name = str(b.get("name", "") or "")
+    out = {
+        "id": str(b.get("id", "") or "") or _slug(name or _binding_selector(b)),
+        "enabled": bool(b.get("enabled", True)),
+        "source": src,
+        "name": name,
+        "device_id": str(b.get("device_id", "") or ""),
+        "device_name_contains": str(b.get("device_name_contains", "") or ""),
+        "user": str(b.get("user", "") or ""),
+        "kinds": kinds,
+        "exe": str(b.get("exe", "") or "").lower(),
+        "detect": detect,
+        "mode": mode,
+        "area_id": str(b.get("area_id", "") or ""),
+        "area_name": str(b.get("area_name", "") or ""),
+        "monitor": str(b.get("monitor", "") or ""),
+        "audio_device": str(b.get("audio_device", "") or ""),
+    }
+    if not out["name"]:
+        out["name"] = out["exe"] or out["device_name_contains"] or out["device_id"]
+    return out
 
 _LEGACY_MAP = {
     "server_url": "jellyfin.url",
@@ -287,15 +355,78 @@ class Config:
                                        "user": p.get("user", ""), "area_id": p.get("area_id", "") or "",
                                        "area_name": p.get("area_name", "") or ""} for p in players[1:]])
 
+    # -- bindings ---------------------------------------------------------
+    def bindings(self) -> list[dict]:
+        """Everything that can drive the lights, in priority order: Jellyfin
+        clients and apps on this PC, normalised to one shape.
+
+        ``sources`` is canonical. An older config has none, so it is derived
+        from ``jellyfin.follow``/``jellyfin.players`` - which stay mirrored by
+        ``set_bindings`` so a downgrade still finds its players."""
+        raw = self.get("sources", None)
+        if not raw:
+            return [_binding(dict(p, source="jellyfin")) for p in self.players()]
+        return [_binding(b) for b in raw
+                if isinstance(b, dict) and _binding_selector(b)]
+
+    def set_bindings(self, bindings: list[dict]) -> None:
+        """Store the full list. The Jellyfin half is mirrored back into
+        ``jellyfin.follow``/``players`` so every existing reader keeps working."""
+        out, seen = [], set()
+        for b in bindings:
+            b = _binding(b)
+            if not _binding_selector(b):
+                continue
+            base, n = b["id"], 2
+            while b["id"] in seen:          # ids address a binding over the API
+                b["id"], n = "%s-%d" % (base, n), n + 1
+            seen.add(b["id"])
+            out.append(b)
+        self.set("sources", out)
+        self.set_players([p for p in out if p.get("source") == "jellyfin"])
+
+    def enabled_bindings(self) -> list[dict]:
+        return [b for b in self.bindings() if b.get("enabled", True)]
+
     # -- validation -------------------------------------------------------
-    def problems(self) -> list[str]:
+    def binding_problems(self, b: dict) -> list[str]:
+        """What stops one binding working. Non-fatal: the daemon skips it and
+        says so, rather than refusing to run at all."""
         out = []
-        if not str(self.get("jellyfin.api_key", "")).strip():
-            out.append("jellyfin.api_key is empty (Jellyfin Dashboard > API Keys > +)")
-        if not str(self.get("jellyfin.url", "")).strip():
-            out.append("jellyfin.url is empty")
-        if not self.players():
-            out.append("no player to follow (jellyfin.follow needs device_id or device_name_contains)")
+        if b.get("source") == "pc":
+            if not str(b.get("exe", "")).strip():
+                out.append("no application chosen")
+            if b.get("mode") not in MODES:
+                out.append("mode must be one of " + " | ".join(MODES))
+            if b.get("detect") not in DETECT_MODES:
+                out.append("detect must be one of " + " | ".join(DETECT_MODES))
+        else:
+            if not (b.get("device_id") or b.get("device_name_contains")):
+                out.append("no Jellyfin device chosen")
+            if not str(self.get("jellyfin.url", "")).strip():
+                out.append("jellyfin.url is empty")
+            if not str(self.get("jellyfin.api_key", "")).strip():
+                out.append("jellyfin.api_key is empty (Jellyfin Dashboard > API Keys > +)")
+            if b.get("kinds") == ["music"] or "music" in (b.get("kinds") or []):
+                if not (b.get("audio_device") or self.get("ghost.audio_device")):
+                    out.append("music needs an output for the ghost to play into "
+                               "(Sources > Audio input, or Display > Ghost audio output)")
+        return out
+
+    def problems(self) -> list[str]:
+        """What stops the daemon running at all. A Jellyfin server that is not
+        set up is only fatal when something actually follows it - a PC-only
+        install is a perfectly good setup."""
+        out = []
+        binds = self.enabled_bindings()
+        jelly = [b for b in binds if b.get("source") == "jellyfin"]
+        if jelly:
+            if not str(self.get("jellyfin.api_key", "")).strip():
+                out.append("jellyfin.api_key is empty (Jellyfin Dashboard > API Keys > +)")
+            if not str(self.get("jellyfin.url", "")).strip():
+                out.append("jellyfin.url is empty")
+        if not binds:
+            out.append("nothing to follow (add a Jellyfin player or an app on this PC)")
         if self.get("engine.type") not in ENGINE_TYPES:
             out.append("engine.type must be one of " + " | ".join(ENGINE_TYPES))
         if self.get("engine.huesync.intensity") not in INTENSITIES:

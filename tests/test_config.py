@@ -50,7 +50,55 @@ def test_defaults_and_ipc_platform_default():
     cfg = Config({})
     assert cfg.get("jellyfin.poll_interval_s") == 0.5
     assert cfg.get("ghost.ipc")           # platform default filled in
-    assert "api_key" in " ".join(cfg.problems())
+    assert "nothing to follow" in " ".join(cfg.problems())
+
+
+def test_a_jellyfin_server_is_only_required_when_something_follows_it():
+    # a PC-only install is a complete setup: no server, no API key, still valid
+    pc = Config({"sources": [{"source": "pc", "exe": "eldenring.exe", "mode": "games",
+                              "area_id": "a1"}]})
+    assert pc.problems() == []
+    assert pc.bindings()[0]["detect"] == "fullscreen"      # default for a game
+
+    jf = Config({"sources": [{"source": "jellyfin", "device_id": "atv"}]})
+    assert "api_key" in " ".join(jf.problems())      # the url has a default; the key has none
+    jf.set("jellyfin.url", "")
+    assert "jellyfin.url" in " ".join(jf.problems())
+
+
+def test_bindings_round_trip_and_keep_the_legacy_players_mirrored():
+    cfg = Config({"jellyfin": {"url": "http://x", "api_key": "k"}})
+    cfg.set_bindings([
+        {"source": "jellyfin", "device_id": "atv", "name": "Apple TV", "area_id": "a1", "area_name": "Living"},
+        {"source": "pc", "exe": "Firefox.exe", "mode": "video", "area_id": "a2", "enabled": False},
+        {"source": "jellyfin", "device_name_contains": "Office", "area_id": "a3"},
+    ])
+    ids = [b["id"] for b in cfg.bindings()]
+    assert ids == ["apple-tv", "firefox-exe", "office"]
+    assert cfg.bindings()[1]["exe"] == "firefox.exe"        # matched case-insensitively
+    assert [b["id"] for b in cfg.enabled_bindings()] == ["apple-tv", "office"]
+    # the pre-2.4 keys still describe the Jellyfin half, for a downgrade
+    assert cfg.get("jellyfin.follow.device_id") == "atv"
+    assert cfg.get("jellyfin.follow_area_id") == "a1"
+    assert [p["device_name_contains"] for p in cfg.get("jellyfin.players")] == ["Office"]
+
+
+def test_duplicate_binding_ids_are_made_unique():
+    cfg = Config({})
+    cfg.set_bindings([{"source": "pc", "exe": "mpv.exe"}, {"source": "pc", "exe": "mpv.exe"}])
+    assert [b["id"] for b in cfg.bindings()] == ["mpv-exe", "mpv-exe-2"]
+
+
+def test_music_binding_without_an_output_says_so():
+    # the ghost has to play the track somewhere; with nowhere silent configured
+    # that somewhere would be the speakers, so the binding is refused instead
+    cfg = Config({"jellyfin": {"url": "http://x", "api_key": "k"}})
+    music = {"source": "jellyfin", "device_id": "atv", "kinds": ["music"]}
+    assert "music needs an output" in " ".join(cfg.binding_problems(music))
+    cfg.set("ghost.audio_device", "{0.0.0.00000000}.{cable}")
+    assert cfg.binding_problems(music) == []
+    # a video-only binding never needs one
+    assert cfg.binding_problems({"source": "jellyfin", "device_id": "atv", "kinds": ["video"]}) == []
 
 
 def test_reload_picks_up_changes(tmp_path):
