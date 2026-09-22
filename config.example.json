@@ -43,6 +43,8 @@
       "port": 24851,
       "mode": "video",
       "intensity": "high",
+      "use_audio": null,
+      "manage_area": true,
       "required": false,
       "launch_exe": ""
     },

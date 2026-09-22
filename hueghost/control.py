@@ -3,7 +3,8 @@
   GET  /status            full state snapshot (JSON)
   GET  /health            {"ok": true, "version": ...}   (no auth)
   POST /on | /off | /toggle | /reload      (GET accepted too, for curl / .bat files)
-  POST /set  {"enabled": bool, "intensity": "high", "offset_s": 1.5,
+  POST /set  {"enabled": bool, "mode": "video|music|games", "intensity": "high",
+              "use_audio": true|false|null, "manage_area": bool, "offset_s": 1.5,
               "offset_delta": 0.25, "brightness_step": 10}
        (GET /set?offset_delta=0.25 ... accepted too)
 

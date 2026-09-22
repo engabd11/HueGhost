@@ -70,8 +70,11 @@ DEFAULTS: dict[str, Any] = {
         "huesync": {
             "host": "127.0.0.1",
             "port": 24851,
-            "mode": "video",
+            "mode": "video",         # video | music | games (what Hue Sync reacts to)
             "intensity": "high",     # subtle | moderate | high | extreme
+            "use_audio": None,       # "use audio for light effects" in video/games mode:
+                                     # None = leave the app's own setting alone, True/False = enforce
+            "manage_area": True,     # False -> never take the app's entertainment area over
             "required": False,       # True -> ghost only runs when Hue Sync is reachable
             "launch_exe": "",        # optional path to HueSync.exe to start when absent
         },
@@ -85,6 +88,7 @@ DEFAULTS: dict[str, Any] = {
 }
 
 INTENSITIES = ("subtle", "moderate", "high", "extreme")
+MODES = ("video", "music", "games")      # Hue Sync also has "scenes"; it syncs nothing
 ENGINE_TYPES = ("huesync", "httphook", "none")
 KEEP_AWAKE_MODES = ("off", "playing", "always")
 
@@ -296,4 +300,6 @@ class Config:
             out.append("engine.type must be one of " + " | ".join(ENGINE_TYPES))
         if self.get("engine.huesync.intensity") not in INTENSITIES:
             out.append("engine.huesync.intensity must be one of " + " | ".join(INTENSITIES))
+        if self.get("engine.huesync.mode") not in MODES:
+            out.append("engine.huesync.mode must be one of " + " | ".join(MODES))
         return out

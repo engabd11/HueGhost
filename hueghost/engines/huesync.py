@@ -22,11 +22,20 @@ mode, intensity, entertainment area) and a background thread keeps reconciling
 the app's reported state towards it - so a Hue Sync restart mid-movie simply
 re-asserts sync.
 
-Entertainment area: the API cannot select one, but the app reads its selection
-(``SelectedGroup`` in ``%APPDATA%\HueSync\bridge.json``) at start-up. Switching
-therefore means: stop sync -> kill the app -> patch the file -> relaunch it
-``-silent`` (~2-3 s) -> sync. Only done when the wanted area differs from the
-current one, i.e. when playback moves to a device bound to another room.
+Two settings have no command at all - the entertainment area (``SelectedGroup``
+in ``%APPDATA%\HueSync\bridge.json``) and "use audio for light effects"
+(``Core.AppMode.<Video|Games>.WithAudio`` in ``config.json``). The app reads
+both at start-up, so applying them means: stop sync -> kill the app -> patch
+the file(s) -> relaunch ``-silent`` (~2-3 s) -> sync. Both are patched in the
+same restart when both differ.
+
+Because that restart is visible (the app's window reappears), the engine only
+does it *while it wants sync*, and only once per sync session: outside that,
+and after the session's settings have been applied, the app belongs to the
+user. Change the area or the mode in Hue Sync itself mid-movie and Hue Ghost
+adopts it instead of killing the app to put its own choice back - it re-asserts
+its own settings on the next sync session. ``manage_area=False`` opts out of
+area control entirely.
 
 The engine only ever stops a sync it started itself, so a sync you start by
 hand in the app (a game, say) is left alone.
@@ -40,8 +49,9 @@ import socket
 import threading
 import time
 
-from ..winutil import (hue_sync_exe, hue_sync_groups, hue_sync_kill, hue_sync_launch,
-                       hue_sync_selected_area, hue_sync_write_selected_area)
+from ..winutil import (AUDIO_MODES, hue_sync_exe, hue_sync_groups, hue_sync_kill, hue_sync_launch,
+                       hue_sync_selected_area, hue_sync_with_audio, hue_sync_write_selected_area,
+                       hue_sync_write_with_audio)
 from ..wsclient import WebSocket, WebSocketClosed, WebSocketError
 from . import Engine, EngineState
 
@@ -52,6 +62,8 @@ STATE_CONNECTED = "bridge_connected"
 STATE_SYNCING = "syncing"
 INTENSITIES = ("subtle", "moderate", "high", "extreme")
 MODES = ("video", "games", "music", "scenes")
+APP_READ_EVERY_S = 10.0     # re-read the app's own files (the user may change them any time)
+APP_RESTART_COOLDOWN_S = 60.0
 
 RESEND_AFTER_S = 2.5        # wait this long for an app_state_update before re-sending a command
 BACKOFF_MIN_S, BACKOFF_MAX_S = 1.0, 30.0
@@ -70,10 +82,13 @@ class HueSyncEngine(Engine):
     name = "huesync"
 
     def __init__(self, host: str = "127.0.0.1", port: int = 24851, mode: str = "video",
-                 intensity: str = "", launch_exe: str = "", connect_timeout: float = 3.0):
+                 intensity: str = "", use_audio: bool | None = None, manage_area: bool = True,
+                 launch_exe: str = "", connect_timeout: float = 3.0):
         self.host, self.port = host, int(port)
         self.want_mode = (mode or "").lower() or None
         self.want_intensity = (intensity or "").lower() or None
+        self.want_use_audio = use_audio if use_audio is None else bool(use_audio)
+        self.manage_area = bool(manage_area)
         self.launch_exe = launch_exe or ""
         self.connect_timeout = connect_timeout
 
@@ -89,9 +104,13 @@ class HueSyncEngine(Engine):
         self._warned_absent = float("-inf")
         self._started_by_us = False       # we sent the start_sync that is running
         self.want_area: str | None = None
-        self._area_failed_at = float("-inf")
-        self._area_read_mono = float("-inf")
-        self._refresh_area()
+        self._restart_failed_at = float("-inf")
+        self._app_read_mono = float("-inf")
+        # what this sync session has already been applied for; None = not applied
+        # yet. Compared against (area, audio, mode): the app's own state is never
+        # part of it, so a change *the user* makes in the app is not fought.
+        self._applied: tuple | None = None
+        self._refresh_app_state()
         self._thread = threading.Thread(target=self._run, name="huesync-engine", daemon=True)
         self._thread.start()
 
@@ -124,6 +143,17 @@ class HueSyncEngine(Engine):
             self._last_sent.pop("set_app_mode", None)
         self._wake.set()
 
+    def set_use_audio(self, on: bool | None) -> None:
+        """None = leave the app's own "use audio for light effects" alone."""
+        with self._lock:
+            self.want_use_audio = on if on is None else bool(on)
+        self._wake.set()
+
+    def set_manage_area(self, on: bool) -> None:
+        with self._lock:
+            self.manage_area = bool(on)
+        self._wake.set()
+
     def adjust_brightness(self, step: int) -> None:
         self._send_now(build_command("inc_bri", step=int(step)))
 
@@ -135,17 +165,27 @@ class HueSyncEngine(Engine):
     def areas(self) -> list[dict]:
         return hue_sync_groups()
 
-    # -- area switching (overridable for tests) --------------------------------------
-    def _refresh_area(self) -> None:
+    # -- the app's own files (overridable for tests) ----------------------------------
+    def _refresh_app_state(self) -> None:
+        """Re-read what the app itself has selected: area, and the audio switch
+        of the mode we care about."""
         aid, name = self._read_area()
-        self._area_read_mono = time.monotonic()
-        self._set(area_id=aid, area_name=name)
+        mode = (self.want_mode or "video")
+        audio = self._read_use_audio(mode) if mode in AUDIO_MODES else None
+        self._app_read_mono = time.monotonic()
+        self._set(area_id=aid, area_name=name, use_audio=audio)
 
     def _read_area(self):
         return hue_sync_selected_area()
 
+    def _read_use_audio(self, mode: str) -> bool | None:
+        return hue_sync_with_audio(mode)
+
     def _write_area(self, area_id: str) -> None:
         hue_sync_write_selected_area(area_id)
+
+    def _write_use_audio(self, mode: str, on: bool) -> None:
+        hue_sync_write_with_audio(mode, on)
 
     def _kill_app(self) -> bool:
         return hue_sync_kill()
@@ -153,13 +193,19 @@ class HueSyncEngine(Engine):
     def _launch_app(self) -> bool:
         return hue_sync_launch(self.launch_exe or hue_sync_exe(), silent=True)
 
-    def _switch_area(self, ws: WebSocket, area_id: str) -> None:
-        """Runs in the engine thread; the connection is torn down on purpose."""
-        log.info("switching Hue Sync to entertainment area %s", area_id)
+    def _restart_app(self, ws: WebSocket, area_id: str | None, audio: bool | None,
+                     mode: str) -> bool:
+        """Apply the settings the app only reads at start-up. Runs in the engine
+        thread; the connection is torn down on purpose. False when it failed."""
         self._set(switching=True, error=None)
         try:
-            names = {g["id"]: g["name"] for g in self.areas()}
-            log.info("switch target: '%s'", names.get(area_id, area_id))
+            what = []
+            if area_id:
+                names = {g["id"]: g["name"] for g in self.areas()}
+                what.append("area '%s'" % names.get(area_id, area_id))
+            if audio is not None:
+                what.append("%s audio for %s effects" % ("use" if audio else "no", mode))
+            log.info("restarting Hue Sync to apply %s", " + ".join(what))
             st = self.state()
             if st.state == STATE_SYNCING and self._started_by_us:
                 try:
@@ -180,15 +226,23 @@ class HueSyncEngine(Engine):
                 pass
             self._kill_app()
             time.sleep(1.0)
-            self._write_area(area_id)
+            if area_id:
+                self._write_area(area_id)
+            if audio is not None:
+                self._write_use_audio(mode, audio)
             if not self._launch_app():
                 raise RuntimeError("Hue Sync executable not found - set engine.huesync.launch_exe")
             self._last_launch = time.monotonic()
-            self._refresh_area()
+            self._refresh_app_state()
+            st = self.state()
+            if area_id and st.area_id != area_id:
+                log.warning("Hue Sync still reports area %s after the restart", st.area_id)
+            return True
         except Exception as e:
-            log.error("area switch failed: %s", e)
-            self._set(error="area switch failed: %s" % e)
-            self._area_failed_at = time.monotonic()
+            log.error("Hue Sync restart failed: %s", e)
+            self._set(error="Hue Sync restart failed: %s" % e)
+            self._restart_failed_at = time.monotonic()
+            return False
         finally:
             self._set(switching=False)
 
@@ -227,7 +281,7 @@ class HueSyncEngine(Engine):
             log.info("connected to Hue Sync Public Control at %s:%d (%s)", self.host, self.port, ws.server_header)
             self._ws = ws
             self._last_sent.clear()
-            self._refresh_area()
+            self._refresh_app_state()
             self._set(connected=True, error=None)
             try:
                 self._session(ws)
@@ -291,36 +345,69 @@ class HueSyncEngine(Engine):
             st = EngineState(**dict(self._st.__dict__))
             want_sync = st.desired_sync
             want_mode, want_int, want_area = self.want_mode, self.want_intensity, self.want_area
+            want_audio, manage_area = self.want_use_audio, self.manage_area
         if st.state is None:
             return                       # no app_state_update yet
-        # area first: it restarts the app, everything else follows on reconnect.
-        # The user can change the area in the app at any time (it writes the
-        # file at once), so never trust the cached value for the decision.
-        if (want_area and want_area != st.area_id) or time.monotonic() - self._area_read_mono > 10:
-            self._refresh_area()
+        # The user can change the area or the audio switch in the app at any
+        # time; keep reporting what they picked, session or no session.
+        if time.monotonic() - self._app_read_mono > APP_READ_EVERY_S:
+            self._refresh_app_state()
             st = self.state()
-        if want_area and st.area_id and want_area != st.area_id \
-                and time.monotonic() - self._area_failed_at > 60:
-            self._switch_area(ws, want_area)
-            return
-        if want_sync:
-            if st.state == STATE_DISCONNECTED:
-                self._set(error="Hue Sync is not connected to a bridge")
-                return
-            if st.state != STATE_SYNCING:
-                if self._send(ws, "start_sync", build_command("start_sync")):
-                    self._started_by_us = True
-                return                   # mode/intensity only apply to a live session
-            if want_mode and st.mode != want_mode:
-                self._send(ws, "set_app_mode", build_command("set_app_mode", mode=want_mode))
-                return                   # one step at a time; wait for the state update
-            if want_int and st.intensity != want_int:
-                self._send(ws, "set_intensity", build_command("set_intensity", intensity=want_int))
-        else:
+        if not want_sync:
+            # Hands off: outside a sync session the app is the user's. Our own
+            # settings are re-applied at the start of the next session.
+            self._applied = None
             if st.state == STATE_SYNCING and self._started_by_us:
                 self._send(ws, "stop_sync", build_command("stop_sync"))
             elif st.state != STATE_SYNCING:
                 self._started_by_us = False
+            return
+        if st.state == STATE_DISCONNECTED:
+            self._set(error="Hue Sync is not connected to a bridge")
+            return
+        # Start-up-only settings first: they restart the app, everything else
+        # follows on reconnect.
+        if self._apply_startup_settings(ws, want_area if manage_area else None, want_audio, want_mode):
+            return
+        if st.state != STATE_SYNCING:
+            if self._send(ws, "start_sync", build_command("start_sync")):
+                self._started_by_us = True
+            return                       # mode/intensity only apply to a live session
+        if want_mode and st.mode != want_mode:
+            self._send(ws, "set_app_mode", build_command("set_app_mode", mode=want_mode))
+            return                       # one step at a time; wait for the state update
+        if want_int and st.intensity != want_int:
+            self._send(ws, "set_intensity", build_command("set_intensity", intensity=want_int))
+
+    def _apply_startup_settings(self, ws: WebSocket, want_area: str | None,
+                                want_audio: bool | None, want_mode: str | None) -> bool:
+        """Point the app at the area / audio setting this sync session wants.
+        Returns True when the app was restarted (the connection is gone).
+
+        Done once per session: afterwards ``_applied`` records what we asked
+        for, so a change the *user* then makes in the app stands until our
+        wishes themselves change.
+        """
+        want = (want_area, want_audio, want_mode)
+        if self._applied == want:
+            return False
+        if time.monotonic() - self._restart_failed_at < APP_RESTART_COOLDOWN_S:
+            return False                 # checked first: the reads below are not free
+        mode = (want_mode or "video")
+        # the user may have changed either in the app since we last looked
+        self._refresh_app_state()
+        st = self.state()
+        area = want_area if (want_area and st.area_id and want_area != st.area_id) else None
+        audio = None
+        if want_audio is not None and mode in AUDIO_MODES and st.use_audio is not None \
+                and st.use_audio != want_audio:
+            audio = want_audio
+        if area is None and audio is None:
+            self._applied = want         # nothing to do: this session is set up
+            return False
+        if self._restart_app(ws, area, audio, mode):
+            self._applied = want         # one restart per session; a failed one
+        return True                      # is retried after the cooldown
 
     def _send(self, ws: WebSocket, key: str, text: str) -> bool:
         now = time.monotonic()

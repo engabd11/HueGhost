@@ -61,6 +61,42 @@ Live-verified behaviour:
 - Every *accepted* command is answered with an `app_state_update`; hue-ghost
   waits `RESEND_AFTER_S` (2.5 s) for it before re-sending.
 
+**That is the whole vocabulary.** The command strings in `HueSync.exe` 1.13.1
+are exactly `start_sync`, `stop_sync`, `inc_bri`, `set_intensity`,
+`set_app_mode` - there is no command for the entertainment area, for
+"use audio for light effects", or for anything else in the app's settings.
+Those have to go through the app's own files, below.
+
+## Settings the WebSocket cannot reach
+
+Two things hue-ghost needs are only in the app's files, and the app reads them
+at **start-up** - so applying one means: stop our sync -> `taskkill HueSync.exe`
+-> patch the file -> relaunch `HueSync.exe -silent` (~3 s; the app rewrites the
+file itself afterwards). hue-ghost does both in a single restart, only while it
+wants sync, and only once per sync session - outside that the app is the user's.
+
+| setting | file | key |
+|---|---|---|
+| entertainment area | `bridge.json` | `SelectedGroup` |
+| use audio for light effects | `config.json` | `Core.AppMode.Video.WithAudio`, `Core.AppMode.Games.WithAudio` |
+
+`Music` mode has no such key - it is audio by definition. The per-mode
+intensity lives in the same place (`Core.AppMode.<Mode>.Default`, an index into
+`Presets`), but `set_intensity` reaches that over the socket, so hue-ghost
+leaves it alone.
+
+### config.json is hash-guarded
+
+Beside it, `%APPDATA%\HueSync\.cfg` holds a digest of `config.json`: the
+**FNV-1a 64-bit** hash of the file's bytes (MSVC's `std::hash<std::string>`),
+written as an unsigned decimal. Patch the config without updating it and the
+app can take the file as changed underneath it. `.cfg` is a **hidden** file, so
+Windows refuses `CREATE_ALWAYS` on it - truncate it in place (`r+`) instead of
+reopening it with `"w"`. `bridge.json` has no such digest.
+
+Verified on 1.13.1: patch `WithAudio` + `.cfg` while the app is stopped, relaunch,
+and the value the app later writes back from memory is ours - it read the patch.
+
 ## Useful read-only files
 
 - `%APPDATA%\HueSync\config.json`: `PublicControlEnabled`, `PublicControlPort`,
@@ -70,9 +106,6 @@ Live-verified behaviour:
   `Groups[].Name`. Note: it embeds a PEM certificate with raw newlines, so parse
   with `json.loads(..., strict=False)`.
 
-hue-ghost only ever writes one thing: `SelectedGroup` in `bridge.json`, and only
-while the app is stopped (entertainment-area switching for player bindings):
-stop own sync -> `taskkill HueSync.exe` -> substitute the id in the text (the
-file is otherwise left byte-identical) -> relaunch `HueSync.exe -silent`. The
-app reads the selection at start-up and rewrites the file itself; verified on
-1.13.1. `-silent` starts it without showing the window.
+Every write hue-ghost makes (see above) is a text substitution that leaves the
+file byte-identical apart from the one value, and only ever happens while the
+app is stopped. `-silent` starts it without showing the window.

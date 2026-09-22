@@ -25,6 +25,7 @@ class EngineState:
     state: str | None = None       # engine-specific raw state
     mode: str | None = None
     intensity: str | None = None
+    use_audio: bool | None = None  # the app's "use audio for light effects" for `mode`
     bri: int | None = None
     error: str | None = None
     area_id: str | None = None     # entertainment area the engine currently targets
@@ -52,6 +53,13 @@ class Engine:
 
     def set_intensity(self, level: str) -> None:
         pass
+
+    def set_mode(self, mode: str) -> None:
+        """Video / music / games: what the engine reacts to."""
+
+    def set_use_audio(self, on: bool | None) -> None:
+        """Let the lights react to audio as well as the picture (None = leave
+        whatever the engine's own app is set to)."""
 
     def adjust_brightness(self, step: int) -> None:
         pass
@@ -141,9 +149,12 @@ def build_engine(cfg) -> Engine:
     if kind == "huesync":
         from .huesync import HueSyncEngine
         h = cfg.section("engine").get("huesync", {})
+        use_audio = h.get("use_audio", None)
         return HueSyncEngine(
             host=h.get("host", "127.0.0.1"), port=int(h.get("port", 24851)),
             mode=h.get("mode", "video"), intensity=h.get("intensity", ""),
+            use_audio=None if use_audio is None else bool(use_audio),
+            manage_area=bool(h.get("manage_area", True)),
             launch_exe=h.get("launch_exe", ""))
     if kind == "httphook":
         url = cfg.get("engine.httphook.url", "")

@@ -103,3 +103,26 @@ def test_api_served_over_http_with_token(tmp_path):
     finally:
         d.control.stop()
         d.engine.close()
+def test_set_mode_and_audio_switch_round_trip(daemon, tmp_path):
+    api = WebApi(daemon)
+    api.handle("POST", "/api/set", {"mode": "music", "intensity": "subtle"}, {})
+    st = daemon.status()
+    assert st["mode"] == "music" and st["intensity"] == "subtle"
+    with pytest.raises(ValueError):
+        api.handle("POST", "/api/set", {"mode": "disco"}, {})
+    assert daemon.status()["mode"] == "music"
+
+    # "use audio for light effects": on / off / leave it to the app
+    for sent, stored in ((True, True), (False, False), (None, None), ("auto", None), ("on", True)):
+        api.handle("POST", "/api/set", {"use_audio": sent}, {})
+        assert daemon.cfg.get("engine.huesync.use_audio") is stored, sent
+    assert daemon.status()["use_audio"] is True
+    saved = json.load(open(tmp_path / "config.json", encoding="utf-8"))
+    assert saved["engine"]["huesync"]["mode"] == "music"
+
+
+def test_mode_and_intensity_lists_are_published_for_clients(daemon):
+    api = WebApi(daemon)
+    assert api.handle("GET", "/api/modes", {}, {}) == {
+        "modes": ["video", "music", "games"], "intensities": ["subtle", "moderate", "high", "extreme"]}
+    assert api.handle("GET", "/api/system", {}, {})["modes"] == ["video", "music", "games"]

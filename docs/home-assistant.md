@@ -17,8 +17,15 @@ Settings > Devices & services > Hue Synco > **Configure** > fill in
 |---|---|
 | `switch.hue_ghost_movie_mode` | hue-ghost master switch (`/on` `/off`) |
 | `sensor.hue_ghost_state` | `offline` / `idle` / `ghosting` / `syncing`, attributes: now playing, position, drift, engine state |
+| `select.hue_ghost_mode` | video / music / games - what Hue Sync reacts to |
 | `select.hue_ghost_intensity` | subtle / moderate / high / extreme |
+| `switch.hue_ghost_audio_effects` | "use audio for light effects" in video/games mode |
 | `number.hue_ghost_sync_offset` | the lead in seconds, live (tune from the couch) |
+
+Mode and intensity apply live, mid-movie. The audio switch is the one setting
+the Hue Sync app only reads at start-up, so it restarts the app (~3 s) the next
+time sync starts; while movie mode is off it just remembers your choice. Its
+state shows the app's own setting until you pick one.
 
 Turning movie mode **on** first stops any active music-sync area (the bridge
 allows one streamer per entertainment area), then enables hue-ghost.
@@ -54,6 +61,15 @@ rest_command:
     headers: { Authorization: "Bearer YOUR_TOKEN" }
     content_type: application/json
     payload: '{"offset_delta": 0.25}'
+  # /set also takes {"mode": "video"|"music"|"games"},
+  # {"intensity": "subtle".."extreme"} and
+  # {"use_audio": true|false|null}  (null = leave the Hue Sync app's own setting)
+  hue_ghost_music_mode:
+    url: http://192.168.0.50:8787/set
+    method: post
+    headers: { Authorization: "Bearer YOUR_TOKEN" }
+    content_type: application/json
+    payload: '{"mode": "music", "use_audio": true}'
 
 sensor:
   - platform: rest
