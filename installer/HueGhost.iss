@@ -4,9 +4,9 @@
 #define AppName "Hue Ghost"
 #define AppVersion GetEnv("HUEGHOST_VERSION")
 #if AppVersion == ""
-  #define AppVersion "2.1.2"
+  #define AppVersion "2.2.0"
 #endif
-#define AppPublisher "engabd11"
+#define AppPublisher "Cyborg Automation AU"
 #define AppURL "https://github.com/engabd11/HueGhost"
 
 [Setup]
@@ -18,6 +18,8 @@ AppPublisher={#AppPublisher}
 AppPublisherURL={#AppURL}
 AppSupportURL={#AppURL}/issues
 AppUpdatesURL={#AppURL}/releases
+AppCopyright=Copyright (C) 2026 Cyborg Automation AU. MIT licensed.
+AppComments=Software Hue Sync Box for Jellyfin, built by Cyborg Automation AU. Bundles mpv (GPL) and the Virtual Display Driver (MIT).
 DefaultDirName={autopf}\Hue Ghost
 DefaultGroupName=Hue Ghost
 DisableProgramGroupPage=yes

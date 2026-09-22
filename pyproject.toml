@@ -4,12 +4,12 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "hue-ghost"
-version = "2.1.2"
+version = "2.2.0"
 description = "Software Hue Sync Box for Jellyfin: sync Philips Hue lights to a TV client by ghosting its playback on a PC running the Hue Sync app"
 readme = "README.md"
 requires-python = ">=3.10"
 license = { file = "LICENSE" }
-authors = [{ name = "Abdullah (engabd11)" }]
+authors = [{ name = "Cyborg Automation AU" }, { name = "Abdullah (engabd11)" }]
 keywords = ["philips-hue", "hue-sync", "jellyfin", "ambilight", "entertainment-area", "apple-tv"]
 classifiers = [
   "Programming Language :: Python :: 3",

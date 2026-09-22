@@ -47,3 +47,24 @@ it) or **Esc** to close it (sync stops until `hue-ghost on`).
 - Hue Sync's *video* intensity presets (subtle → extreme) control how
   aggressively the lights follow; hue-ghost sets `engine.huesync.intensity`
   when sync starts.
+
+## Sleep, display timeouts and the lock screen
+
+Windows' *Turn off display after* timeout switches **every** display off,
+the virtual one included. Hue Sync's desktop-duplication capture then gets no
+frames and the lights sit on one dim colour until any input wakes the
+displays. Hue Ghost handles this (`ghost.keep_awake`, Display page > *Keep
+displays awake*):
+
+- `playing` (default) - when playback starts it wakes the displays (resets the
+  display idle timer + a 1-px mouse jiggle, net zero movement) and then holds
+  the display *and* the system awake with `SetThreadExecutionState` until the
+  ghost closes. Afterwards the normal timeouts apply again.
+- `always` - hold them awake all the time (a dedicated media PC).
+- `off` - do nothing.
+
+Two things Hue Ghost cannot do: wake a PC that has gone to **sleep** (set the
+sleep timeout to *Never* on a PC that should light the room unattended), and
+capture a **locked** desktop (the lock screen is a secure desktop no app can
+read). When the PC is locked while a movie starts, Hue Ghost logs a warning
+and the Home page says *PC locked*; sign in and the colours follow.

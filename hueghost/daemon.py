@@ -2,10 +2,13 @@
 lockstep, and turn the light engine on/off at the right moments.
 
 States:  idle -> ghosting (mpv up, waiting for / has frames) -> syncing (engine reports sync)
+         -> standby (lights off on purpose, ghost paused and kept alive)
 
 Ordering rules (avoid flashing the desktop colours into the living room):
-  start: launch mpv -> first time-pos seen -> engine.start()
-  stop:  engine.stop() -> wait until not syncing (<= 2 s) -> kill mpv
+  start: wake the display -> launch mpv -> first time-pos seen -> engine.start()
+  stop:  lights off after ``sync.lights_off_delay_s`` (ghost holds) -> close mpv after
+         ``sync.idle_stop_delay_s``; a client that comes back in between gets its lights
+         re-asserted without an mpv relaunch.
 """
 from __future__ import annotations
 
@@ -19,17 +22,18 @@ import time
 from collections import deque
 
 from . import __version__
-from .config import Config, INTENSITIES, _deep_merge, app_data_dir, source_root
+from .config import Config, INTENSITIES, KEEP_AWAKE_MODES, _deep_merge, app_data_dir, source_root
 from .control import ControlServer
 from .engines import Engine, build_engine
 from .ghost import GhostPlayer, mpv_args
 from .jellyfin import JellyfinClient, JellyfinError
 from .lockstep import GhostObs, Params, Pause, Resume, Seek, decide
 from .watcher import Observation, PlayerSet, SessionWatcher
+from .winutil import desktop_locked, keep_awake, wake_display
 
 log = logging.getLogger("hue-ghost")
 
-IDLE, GHOSTING, SYNCING = "idle", "ghosting", "syncing"
+IDLE, GHOSTING, SYNCING, STANDBY = "idle", "ghosting", "syncing", "standby"
 TICK_S = 0.25
 ENGINE_STOP_WAIT_S = 2.0
 
@@ -119,7 +123,11 @@ class Daemon:
         self._required_log = float("-inf")
         self._idle_since: float | None = None
         self._paused_since: float | None = None
-        self._paused_stopped = False
+        # lights switched off on purpose while the ghost lives on: "stopped"
+        # (client left, ghost on standby) or "paused" (pause timeout)
+        self._standby: str | None = None
+        self._awake = False           # displays currently held awake by us
+        self._locked_warned = False
         self._launches: deque[float] = deque()
         self._last_launch = 0.0
         self._last_launch_item: str | None = None
@@ -186,10 +194,30 @@ class Daemon:
                     next_poll = now + float(self.cfg.get("jellyfin.poll_interval_s", 0.5))
                 with self._lock:
                     self._tick(time.monotonic())
+                    self._sync_power()
                 wait = max(0.05, min(TICK_S, next_poll - time.monotonic()))
                 self._stop.wait(wait)
         finally:
             self._shutdown()
+
+    def keep_awake_mode(self) -> str:
+        mode = str(self.cfg.get("ghost.keep_awake", "playing") or "off").lower()
+        return mode if mode in KEEP_AWAKE_MODES else "playing"
+
+    def _sync_power(self) -> None:
+        """Hold the displays (and the PC) awake while the ghost plays. Windows
+        switches every display off after the idle timeout - the virtual ghost
+        display included - and Hue Sync then captures a dead screen. The
+        execution-state flag is per thread, so this only ever runs on the
+        daemon loop thread."""
+        mode = self.keep_awake_mode()
+        want = mode == "always" or (mode == "playing" and self.ghost is not None)
+        if want == self._awake:
+            return
+        if keep_awake(want):
+            log.info("displays held awake %s" % ("(always)" if mode == "always" else "while the ghost plays")
+                     if want else "displays may sleep again")
+        self._awake = want
 
     def stop(self) -> None:
         self._stop.set()
@@ -209,6 +237,9 @@ class Daemon:
                 self.engine.wait_until(lambda s: not s.syncing or not s.connected, ENGINE_STOP_WAIT_S)
             finally:
                 self.engine.close()
+            if self._awake:
+                keep_awake(False)
+                self._awake = False
         if self.control:
             self.control.stop()
         log.info("stopped")
@@ -247,7 +278,6 @@ class Daemon:
                 pass
             self.engine = build_engine(self.cfg)
             self._engine_started = False
-            self._paused_stopped = False
             self._push_engine_prefs()
             if obs.player is not None and obs.player.area_id:
                 self.engine.set_area(obs.player.area_id)
@@ -260,18 +290,18 @@ class Daemon:
         self._persist_stalls(now)
 
         if obs.playing and obs.model is not None and self.enabled:
-            self._idle_since = None
             m = obs.model
+            if self._idle_since is not None:
+                self._idle_since = None
+                if self.ghost is not None and self._standby == "stopped" and self.ghost.item_id == m.item_id:
+                    self._lights_on("followed client is back")
             if m.paused and self.ghost is not None:
                 if self._paused_since is None:
                     self._paused_since = now
-            elif self._paused_since is not None or self._paused_stopped:
-                if self._paused_stopped and self.ghost is not None:
-                    log.info("client resumed after a long pause -> sync back on")
-                    self.engine.start()
-                    self._engine_started = True
+            elif self._paused_since is not None or self._standby == "paused":
+                if self._standby == "paused" and self.ghost is not None:
+                    self._lights_on("client resumed after a long pause")
                 self._paused_since = None
-                self._paused_stopped = False
             if obs.player is not None and obs.player.area_id and obs.event == "new_item":
                 self.engine.set_area(obs.player.area_id)
             if obs.event == "new_item" and obs.stale:
@@ -295,10 +325,36 @@ class Daemon:
                 if self._idle_since is None:
                     self._idle_since = now
                     log.info("followed client %s", "stopped" if obs.seen else "gone")
-                if now - self._idle_since >= float(self.cfg.get("sync.idle_stop_delay_s", 10.0)):
+                idle = now - self._idle_since
+                close_after = float(self.cfg.get("sync.idle_stop_delay_s", 10.0))
+                if self._standby != "stopped" and idle >= self.lights_off_delay:
+                    self._lights_off("stopped", now)
+                    log.info("lights off - TV stopped %.1fs ago; ghost on standby for %.0fs in case it comes back",
+                             idle, max(0.0, close_after - idle))
+                if idle >= close_after:
                     self._stop_ghost("followed client idle")
             elif not self.enabled and self.state != IDLE:
                 self.state = IDLE
+
+    @property
+    def lights_off_delay(self) -> float:
+        return max(0.0, float(self.cfg.get("sync.lights_off_delay_s", 1.5) or 0.0))
+
+    def _lights_off(self, reason: str, now: float) -> None:
+        """Stop the light engine but keep the ghost alive (paused), so a client
+        that comes straight back does not cost an mpv relaunch and a re-sync."""
+        if self._standby is None:
+            self.engine.stop()
+            if self.ghost is not None and not self.ghost.paused:
+                self.ghost.apply([Pause()], now)
+        self._standby = reason
+
+    def _lights_on(self, why: str) -> None:
+        log.info("%s -> lights back on", why)
+        self._standby = None
+        self._pending_seek = True
+        if self._engine_started:
+            self.engine.start()
 
     def _persist_stalls(self, now: float) -> None:
         st = self.watcher.stalls
@@ -346,6 +402,7 @@ class Daemon:
         log.info("'%s' playing on %s -> ghost at %.1fs (offset %+.2fs, startup est %.2fs)",
                  _asc(m.name), _asc(obs.report.device_label if obs.report else "?"), start,
                  self.offset, self._startup_latency)
+        self._prepare_display()
         url = self.jf.stream_url(m.item_id, m.media_source_id)
         try:
             self.ghost = GhostPlayer.launch(self.cfg, url, self.jf.auth_header_for_mpv(), start,
@@ -362,9 +419,25 @@ class Daemon:
         self._guard_logged = False
         self._engine_started = False
         self._pending_seek = False
+        self._standby = None
         self.state = GHOSTING
         if held:
             self.ghost.apply([Pause()], now)
+
+    def _prepare_display(self) -> None:
+        """The displays may have been switched off by Windows' idle timeout (the
+        virtual ghost display goes with them) - wake them before mpv draws its
+        first frame, or Hue Sync captures a dead screen until someone touches
+        the mouse. A locked PC cannot be captured at all: say so once."""
+        if self.keep_awake_mode() != "off" and wake_display():
+            log.info("waking the display so Hue Sync can capture the ghost")
+        if desktop_locked():
+            if not self._locked_warned:
+                log.warning("this PC is locked - Hue Sync cannot capture the lock screen; "
+                            "sign in and the colours will follow")
+                self._locked_warned = True
+        else:
+            self._locked_warned = False
 
     # -- lockstep tick ------------------------------------------------------------
     def _tick(self, now: float) -> None:
@@ -380,7 +453,8 @@ class Daemon:
             self.state = IDLE
             self.engine.stop()
             self._paused_since = None
-            self._paused_stopped = False
+            self._standby = None
+            self._idle_since = None
             if reason == "eof":
                 self._eof_item = g.item_id
             if g.user_quit:
@@ -390,10 +464,12 @@ class Daemon:
 
         obs = self.last_obs
         m = obs.model if obs else None
+        if self._standby is not None:
+            self.state = STANDBY
         if m is None:
             return
 
-        if g.has_position and not self._engine_started:
+        if g.has_position and not self._engine_started and self._standby is None:
             lat = now - self._launch_mono
             self._startup_latency = 0.7 * self._startup_latency + 0.3 * min(lat, 5.0)
             log.info("ghost rendering (startup %.2fs) -> engine start", lat)
@@ -401,15 +477,17 @@ class Daemon:
             self._engine_started = True
 
         est = self.engine.state()
-        self.state = SYNCING if (self._engine_started and est.syncing) else GHOSTING
+        if self._standby is not None:
+            self.state = STANDBY
+        else:
+            self.state = SYNCING if (self._engine_started and est.syncing) else GHOSTING
 
         if pause_stop_due(self._paused_since, now,
                           float(self.cfg.get("sync.pause_stop_min", 0.0) or 0.0),
-                          self._paused_stopped) and self._engine_started:
-            log.info("client paused for %.0f min -> stopping sync (ghost holds, resumes on play)",
+                          self._standby is not None) and self._engine_started:
+            log.info("client paused for %.0f min -> lights off (ghost holds, resumes on play)",
                      (now - self._paused_since) / 60.0)
-            self.engine.stop()
-            self._paused_stopped = True
+            self._lights_off("paused", now)
 
         target = m.position_at(now) + self.offset
         target_held = m.paused or m.frozen(now)     # client paused, or on a still frame after a seek
@@ -423,15 +501,21 @@ class Daemon:
             g.apply(actions, now)
             for a in actions:
                 if isinstance(a, Seek):
-                    d = (gobs.pos - target) if gobs.pos is not None else float("nan")
-                    log.info("drift %+.2fs -> seek to %.1fs%s", d, a.pos, " (client event)" if force else "")
+                    if gobs.pos is None:
+                        log.info("initial seek to %.1fs", a.pos)
+                    else:
+                        log.info("drift %+.2fs -> seek to %.1fs%s", gobs.pos - target, a.pos,
+                                 " (client event)" if force else "")
                     self.stats.seeks += 1
                 elif isinstance(a, Pause):
                     log.info("%s -> ghost holds at %.1fs", "followed client paused" if m.paused
                              else "client buffering after seek", target)
                 elif isinstance(a, Resume):
                     log.info("client playing again -> ghost resumes at %.1fs", target)
-        if gobs.pos is not None and not target_held and not gobs.buffering and not gobs.paused:
+        # measure drift only in steady state: not held/buffering, and not in the
+        # second after a seek (the jump we just commanded is not "drift")
+        if gobs.pos is not None and not target_held and not gobs.buffering and not gobs.paused \
+                and now - g.last_seek_mono > 1.0:
             self.stats.add(gobs.pos - target, abs(g.speed - 1.0) > 1e-6)
         if self.stats.due(now):
             s = self.stats.flush()
@@ -454,7 +538,7 @@ class Daemon:
         self._engine_started = False
         self._idle_since = None
         self._paused_since = None
-        self._paused_stopped = False
+        self._standby = None
         s = self.stats.flush()
         if s:
             log.info("sync quality (session tail): mean|drift| %.3fs p95 %.3fs max %.3fs seeks %d",
@@ -507,6 +591,15 @@ class Daemon:
                     "speed": g.speed if g else None,
                     "seeks": g.seeks if g else 0,
                     "nudges": g.nudges if g else 0,
+                    "standby": self._standby,
+                    "standby_closes_in_s": (round(max(0.0, float(self.cfg.get("sync.idle_stop_delay_s", 10.0))
+                                                      - (now - self._idle_since)), 1)
+                                            if (g and self._idle_since is not None) else None),
+                },
+                "system": {
+                    "keep_awake": self.keep_awake_mode(),
+                    "awake_held": self._awake,
+                    "locked": desktop_locked(),
                 },
                 "drift_s": round(drift, 3) if drift is not None else None,
                 "drift_last_minute": self.stats.last_summary,
@@ -514,6 +607,7 @@ class Daemon:
                 "offset_s": self.offset,
                 "intensity": self.cfg.get("engine.huesync.intensity"),
                 "mode": self.cfg.get("engine.huesync.mode"),
+                "lights_off_delay_s": self.lights_off_delay,
             }
 
     def ui_url(self) -> str:
@@ -656,6 +750,15 @@ class Daemon:
             changed = True
         if "pause_stop_min" in p:
             self.cfg.set("sync.pause_stop_min", max(0.0, round(float(p["pause_stop_min"]), 2)))
+            changed = True
+        if "lights_off_delay_s" in p:
+            self.cfg.set("sync.lights_off_delay_s", max(0.0, round(float(p["lights_off_delay_s"]), 2)))
+            changed = True
+        if "keep_awake" in p:
+            mode = str(p["keep_awake"]).lower()
+            if mode not in KEEP_AWAKE_MODES:
+                raise ValueError("keep_awake must be one of " + ", ".join(KEEP_AWAKE_MODES))
+            self.cfg.set("ghost.keep_awake", mode)
             changed = True
         if "offset_s" in p:
             self.cfg.set("sync.offset_s", round(float(p["offset_s"]), 3))

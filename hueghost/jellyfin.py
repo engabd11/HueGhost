@@ -116,6 +116,21 @@ class JellyfinClient:
     def auth_header_for_mpv(self) -> str:
         return 'Authorization: MediaBrowser Token="%s"' % self.key
 
+    def primary_image(self, item_id: str, max_width: int = 240) -> bytes | None:
+        """Artwork for the UI: the item's Primary image (episode thumb / movie
+        poster) as encoded bytes, or None when there is none."""
+        path = "/Items/%s/Images/Primary?maxWidth=%d&quality=85" % (urllib.parse.quote(item_id), int(max_width))
+        req = urllib.request.Request(self.base + path, headers=self._headers())
+        try:
+            with urllib.request.urlopen(req, timeout=self.timeout) as r:
+                return r.read() or None
+        except urllib.error.HTTPError as e:
+            if e.code == 404:
+                return None
+            raise JellyfinError("HTTP %s for %s" % (e.code, path)) from e
+        except Exception as e:
+            raise JellyfinError(str(e)) from e
+
 
 def session_label(s: dict) -> str:
     return "%s / %s%s" % (s.get("DeviceName") or "?", s.get("Client") or "?",

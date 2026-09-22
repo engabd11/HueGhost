@@ -12,7 +12,7 @@ import sys
 import time
 import urllib.request
 
-from . import __version__
+from . import __author__, __version__
 from .config import Config, INTENSITIES, app_data_dir, log_path, resolve_config_path
 from .jellyfin import JellyfinClient, JellyfinError, session_label
 from .winutil import (autostart_installed, find_mpv, hue_sync_info, install_autostart,
@@ -204,7 +204,7 @@ def cmd_doctor(args) -> int:
             ok_all = False
         print("  [%s] %-22s %s" % (status, what, detail))
 
-    print("hue-ghost %s doctor" % __version__)
+    print("hue-ghost %s doctor  (built by %s)" % (__version__, __author__))
     print("config: %s%s" % (cfg.path, "" if cfg.exists() else "  (missing - run: hue-ghost setup)"))
     if cfg.migrated:
         row("WARN", "config format", "v1 flat config; run 'hue-ghost setup' to rewrite")
@@ -494,7 +494,7 @@ def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="hue-ghost", description="software Hue Sync Box for Jellyfin")
     p.add_argument("--config", help="config file (default: ./config.json, repo config.json, or %s)"
                    % os.path.join(app_data_dir(), "config.json"))
-    p.add_argument("--version", action="version", version="hue-ghost " + __version__)
+    p.add_argument("--version", action="version", version="hue-ghost %s - built by %s" % (__version__, __author__))
     sub = p.add_subparsers(dest="cmd")
     sub.add_parser("run", help="run the daemon in the foreground (no window)").set_defaults(fn=cmd_run)
     s = sub.add_parser("gui", help="the desktop app (daemon + control panel + tray icon)")

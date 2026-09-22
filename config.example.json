@@ -18,8 +18,10 @@
     "converge_s": 5.0,
     "max_speed_delta": 0.04,
     "seek_cooldown_s": 3.0,
-    "jitter_tolerance_s": 0.75,
-    "idle_stop_delay_s": 10.0
+    "jitter_tolerance_s": 1.5,
+    "lights_off_delay_s": 1.5,
+    "idle_stop_delay_s": 10.0,
+    "pause_stop_min": 0
   },
   "ghost": {
     "mpv_path": "mpv",
@@ -29,6 +31,7 @@
     "geometry": "28%x28%-40-40",
     "ipc": "",
     "hwdec": "auto",
+    "keep_awake": "playing",
     "relaunch_cooldown_s": 5.0,
     "relaunch_max_per_5min": 6,
     "extra_args": []

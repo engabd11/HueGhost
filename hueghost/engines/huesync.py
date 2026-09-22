@@ -1,4 +1,4 @@
-"""Drive the official Hue Sync desktop app over its "Public Control" WebSocket.
+r"""Drive the official Hue Sync desktop app over its "Public Control" WebSocket.
 
 Protocol (Hue Sync 1.13, recovered from the app; enable *Settings > Allow
 public control* in the app):
@@ -37,7 +37,6 @@ import json
 import logging
 import os
 import socket
-import subprocess
 import threading
 import time
 
@@ -359,8 +358,8 @@ class HueSyncEngine(Engine):
             return
         self._last_launch = now
         try:
-            subprocess.Popen([self.launch_exe], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                             stdin=subprocess.DEVNULL)
-            log.info("launched %s", self.launch_exe)
+            # -silent: start minimised to the tray, no window on the user's screen
+            if hue_sync_launch(self.launch_exe, silent=True):
+                log.info("launched %s -silent", self.launch_exe)
         except OSError as e:
             log.warning("could not launch Hue Sync: %s", e)

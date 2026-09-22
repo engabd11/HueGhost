@@ -283,6 +283,90 @@ def _selected_group(br) -> tuple[str | None, str | None]:
     return sel, None
 
 
+# -- power / display state ---------------------------------------------------------
+ES_CONTINUOUS = 0x80000000
+ES_SYSTEM_REQUIRED = 0x00000001
+ES_DISPLAY_REQUIRED = 0x00000002
+
+
+def keep_awake(on: bool) -> bool:
+    """Hold (or release) the display + system idle timers for the *calling
+    thread*. Windows switches every display off after the idle timeout - the
+    virtual ghost display included - and Hue Sync then captures a dead screen.
+    Returns True when the request was applied (Windows only)."""
+    if sys.platform != "win32":
+        return False
+    import ctypes
+    flags = ES_CONTINUOUS | ((ES_SYSTEM_REQUIRED | ES_DISPLAY_REQUIRED) if on else 0)
+    try:
+        return bool(ctypes.windll.kernel32.SetThreadExecutionState(ctypes.c_uint(flags)))
+    except Exception:
+        return False
+
+
+def wake_display() -> bool:
+    """Turn displays that are already powered off back on: reset the display
+    idle timer and inject a 1-px mouse jiggle (net zero movement), which is
+    what reliably wakes a monitor the idle timeout switched off. Returns True
+    when input was injected (Windows only)."""
+    if sys.platform != "win32":
+        return False
+    import ctypes
+    from ctypes import wintypes
+    try:
+        ctypes.windll.kernel32.SetThreadExecutionState(ctypes.c_uint(ES_DISPLAY_REQUIRED))
+    except Exception:
+        pass
+    ULONG_PTR = ctypes.c_ulonglong if ctypes.sizeof(ctypes.c_void_p) == 8 else ctypes.c_ulong
+
+    class MOUSEINPUT(ctypes.Structure):
+        _fields_ = [("dx", wintypes.LONG), ("dy", wintypes.LONG), ("mouseData", wintypes.DWORD),
+                    ("dwFlags", wintypes.DWORD), ("time", wintypes.DWORD), ("dwExtraInfo", ULONG_PTR)]
+
+    class _U(ctypes.Union):
+        _fields_ = [("mi", MOUSEINPUT), ("pad", ctypes.c_byte * 32)]
+
+    class INPUT(ctypes.Structure):
+        _fields_ = [("type", wintypes.DWORD), ("u", _U)]
+
+    INPUT_MOUSE, MOUSEEVENTF_MOVE = 0, 0x0001
+    try:
+        inputs = (INPUT * 2)()
+        for i, dx in enumerate((1, -1)):
+            inputs[i].type = INPUT_MOUSE
+            inputs[i].u.mi = MOUSEINPUT(dx, 0, 0, MOUSEEVENTF_MOVE, 0, 0)
+        sent = ctypes.windll.user32.SendInput(2, inputs, ctypes.sizeof(INPUT))
+        return sent == 2
+    except Exception:
+        return False
+
+
+def desktop_locked() -> bool | None:
+    """True while the workstation is locked (the secure desktop owns the input
+    - nothing can capture it), False when the normal desktop is up, None when
+    unknown (not Windows)."""
+    if sys.platform != "win32":
+        return None
+    import ctypes
+    DESKTOP_READOBJECTS = 0x0001
+    try:
+        user32 = ctypes.windll.user32
+        h = user32.OpenInputDesktop(0, False, DESKTOP_READOBJECTS)
+        if not h:
+            return True
+        try:
+            buf = ctypes.create_unicode_buffer(64)
+            n = ctypes.c_ulong(0)
+            UOI_NAME = 2
+            if user32.GetUserObjectInformationW(h, UOI_NAME, buf, ctypes.sizeof(buf), ctypes.byref(n)):
+                return buf.value.lower() != "default"
+            return False
+        finally:
+            user32.CloseDesktop(h)
+    except Exception:
+        return None
+
+
 # -- autostart -------------------------------------------------------------------
 AUTOSTART_NAME = "HueGhost"
 

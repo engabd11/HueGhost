@@ -4,6 +4,8 @@
 area to whatever your TV is playing from Jellyfin - Apple TV, Android TV,
 phone, any client - without buying a Hue Sync Box or Sync Camera.
 
+Built by **Cyborg Automation AU**. MIT licensed. See [Credits](#credits).
+
 ```
    TV (Jellyfin client)  --plays-->  Jellyfin server  <--follows session--  Hue Ghost (PC)
                                                                                 |
@@ -95,6 +97,21 @@ learns how long your TV buffers after a seek (shown under *Sync > Learned TV
 buffering*), and nudges the ghost's speed by a few percent instead of jumping.
 The **Sync** page exposes the advanced knobs if you want them.
 
+**Stopping** (Sync page): the lights go off **1.5 s** after the TV stops
+(*Lights off after the TV stops*); the ghost player itself stays on standby
+for 10 s (*Close the ghost after*) so a TV that comes straight back - next
+episode, a seek that restarts playback - does not need a fresh launch. *Lights
+off when paused for* N minutes (0 = never) covers long pauses.
+
+**Displays that fall asleep** (Display page > *Keep displays awake*): Windows
+switches every display off after its idle timeout, the virtual ghost display
+included, and Hue Sync then captures nothing - the lights sit on one dim
+colour until someone touches the mouse. The default, *While the ghost plays*,
+wakes the displays the moment playback starts and holds them awake until it
+stops; the PC itself must not be set to sleep (Hue Ghost cannot wake a
+sleeping PC). A locked PC cannot be captured either: Hue Ghost says so on the
+Home page.
+
 ## Home Assistant
 
 **Home Assistant** page: switch *Allow control from the LAN* on, generate a
@@ -158,9 +175,13 @@ driven over its local "Public Control" WebSocket, documented in
 - **One streamer per entertainment area.** If something else (Hue app scene
   sync, Hue Synco music sync, a Sync Box) is streaming to the area, Hue Sync
   can't start. The Hue Synco integration handles the hand-over.
-- **Long pauses?** Optional: sync stops automatically after the TV is paused
-  for X minutes (Sync page > *Pause: stop sync after (min)*, 0 = never) and
-  comes back when you press play.
+- **Long pauses?** Optional: the lights go off after the TV is paused for X
+  minutes (Sync page > *Lights off when paused for*, 0 = never) and come back
+  when you press play.
+- **Lights stay on one dim colour after the PC sat idle?** The displays went
+  to sleep. Display page > *Keep displays awake* = *While the ghost plays*
+  (default) wakes them when a movie starts. Make sure the PC's *sleep* timeout
+  is off; the *display* timeout can stay.
 - **Accuracy**: about +/-0.1-0.2 s in steady state; a seek on the TV is
   followed within ~1 s plus the TV's own buffering. A Sync Box is ~0.1 s.
   Bias/mood lighting: indistinguishable; frame-critical flashes: close.
@@ -175,6 +196,46 @@ driven over its local "Public Control" WebSocket, documented in
 - **Virtual display quirks**: some apps open on the last-used display; Win+P
   and per-app display memory apply as with any second monitor. The installer's
   uninstaller removes the virtual display again.
+
+## Credits
+
+Hue Ghost stands on these projects:
+
+- **[mpv](https://mpv.io)** - plays the ghost: the muted player driven in
+  lockstep over its JSON IPC (GPLv2+; bundled by the Windows installer).
+- **Philips Hue Sync** - the official desktop app (Signify) that turns the
+  ghost display into light. Hue Ghost is not affiliated with or endorsed by
+  Signify / Philips Hue.
+- **[Jellyfin](https://jellyfin.org)** - the media server whose sessions tell
+  Hue Ghost what the TV is watching (GPLv2).
+- **[Virtual Display Driver](https://github.com/VirtualDrivers/Virtual-Display-Driver)**
+  - the signed virtual display the ghost plays on (MIT; bundled).
+- **[Qt](https://www.qt.io) / [PySide6](https://doc.qt.io/qtforpython-6/)** -
+  the desktop app (LGPLv3).
+- **[PyInstaller](https://pyinstaller.org)** and **[Inno Setup](https://jrsoftware.org/isinfo.php)**
+  - the Windows build and the installer wizard.
+- **[Home Assistant](https://www.home-assistant.io)** and the
+  **[Hue Synco](https://github.com/engabd11/syncoV2)** integration - movie
+  mode from your smart home, with hand-over from music sync.
+
+Built by **Cyborg Automation AU** - Melbourne, private and local smart-home
+automation.
+
+## Changelog
+
+- **2.2.0** - Lights go off ~2 s after the TV stops (two-stage stop: the ghost
+  stays on standby for 10 s and re-lights instantly if the TV comes back).
+  Wakes and holds the displays awake while the ghost plays, so a PC that sat
+  idle no longer streams one dim colour until the mouse is touched; warns when
+  the PC is locked. New look: warm Cyborg Automation AU theme with Fluent
+  icons, artwork on Home, aligned settings, colour-coded log, credits. Hue Sync
+  is launched `-silent`; drift stats ignore the second after a seek.
+- **2.1.2** - Light engine watchdog (a crashed worker is rebuilt, sync and
+  intensity re-asserted); pause timeout option.
+- **2.1.0** - Players bound to entertainment areas; Hue Ghost only stops syncs
+  it started.
+- **2.0.0** - Desktop app, settings API, Windows installer with mpv and the
+  virtual display.
 
 ## Compliance & privacy
 

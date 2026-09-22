@@ -45,7 +45,8 @@ DEFAULTS: dict[str, Any] = {
         "max_speed_delta": 0.04,     # +/- speed clamp for nudging
         "seek_cooldown_s": 3.0,
         "jitter_tolerance_s": 1.5,   # report vs model difference treated as jitter, not a seek
-        "idle_stop_delay_s": 10.0,
+        "lights_off_delay_s": 1.5,   # lights stop this long after the client stops (ghost stays on standby)
+        "idle_stop_delay_s": 10.0,   # ... and the ghost mpv closes after this long
         "pause_stop_min": 0.0,       # stop syncing after the client is paused this
                                      # many minutes (0 = never); resumes on play
         "stall_estimates": {},       # learned client buffering after seek/start/resume (auto-saved)
@@ -58,6 +59,8 @@ DEFAULTS: dict[str, Any] = {
         "geometry": "28%x28%-40-40",
         "ipc": "",                   # empty -> platform default pipe/socket
         "hwdec": "auto",
+        "keep_awake": "playing",     # off | playing | always: hold the displays awake (Windows idle timeout
+                                     # switches the virtual ghost display off -> Hue Sync captures nothing)
         "relaunch_cooldown_s": 5.0,
         "relaunch_max_per_5min": 6,
         "extra_args": [],
@@ -83,6 +86,7 @@ DEFAULTS: dict[str, Any] = {
 
 INTENSITIES = ("subtle", "moderate", "high", "extreme")
 ENGINE_TYPES = ("huesync", "httphook", "none")
+KEEP_AWAKE_MODES = ("off", "playing", "always")
 
 _LEGACY_MAP = {
     "server_url": "jellyfin.url",
