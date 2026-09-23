@@ -893,6 +893,77 @@ def wake_display() -> bool:
         return False
 
 
+def idle_seconds() -> float | None:
+    """Seconds since the last mouse or keyboard input in this session, None
+    when unknown (not Windows)."""
+    if sys.platform != "win32":
+        return None
+    import ctypes
+    from ctypes import wintypes
+
+    class LASTINPUTINFO(ctypes.Structure):
+        _fields_ = [("cbSize", wintypes.UINT), ("dwTime", wintypes.DWORD)]
+
+    li = LASTINPUTINFO()
+    li.cbSize = ctypes.sizeof(li)
+    try:
+        if not ctypes.windll.user32.GetLastInputInfo(ctypes.byref(li)):
+            return None
+        now = ctypes.windll.kernel32.GetTickCount()
+        return ((now - li.dwTime) & 0xFFFFFFFF) / 1000.0    # both wrap at 49.7 days
+    except Exception:
+        return None
+
+
+_job = None     # the Job Object kill_on_exit() ties children to; closed only by our own exit
+
+
+def kill_on_exit(proc) -> bool:
+    """Tie a child process to this one: Windows ends it when Hue Ghost exits,
+    however it exits - a crash included (a Job Object with KILL_ON_JOB_CLOSE,
+    whose one handle is ours). True when applied (Windows only)."""
+    global _job
+    if sys.platform != "win32":
+        return False
+    import ctypes
+    from ctypes import wintypes
+
+    class BASIC(ctypes.Structure):
+        _fields_ = [("PerProcessUserTimeLimit", ctypes.c_int64), ("PerJobUserTimeLimit", ctypes.c_int64),
+                    ("LimitFlags", wintypes.DWORD), ("MinimumWorkingSetSize", ctypes.c_size_t),
+                    ("MaximumWorkingSetSize", ctypes.c_size_t), ("ActiveProcessLimit", wintypes.DWORD),
+                    ("Affinity", ctypes.c_size_t), ("PriorityClass", wintypes.DWORD),
+                    ("SchedulingClass", wintypes.DWORD)]
+
+    class EXTENDED(ctypes.Structure):
+        _fields_ = [("BasicLimitInformation", BASIC), ("IoInfo", ctypes.c_uint64 * 6),
+                    ("ProcessMemoryLimit", ctypes.c_size_t), ("JobMemoryLimit", ctypes.c_size_t),
+                    ("PeakProcessMemoryUsed", ctypes.c_size_t), ("PeakJobMemoryUsed", ctypes.c_size_t)]
+
+    JobObjectExtendedLimitInformation, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE = 9, 0x2000
+    try:
+        k32 = ctypes.WinDLL("kernel32")     # own instance: typed prototypes stay local to this
+        k32.CreateJobObjectW.restype = wintypes.HANDLE
+        k32.CreateJobObjectW.argtypes = [ctypes.c_void_p, wintypes.LPCWSTR]
+        k32.SetInformationJobObject.argtypes = [wintypes.HANDLE, ctypes.c_int, ctypes.c_void_p, wintypes.DWORD]
+        k32.AssignProcessToJobObject.argtypes = [wintypes.HANDLE, wintypes.HANDLE]
+        k32.CloseHandle.argtypes = [wintypes.HANDLE]
+        if _job is None:
+            job = k32.CreateJobObjectW(None, None)
+            if not job:
+                return False
+            info = EXTENDED()
+            info.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
+            if not k32.SetInformationJobObject(job, JobObjectExtendedLimitInformation,
+                                               ctypes.byref(info), ctypes.sizeof(info)):
+                k32.CloseHandle(job)
+                return False
+            _job = job
+        return bool(k32.AssignProcessToJobObject(_job, int(proc._handle)))
+    except Exception:
+        return False
+
+
 def desktop_locked() -> bool | None:
     """True while the workstation is locked (the secure desktop owns the input
     - nothing can capture it), False when the normal desktop is up, None when

@@ -81,6 +81,8 @@
     "ipc": "",
     "hwdec": "auto",
     "keep_awake": "playing",
+    "pixel_shift_min": 3.0,
+    "blackout_idle_min": 0.0,
     "audio_device": "",
     "music_volume": 100,
     "relaunch_cooldown_s": 5.0,

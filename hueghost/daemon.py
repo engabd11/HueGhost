@@ -29,6 +29,7 @@ from .engines import Engine, build_engine
 from .ghost import GhostPlayer, mpv_args
 from .jellyfin import JellyfinClient, JellyfinError
 from .lockstep import GhostObs, Params, Pause, Resume, Seek, decide
+from .screencare import ScreenCare
 from .sources import IDLE as IDLE_ACTIVITY, build_sources
 from .watcher import Observation, PlayerSet, SessionWatcher
 from .winutil import desktop_locked, keep_awake, wake_display
@@ -143,6 +144,7 @@ class Daemon:
         # (client left, ghost on standby) or "paused" (pause timeout)
         self._standby: str | None = None
         self._awake = False           # displays currently held awake by us
+        self.care = ScreenCare(cfg)   # ... and what keeps an OLED held awake from burning in
         self._locked_warned = False
         self._launches: deque[float] = deque()
         self._last_launch = 0.0
@@ -253,6 +255,7 @@ class Daemon:
                 with self._lock:
                     self._tick(time.monotonic())
                     self._sync_power()
+                    self._screen_care(time.monotonic())
                 wait = max(0.05, min(TICK_S, next_poll - time.monotonic()))
                 self._stop.wait(wait)
         finally:
@@ -281,6 +284,19 @@ class Daemon:
                      if want else "displays may sleep again")
         self._awake = want
 
+    def _screen_care(self, now: float) -> None:
+        """Keep a held-awake OLED from showing one picture all night: shift the
+        ghost's picture now and then, and black out the displays Hue Sync does
+        not capture once nobody is using the PC. Music has no picture to care for."""
+        g = self.ghost
+        video = g if (g is not None and not self._ghost_audio_only and g.alive()) else None
+        spare = set()
+        if video is not None:
+            captured = self.engine.state().monitor_id
+            if captured:
+                spare.add(captured)
+        self.care.tick(now, video, spare)
+
     def stop(self) -> None:
         self._stop.set()
 
@@ -292,6 +308,7 @@ class Daemon:
 
     def _shutdown(self) -> None:
         with self._lock:
+            self.care.close()             # first: nothing below may leave a display blacked out
             if self.ghost is not None:
                 self._stop_ghost("daemon exit")
             try:
@@ -541,8 +558,12 @@ class Daemon:
         """The displays may have been switched off by Windows' idle timeout (the
         virtual ghost display goes with them) - wake them before mpv draws its
         first frame, or Hue Sync captures a dead screen until someone touches
-        the mouse. A locked PC cannot be captured at all: say so once."""
-        if self.keep_awake_mode() != "off" and wake_display():
+        the mouse. A locked PC cannot be captured at all: say so once.
+
+        Not while screen care has displays blacked out: they are on (held awake,
+        showing black), and the wake-up jiggle is input - it would take the
+        black away at every new episode of a binge."""
+        if self.keep_awake_mode() != "off" and not self.care.covers and wake_display():
             log.info("waking the display so Hue Sync can capture the ghost")
         if desktop_locked():
             if not self._locked_warned:
@@ -769,6 +790,7 @@ class Daemon:
                     "keep_awake": self.keep_awake_mode(),
                     "awake_held": self._awake,
                     "locked": desktop_locked(),
+                    "screen_care": self.care.status(),
                 },
                 "drift_s": round(drift, 3) if drift is not None else None,
                 "drift_last_minute": self.stats.last_summary,
@@ -1000,6 +1022,10 @@ class Daemon:
                 raise ValueError("keep_awake must be one of " + ", ".join(KEEP_AWAKE_MODES))
             self.cfg.set("ghost.keep_awake", mode)
             changed = True
+        for key in ("pixel_shift_min", "blackout_idle_min"):     # screen care; 0 = off
+            if key in p:
+                self.cfg.set("ghost." + key, max(0.0, round(float(p[key]), 1)))
+                changed = True
         if "offset_s" in p:
             self.cfg.set("sync.offset_s", round(float(p["offset_s"]), 3))
             changed = True
