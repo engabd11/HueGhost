@@ -90,7 +90,7 @@ Jellyfin reports most phones under a generic device name: two different
 handsets both arrive as plain **"Android"**, which is no use when you have to
 pick one. Each entry therefore shows the **app** and the **signed-in user** too,
 and a fragment of the device id when even those are identical - so
-*Android - CAMusic (Mariam)* and *Android - CAMusic (Abdullah)* are finally two
+*Android - CAMusic (2)* and *Android - CAMusic (1)* are finally two
 different things. Every source also has a **name you can edit**: call it
 *S23 music* and be done with it.
 
