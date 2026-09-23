@@ -110,3 +110,19 @@ def test_reload_picks_up_changes(tmp_path):
     assert cfg.get("jellyfin.api_key") == "b"
     assert cfg.get("sync.offset_s") == 9
     assert cfg.get("sync.seek_threshold_s") == 1.0   # defaults still merged
+
+
+def test_a_binding_keeps_the_app_it_was_added_for():
+    """The app is part of a Jellyfin binding's identity, so it has to survive a
+    save/load round trip like any other field."""
+    from hueghost.config import Config
+    c = Config({})
+    c.set_bindings([
+        {"source": "jellyfin", "device_id": "id-music", "client": "CAMusic", "name": "S23 music"},
+        {"source": "jellyfin", "device_id": "id-video", "client": "Jellyfin for Android", "name": "S23 films"},
+    ])
+    got = c.bindings()
+    assert [b["client"] for b in got] == ["CAMusic", "Jellyfin for Android"]
+    assert [b["name"] for b in got] == ["S23 music", "S23 films"]
+    # two entries for one phone must not collapse into one id
+    assert got[0]["id"] != got[1]["id"]

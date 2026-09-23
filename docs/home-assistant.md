@@ -11,16 +11,26 @@ sync to Hue entertainment areas from Home Assistant. From v1.57 it can also
 drive hue-ghost:
 
 Settings > Devices & services > Hue Synco > **Configure** > fill in
-*Hue Ghost host / port / token*. A **Hue Ghost - Movie mode** device appears with:
+*Hue Ghost host / port / token*. A **Hue Ghost** device appears with:
 
 | entity | |
 |---|---|
-| `switch.hue_ghost_movie_mode` | hue-ghost master switch (`/on` `/off`) |
-| `sensor.hue_ghost_state` | `offline` / `idle` / `ghosting` / `syncing`, attributes: now playing, position, drift, engine state |
+| `light.hue_ghost_global_sync` | the master control: on/off is movie mode, brightness is the level Hue Sync runs the area at |
+| `sensor.hue_ghost_sync_status` | `offline` / `idle` / `ghosting` / `syncing`, attributes: now playing, position, drift, engine state |
+| `sensor.hue_ghost_sync_area` | the entertainment area the sync plays in |
+| `sensor.hue_ghost_active_source` | which followed source is driving the lights now |
+| `sensor.hue_ghost_now_playing` | the Jellyfin item, or what the PC source reported |
 | `select.hue_ghost_mode` | video / music / games - what Hue Sync reacts to |
 | `select.hue_ghost_intensity` | subtle / moderate / high / extreme |
+| `switch.hue_ghost_<source>` | one per binding ("Apple TV", "PC"): follow it, or ignore it |
 | `switch.hue_ghost_audio_effects` | "use audio for light effects" in video/games mode |
 | `number.hue_ghost_sync_offset` | the lead in seconds, live (tune from the couch) |
+| `sensor.hue_ghost_sync_drift` | diagnostic: the measured ghost-vs-TV gap the offset cancels |
+
+Hue Synco ships a **Hue Ghost Card (Movie mode)** that puts the lot on one
+tile - the light, the intensity and mode pickers, and a tile per source - in
+this app's own gold-on-charcoal. Add `type: custom:hue-ghost-card` to a
+dashboard; it finds the device itself.
 
 Mode and intensity apply live, mid-movie - switching Video to Music or Games
 never restarts the Hue Sync app or drops the sync. They also **mirror** it:
@@ -38,8 +48,9 @@ allows one streamer per entertainment area), then enables hue-ghost.
 Starting a music-sync area while movie mode is on turns movie mode off.
 
 Automation ideas: movie mode on at sunset and off at bedtime; a dashboard
-button next to the music-sync card; `sensor.hue_ghost_state == syncing` to
-dim other lights.
+button next to the music-sync card; `sensor.hue_ghost_sync_status == syncing`
+to dim other lights; `sensor.hue_ghost_sync_area` to key an automation to the
+room the sync actually landed in.
 
 ## Option B - plain REST (no integration)
 

@@ -140,6 +140,31 @@ def session_label(s: dict) -> str:
                           (" (%s)" % s["UserName"]) if s.get("UserName") else "")
 
 
+def label_sessions(rows: list[dict]) -> None:
+    """Give each discovered session a name that tells it apart from the others.
+
+    Phones are the problem. Jellyfin reports most of them with a generic
+    DeviceName - two different handsets both arrive as plain "Android" - so the
+    device name alone is never enough to pick the right one from a list. The app
+    and the signed-in user are what actually distinguish them, and when even
+    those repeat there is still the device id, which Jellyfin issues per app
+    install (which is also why one phone can hold a separate entry, and so a
+    separate configuration, for its music app and its video app).
+
+    Sets ``label`` on every row, in place."""
+    keys = [((r.get("device_name") or "?"), (r.get("client") or "?"), (r.get("user") or "")) for r in rows]
+    for r, k in zip(rows, keys):
+        label = "%s - %s" % (k[0], k[1])
+        if k[2]:
+            label += " (%s)" % k[2]
+        if keys.count(k) > 1:
+            # the *tail*: Jellyfin ids for one app often share a long prefix
+            # (the Android app grew its id scheme and left the old one behind),
+            # so the front of the string is exactly the part that repeats
+            label += "  [...%s]" % (r.get("device_id") or "?")[-6:]
+        r["label"] = label
+
+
 def item_display_name(item: dict) -> str:
     """'Series - S01E02 - Title' for episodes, plain Name otherwise."""
     name = item.get("Name") or "?"

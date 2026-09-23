@@ -85,9 +85,11 @@ class ClockOffset:
 
 class SessionMatcher:
     def __init__(self, device_id: str = "", name_contains: str = "", user: str = "",
-                 area_id: str = "", area_name: str = "", kinds: tuple = ("video", "music")):
+                 area_id: str = "", area_name: str = "", kinds: tuple = ("video", "music"),
+                 client: str = ""):
         self.device_id = (device_id or "").strip()
         self.needle = (name_contains or "").strip().lower()
+        self.client = (client or "").strip().lower()
         self.user = (user or "").strip().lower()
         self.area_id = (area_id or "").strip() or None
         self.area_name = (area_name or "").strip() or None
@@ -97,7 +99,7 @@ class SessionMatcher:
     def from_player(cls, p: dict) -> "SessionMatcher":
         return cls(p.get("device_id", ""), p.get("device_name_contains", ""), p.get("user", ""),
                    p.get("area_id", ""), p.get("area_name", ""),
-                   tuple(p.get("kinds") or ("video", "music")))
+                   tuple(p.get("kinds") or ("video", "music")), p.get("client", ""))
 
     def wants(self, r: "Report | None") -> bool:
         """A player followed for films only should not light up for an album."""
@@ -111,6 +113,10 @@ class SessionMatcher:
         label = ((s.get("DeviceName") or "") + " " + (s.get("Client") or "")).lower()
         by_name = bool(self.needle) and self.needle in label
         if not (by_id or by_name):
+            return False
+        # Narrowing by app is what separates two entries a phone reports under
+        # the same generic device name - music in one app, films in another.
+        if self.client and self.client not in (s.get("Client") or "").lower():
             return False
         if self.user and self.user not in (s.get("UserName") or "").lower():
             return False

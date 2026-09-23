@@ -14,7 +14,7 @@ from typing import TYPE_CHECKING, Any
 
 from . import __version__
 from .config import INTENSITIES, MODES, app_data_dir, log_path
-from .jellyfin import JellyfinClient, JellyfinError, item_display_name
+from .jellyfin import JellyfinClient, JellyfinError, item_display_name, label_sessions
 from .pcwatch import list_processes
 from .winutil import (autostart_installed, default_audio_output_id, find_mpv, hue_sync_info,
                       install_autostart, list_audio_outputs, list_displays, tray_command,
@@ -93,11 +93,11 @@ class WebApi:
             sessions, _, _ = jf.sessions()
         except JellyfinError as e:
             raise ApiError("API key rejected by %s: %s" % (info.get("ServerName") or url, e))
-        out = []
+        by_id: dict[str, dict] = {}
         for s in sessions:
             np = s.get("NowPlayingItem")
-            out.append({
-                "device_id": s.get("DeviceId"),
+            row = {
+                "device_id": s.get("DeviceId") or "",
                 "device_name": s.get("DeviceName"),
                 "client": s.get("Client"),
                 "version": s.get("ApplicationVersion"),
@@ -106,8 +106,15 @@ class WebApi:
                 "media_type": np.get("MediaType") if np else None,
                 "last_activity": s.get("LastActivityDate"),
                 "playable": bool(s.get("PlayableMediaTypes")),
-            })
-        out.sort(key=lambda x: (x["now_playing"] is None, not x["playable"], x["device_name"] or ""))
+            }
+            # One app on one device is one entry, however many sessions Jellyfin
+            # is holding open for it; the one actually playing is the useful one.
+            prev = by_id.get(row["device_id"]) if row["device_id"] else None
+            if prev is None or (row["now_playing"] and not prev["now_playing"]):
+                by_id[row["device_id"] or ("#%d" % len(by_id))] = row
+        out = list(by_id.values())
+        label_sessions(out)
+        out.sort(key=lambda x: (x["now_playing"] is None, not x["playable"], x["label"].lower()))
         return {"server": info, "sessions": out, "auth": True}
 
     def huesync(self, p: dict, q: dict) -> dict:

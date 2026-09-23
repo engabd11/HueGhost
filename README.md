@@ -80,7 +80,28 @@ The **Sources** page is one ordered list. Two kinds of thing go in it:
   no ghost at all: Hue Ghost simply points the app at your real monitor and
   starts the sync. Pick the app from the list of what is running (what is in
   front and what is making sound come first), or type its `.exe` for a game you
-  have not launched yet.
+  have not launched yet. Apps are listed by the name they are actually known
+  by - *Google Chrome*, not `chrome.exe` - with a search box, because a PC runs
+  a hundred processes and about four of them are things you would ever sync.
+
+### Phones, and why one device can appear twice
+
+Jellyfin reports most phones under a generic device name: two different
+handsets both arrive as plain **"Android"**, which is no use when you have to
+pick one. Each entry therefore shows the **app** and the **signed-in user** too,
+and a fragment of the device id when even those are identical - so
+*Android - CAMusic (Mariam)* and *Android - CAMusic (Abdullah)* are finally two
+different things. Every source also has a **name you can edit**: call it
+*S23 music* and be done with it.
+
+Jellyfin issues a **separate device id per app**, which is what lets one phone
+hold *two* configurations - its music app lighting the bedroom, its video app
+lighting the living room - with no switching back and forth. Adding a player
+from the list pins that exact id and nothing else; the older behaviour also
+stored the device *name*, which is precisely how one phone ended up answering
+for another. Matching by name is still there for a TV that gets a new id when
+its app is reinstalled, but it follows **every** device that matches, so it is
+the wrong tool for a phone.
 
 Each one gets an **on/off switch** - ignore a player for a while without
 deleting it - and an **entertainment area**. Only one thing syncs at a time
@@ -108,6 +129,13 @@ playing your TV's music out of the PC's speakers.
 
 Music playing **on the PC itself** needs none of that: the sound is already
 here, so Hue Sync just listens to its own output.
+
+Music also **stops differently**. A film is paused to be come back to, so the
+lights wait minutes for it. A phone that stops a track usually just leaves the
+session open in the background instead of closing it, and waiting for that to
+disappear means the lights stay on long after the music ended - so music has
+its own, much shorter limit: **15 seconds paused and the lights go off**, and
+they come straight back on the next track. Both limits are on the *Sync* page.
 
 ## One PC, several rooms
 
@@ -193,13 +221,14 @@ Home page.
 token, save, restart. Then either:
 
 - **[Hue Synco](https://github.com/engabd11/syncoV2)** (HACS): *Configure >
-  Hue Ghost host / port / token* gives you a **Movie mode** switch, a state
-  sensor (idle / ghosting / syncing with now-playing and drift attributes),
-  **mode** and **intensity** selects, a **use audio for effects** switch, the
-  sync-offset number, a **brightness light** for the entertainment area and a
-  **switch per source** (with an `active` attribute saying which one is
-  driving the lights right now) - and turning movie mode on hands the
-  entertainment area over from music sync automatically.
+  Hue Ghost host / port / token* gives you a **Hue Ghost** device - a
+  **Global sync** light that is the master control (on/off *and* the area's
+  level), **sync status / area / active source / now playing** sensors,
+  **mode** and **intensity** selects, a **switch per source** named for the
+  source itself, a **use audio for effects** switch and the sync-offset number
+  - plus a **Hue Ghost card** in this app's own colours that wires itself up.
+  Turning movie mode on hands the entertainment area over from music sync
+  automatically.
 - Plain REST (see [docs/home-assistant.md](docs/home-assistant.md)):
   `POST /on`, `/off`, `/set {"offset_delta": 0.25}`, `GET /status`, all with
   `Authorization: Bearer <token>`. `/set` also takes `{"brightness": 0-100}`
@@ -305,6 +334,20 @@ automation.
 
 ## Changelog
 
+- **2.6.0** - **Phones stop being a guessing game.** Jellyfin calls most of
+  them "Android", so two handsets looked identical in the list and one could
+  quietly answer for the other. Entries now show the app and the user (and a
+  piece of the device id when even that repeats), every source has a **name you
+  can edit**, and adding one pins its exact device id instead of its name. Since
+  Jellyfin issues an id per app, **one phone can hold a separate configuration
+  per app** - music lighting one room, films another. The discovery list gets a
+  **Refresh** button, shows what is playing or when a device was last seen, and
+  no longer lists the same app twice. Apps on this PC are listed by their real
+  names (*Google Chrome*, not chrome.exe) with a search box. **Music now stops
+  properly:** a track paused for 15 seconds turns the lights off instead of
+  waiting on a background session that may never close. And the app explains
+  itself - what the ghost is and why it exists, what each setting does, and
+  which single one restarts Hue Sync.
 - **2.5.0** - **Hue Sync stops restarting mid-movie.** Changing the mode from
   Video to Music or Games while the lights are running no longer restarts the
   Hue Sync app: the mode has always had a live command, and Hue Ghost was

@@ -96,7 +96,7 @@ def world(monkeypatch, tmp_path):
     monkeypatch.setattr(dm, "desktop_locked", lambda: False)
     launched = []
 
-    def launch(cfg_, url, hdr, start, item_id, err_path=None):
+    def launch(cfg_, url, hdr, start, item_id, err_path=None, **kw):
         g = FakeGhost(item_id)
         g._time_pos = start
         launched.append(g)
@@ -104,7 +104,8 @@ def world(monkeypatch, tmp_path):
 
     monkeypatch.setattr(dm.GhostPlayer, "launch", staticmethod(launch))
     d = Daemon(cfg)
-    d.jf.stream_url = lambda item_id, msid=None: "http://jf/stream/" + item_id
+    # **kw: the music path asks for a kind, the video path does not
+    d.jf.stream_url = lambda item_id, msid=None, **kw: "http://jf/stream/" + item_id
     d.jf.auth_header_for_mpv = lambda: "Authorization: x"
 
     class World:
@@ -249,3 +250,39 @@ def test_settings_action_validates_keep_awake(world):
     assert world.d.keep_awake_mode() == "always" and world.d.lights_off_delay == 2.5
     with pytest.raises(ValueError):
         world.d.action("set", {"keep_awake": "sometimes"})
+
+
+def _music(pos, t, paused=False):
+    """One music session, as a phone app reports it."""
+    s = session(pos, paused, LOCAL0 + t, item="track1")
+    s["NowPlayingItem"] = {"Id": "track1", "Name": "Song", "MediaType": "Audio",
+                           "Type": "Audio", "Album": "Album",
+                           "RunTimeTicks": int(240 * 10_000_000)}
+    return [s]
+
+
+def test_music_paused_in_the_background_turns_the_lights_off_quickly(world):
+    """A phone that stops a track usually leaves the session open rather than
+    closing it, so music cannot wait for the minutes a film is given."""
+    world.d.cfg.set("sync.pause_stop_min", 0.0)        # films: never, the default
+    # music only syncs into an output nobody can hear
+    world.d.cfg.set("ghost.audio_device", "{0.0.0.00000000}.{silent}")
+    world.step(1.0, _music(30.0, 0.5))
+    assert world.engine_on
+    world.step(2.0, _music(31.0, world.t, paused=True))
+    assert world.engine_on                             # a short gap is not the end
+    world.step(15.0)
+    assert not world.engine_on and world.d.state == STANDBY
+    assert world.d.status()["ghost"]["standby"] == "paused"
+    # and it comes straight back when the next track plays
+    world.step(1.0, _music(31.0, world.t))
+    assert world.engine_on and world.d.state == SYNCING
+
+
+def test_a_paused_film_is_not_held_to_the_music_limit(world):
+    """The music limit must not leak into video: a film paused for 20 s is
+    still a film someone is coming back to."""
+    world.step(1.0, playing(100.0, 0.5))
+    world.step(1.0, playing(101.0, world.t, paused=True))
+    world.step(20.0)
+    assert world.engine_on and world.d.state != STANDBY

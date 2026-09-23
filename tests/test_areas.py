@@ -30,11 +30,13 @@ PLAYERS = [
 
 def test_config_players_roundtrip_and_legacy_follow():
     cfg = Config({"jellyfin": {"follow": {"device_name_contains": "Apple TV"}}})
-    assert cfg.players() == [{"device_id": "", "device_name_contains": "Apple TV", "user": "", "area_id": "", "area_name": ""}]
+    assert cfg.players() == [{"device_id": "", "device_name_contains": "Apple TV", "client": "",
+                              "user": "", "area_id": "", "area_name": ""}]
     cfg.set_players(PLAYERS)
     assert cfg.get("jellyfin.follow.device_id") == "atv" and cfg.get("jellyfin.follow_area_id") == "area-living"
     assert len(cfg.get("jellyfin.players")) == 2
-    assert cfg.players() == PLAYERS
+    # the app a player was added for travels with it, legacy mirror included
+    assert cfg.players() == [dict(p, client=p.get("client", "")) for p in PLAYERS]
     cfg.set_players([])
     assert cfg.players() == [] and "nothing to follow" in " ".join(cfg.problems())
 

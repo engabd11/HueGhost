@@ -100,9 +100,10 @@ def test_area_switch_crash_is_surfaced_then_retried(app):
 
 
 def test_pause_stop_due():
-    assert not pause_stop_due(None, 100.0, 15.0, False)      # not paused
-    assert not pause_stop_due(70.0, 100.0, 15.0, False)      # 30 s < 15 min
-    assert pause_stop_due(70.0, 100.0, 0.5, False)           # 30 s >= 0.5 min
-    assert not pause_stop_due(70.0, 100.0, 0.5, True)        # already stopped
+    assert not pause_stop_due(None, 100.0, 900.0, False)     # not paused
+    assert not pause_stop_due(70.0, 100.0, 900.0, False)     # 30 s < 15 min
+    assert pause_stop_due(70.0, 100.0, 30.0, False)          # 30 s >= 30 s
+    assert pause_stop_due(70.0, 100.0, 15.0, False)          # the music default
+    assert not pause_stop_due(70.0, 100.0, 30.0, True)       # already stopped
     assert not pause_stop_due(70.0, 100.0, 0.0, False)       # feature off
     assert not pause_stop_due(70.0, 100.0, -1.0, False)      # negative = off
