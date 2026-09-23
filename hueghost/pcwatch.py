@@ -148,6 +148,81 @@ def _query_exe(pid: int) -> str:
         k32.CloseHandle(h)
 
 
+def exe_path_of(pid: int) -> str:
+    """Full path of a pid's executable - what the version resource needs."""
+    if sys.platform != "win32" or pid <= 0:
+        return ""
+    import ctypes
+    from ctypes import wintypes
+
+    k32 = ctypes.windll.kernel32
+    h = k32.OpenProcess(0x1000, False, int(pid))    # QUERY_LIMITED_INFORMATION
+    if not h:
+        return ""                       # protected process: not ours to look at
+    try:
+        buf = ctypes.create_unicode_buffer(32768)
+        n = wintypes.DWORD(32768)
+        if not k32.QueryFullProcessImageNameW(h, 0, buf, ctypes.byref(n)):
+            return ""
+        return buf.value
+    finally:
+        k32.CloseHandle(h)
+
+
+_desc_cache: dict[str, str] = {}
+
+
+def _file_description(path: str) -> str:
+    """The "FileDescription" a Windows binary carries - "Google Chrome" for
+    chrome.exe. Empty when the file has no version resource at all, which is
+    common for games and for anything built without one."""
+    if sys.platform != "win32" or not path:
+        return ""
+    if path in _desc_cache:
+        return _desc_cache[path]
+    out = ""
+    try:
+        import ctypes
+        from ctypes import wintypes
+        ver = ctypes.windll.version
+        ver.GetFileVersionInfoSizeW.argtypes = [wintypes.LPCWSTR, ctypes.POINTER(wintypes.DWORD)]
+        ver.GetFileVersionInfoSizeW.restype = wintypes.DWORD
+        ver.GetFileVersionInfoW.argtypes = [wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD, ctypes.c_void_p]
+        ver.VerQueryValueW.argtypes = [ctypes.c_void_p, wintypes.LPCWSTR,
+                                       ctypes.POINTER(ctypes.c_void_p), ctypes.POINTER(wintypes.UINT)]
+        size = ver.GetFileVersionInfoSizeW(path, None)
+        if size:
+            buf = ctypes.create_string_buffer(size)
+            if ver.GetFileVersionInfoW(path, 0, size, buf):
+                ptr, ln = ctypes.c_void_p(), wintypes.UINT()
+                # a binary declares which language its strings are in; asking for
+                # the wrong one gives nothing, so read the table rather than guess
+                if ver.VerQueryValueW(buf, r"\VarFileInfo\Translation",
+                                      ctypes.byref(ptr), ctypes.byref(ln)) and ln.value >= 4:
+                    lang, cp = ctypes.cast(ptr, ctypes.POINTER(wintypes.WORD * 2)).contents
+                    key = r"\StringFileInfo\%04x%04x\FileDescription" % (lang, cp)
+                    if ver.VerQueryValueW(buf, key, ctypes.byref(ptr), ctypes.byref(ln)) and ln.value:
+                        out = ctypes.wstring_at(ptr, ln.value).split(chr(0))[0].strip()
+    except Exception:
+        out = ""                        # a name is a nicety; never fail a listing for it
+    _desc_cache[path] = out
+    return out
+
+
+def app_name(exe: str, path: str = "") -> str:
+    """What a person calls the app, not what the process is called.
+
+    "chrome.exe" is a poor thing to pick from a list when three browsers are
+    running; "Google Chrome" is not. Falls back to a tidied-up file name for
+    binaries with no version resource."""
+    desc = _file_description(path)
+    if desc and desc.lower() not in (exe.lower(), (exe or "")[:-4].lower()):
+        return desc
+    stem = exe[:-4] if exe.lower().endswith(".exe") else exe
+    stem = stem.replace("_", " ").replace("-", " ").strip()
+    return stem[:1].upper() + stem[1:] if stem else exe
+
+
 def foreground_window() -> Foreground | None:
     """The focused window, its process, and whether it covers a whole display."""
     if sys.platform != "win32":
@@ -305,5 +380,8 @@ def list_processes() -> list[dict]:
         p["foreground"] = bool(fg and fg.exe == name)
         p["playing_audio"] = name in loud
         p["title"] = fg.title if (fg and fg.exe == name) else ""
+        p["path"] = exe_path_of(p["pid"])
+        p["name"] = app_name(name, p["path"])
     # most useful first: what you are looking at, then what is making noise
-    return sorted(out.values(), key=lambda p: (not p["foreground"], not p["playing_audio"], p["exe"]))
+    return sorted(out.values(),
+                  key=lambda p: (not p["foreground"], not p["playing_audio"], p["name"].lower()))

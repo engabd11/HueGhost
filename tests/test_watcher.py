@@ -226,3 +226,37 @@ def test_report_from_session_shapes():
     assert r.pos == 12.5 and r.paused and r.media_source_id == "ms1"
     assert r.name == "Show - S01E02 - Ep"
     assert report_from_session({"NowPlayingItem": {"MediaType": "Audio"}}) is None
+
+
+def _phone(client, user, device_id, playing=True):
+    s = session(10.0, False, LOCAL0 + 5)
+    s["DeviceId"], s["DeviceName"], s["Client"], s["UserName"] = device_id, "Android", client, user
+    if not playing:
+        s.pop("NowPlayingItem")
+        s["PlayState"] = {}
+    return s
+
+
+def test_one_phone_can_hold_a_separate_config_per_app():
+    """The whole point of matching on the app: Jellyfin gives a phone's music
+    app and its video app different device ids, so each can drive its own
+    lights - and neither should answer for the other."""
+    music = SessionMatcher(device_id="id-music", client="CAMusic")
+    video = SessionMatcher(device_id="id-video", client="Jellyfin for Android")
+    s_music = _phone("CAMusic", "Abdullah", "id-music")
+    s_video = _phone("Jellyfin for Android", "Abdullah", "id-video")
+    assert music.matches(s_music) and not music.matches(s_video)
+    assert video.matches(s_video) and not video.matches(s_music)
+
+
+def test_matching_by_name_can_be_narrowed_to_one_app():
+    """'Android' alone follows every Android in the house; adding the app - and
+    the user - is what makes a name match safe on a phone."""
+    loose = SessionMatcher(name_contains="Android")
+    narrow = SessionMatcher(name_contains="Android", client="CAMusic", user="Mariam")
+    mine = _phone("CAMusic", "Abdullah", "id-1")
+    hers = _phone("CAMusic", "Mariam", "id-2")
+    other_app = _phone("Jellyfin for Android", "Mariam", "id-3")
+    assert loose.matches(mine) and loose.matches(hers)          # the mix-up
+    assert narrow.matches(hers)
+    assert not narrow.matches(mine) and not narrow.matches(other_app)

@@ -61,13 +61,13 @@ def _tri_state(v) -> bool | None:
     return bool(v)
 
 
-def pause_stop_due(paused_since: float | None, now: float, limit_min: float,
+def pause_stop_due(paused_since: float | None, now: float, limit_s: float,
                    already_stopped: bool) -> bool:
     """True when sync should stop because the followed client has been paused
-    for ``limit_min`` minutes (0 disables the feature)."""
-    if already_stopped or paused_since is None or limit_min <= 0:
+    for ``limit_s`` seconds (0 disables the feature)."""
+    if already_stopped or paused_since is None or limit_s <= 0:
         return False
-    return now - paused_since >= limit_min * 60.0
+    return now - paused_since >= limit_s
 
 
 class DriftStats:
@@ -595,11 +595,12 @@ class Daemon:
         else:
             self.state = SYNCING if (self._engine_started and est.syncing) else GHOSTING
 
-        if pause_stop_due(self._paused_since, now,
-                          float(self.cfg.get("sync.pause_stop_min", 0.0) or 0.0),
+        if pause_stop_due(self._paused_since, now, self._pause_stop_limit_s(m),
                           self._standby is not None) and self._engine_started:
-            log.info("client paused for %.0f min -> lights off (ghost holds, resumes on play)",
-                     (now - self._paused_since) / 60.0)
+            held = now - self._paused_since
+            log.info("%s paused for %s -> lights off (ghost holds, resumes on play)",
+                     "music" if m.media_type == "music" else "client",
+                     "%.0f s" % held if held < 120 else "%.0f min" % (held / 60.0))
             self._lights_off("paused", now)
 
         target = m.position_at(now) + self.offset
@@ -951,6 +952,17 @@ class Daemon:
             except OSError as e:
                 log.warning("could not persist the adopted settings: %s", e)
 
+    def _pause_stop_limit_s(self, m) -> float:
+        """How long the followed client may sit paused before the lights go out.
+
+        Music gets its own, much shorter limit. A film is paused to be come back
+        to, so minutes are right; a phone that stops a song usually just leaves
+        the session open in the background, and waiting for that to disappear
+        means the lights stay on long after the music has ended."""
+        if m is not None and getattr(m, "media_type", "video") == "music":
+            return float(self.cfg.get("sync.music_pause_stop_s", 15.0) or 0.0)
+        return float(self.cfg.get("sync.pause_stop_min", 0.0) or 0.0) * 60.0
+
     def _apply_settings(self, p: dict) -> None:
         changed = False
         if "enabled" in p:
@@ -975,6 +987,9 @@ class Daemon:
             changed = True
         if "pause_stop_min" in p:
             self.cfg.set("sync.pause_stop_min", max(0.0, round(float(p["pause_stop_min"]), 2)))
+            changed = True
+        if "music_pause_stop_s" in p:
+            self.cfg.set("sync.music_pause_stop_s", max(0.0, round(float(p["music_pause_stop_s"]), 1)))
             changed = True
         if "lights_off_delay_s" in p:
             self.cfg.set("sync.lights_off_delay_s", max(0.0, round(float(p["lights_off_delay_s"]), 2)))

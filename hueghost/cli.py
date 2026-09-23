@@ -14,7 +14,7 @@ import urllib.request
 
 from . import __author__, __version__
 from .config import Config, INTENSITIES, MODES, app_data_dir, log_path, resolve_config_path
-from .jellyfin import JellyfinClient, JellyfinError, session_label
+from .jellyfin import JellyfinClient, JellyfinError, label_sessions, session_label
 from .winutil import (autostart_installed, find_mpv, hue_sync_info, install_autostart,
                       list_displays, tray_command, uninstall_autostart)
 
@@ -355,16 +355,31 @@ def cmd_setup(args) -> int:
 
     # 2. followed client
     print("\nWhich client should the ghost follow? Start playing something on it to see it here.")
-    seen = [s for s in sessions if s.get("DeviceId")]
-    for i, s in enumerate(seen, 1):
+    # one entry per app per device, however many sessions the server is holding
+    by_id: dict[str, dict] = {}
+    for s in sessions:
+        if not s.get("DeviceId"):
+            continue
+        prev = by_id.get(s["DeviceId"])
+        if prev is None or (s.get("NowPlayingItem") and not prev.get("NowPlayingItem")):
+            by_id[s["DeviceId"]] = s
+    seen = list(by_id.values())
+    rows = [{"device_id": s.get("DeviceId"), "device_name": s.get("DeviceName"),
+             "client": s.get("Client"), "user": s.get("UserName")} for s in seen]
+    label_sessions(rows)
+    for i, (s, r) in enumerate(zip(seen, rows), 1):
         np = s.get("NowPlayingItem")
-        print("  %d) %s%s" % (i, session_label(s), ("  playing '%s'" % np.get("Name")) if np else ""))
+        print("  %d) %s%s" % (i, r["label"], ("  playing '%s'" % np.get("Name")) if np else "  (idle)"))
     print("  0) type a device-name substring instead")
     choice = _ask("Pick", "0" if not seen else "1")
     if choice.isdigit() and 0 < int(choice) <= len(seen):
         s = seen[int(choice) - 1]
+        # the id alone: it is unique per app install, so it picks out this one
+        # app on this one phone. Storing the device *name* as well would follow
+        # every other handset Jellyfin also calls "Android".
         cfg.set("jellyfin.follow.device_id", s.get("DeviceId"))
-        cfg.set("jellyfin.follow.device_name_contains", s.get("DeviceName") or "")
+        cfg.set("jellyfin.follow.device_name_contains", "")
+        cfg.set("jellyfin.follow.client", s.get("Client") or "")
     else:
         cfg.set("jellyfin.follow.device_id", "")
         cfg.set("jellyfin.follow.device_name_contains",

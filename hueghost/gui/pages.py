@@ -22,12 +22,18 @@ from .widgets import (GLYPHS, AudioTriToggle, Banner, Card, Divider, DriftBar, P
 
 INTENSITY_OPTIONS = [(i, i.capitalize()) for i in INTENSITIES]
 MODE_OPTIONS = [(m, m.capitalize()) for m in MODES]
-MODE_HINT = ("Video reacts to the picture, Music to the sound, Games to fast movement. "
-             "Hue Ghost sets this on every sync it starts, so it no longer depends on what "
-             "the Hue Sync app was last left on.")
-AUDIO_HINT = ("The same switch as Hue Sync's own \u201cuse audio for light effects\u201d: the lights "
-              "react to the soundtrack as well as the picture. It is the one setting the app only "
-              "reads at start-up, so changing it restarts Hue Sync (~3 s) the next time sync starts.")
+MODE_HINT = ("What Hue Sync reacts to: Video the picture, Music the sound, Games fast movement. "
+             "Hue Ghost sets this on every sync it starts, so it never depends on what the Hue Sync "
+             "app was last left on - and changing it here applies instantly, mid-film, without "
+             "interrupting the lights. Change it in the Hue Sync app instead and Hue Ghost follows "
+             "you, so the two can never disagree.")
+AUDIO_HINT = ("The same switch as Hue Sync's own 'use audio for light effects': in Video and Games "
+              "mode the lights react to the soundtrack as well as the picture. This is the one setting "
+              "the Hue Sync app reads only when it starts, so changing it has to restart the app "
+              "(~3 s) - the only thing here that interrupts the lights. Leave it on 'App's own' and "
+              "Hue Ghost never touches it.")
+
+
 KEEP_AWAKE_OPTIONS = [("off", "Off"), ("playing", "While the ghost plays"), ("always", "Always")]
 KEEP_AWAKE_COLORS = {"off": theme.FAINT, "playing": theme.ACCENT, "always": theme.WARN}
 
@@ -38,6 +44,25 @@ class Context:
     api: object
     toast: Callable[[str, str], None]      # (message, kind: ok|warn|bad)
     goto: Callable[[str], None]            # navigate to a page key
+
+
+def _ago(iso: str | None) -> str:
+    """'3 min ago' for a Jellyfin timestamp - which entry is the live one."""
+    if not iso:
+        return ""
+    import datetime
+    try:
+        t = datetime.datetime.fromisoformat(str(iso).replace("Z", "+00:00"))
+    except ValueError:
+        return ""
+    secs = (datetime.datetime.now(datetime.timezone.utc) - t).total_seconds()
+    if secs < 90:
+        return "just now"
+    for size, unit in ((3600.0, "min"), (86400.0, "h"), (float("inf"), "days")):
+        if secs < size:
+            n = secs / (60.0 if unit == "min" else 3600.0 if unit == "h" else 86400.0)
+            return "%.0f %s ago" % (n, unit)
+    return ""
 
 
 def _fmt_time(s: float | None) -> str:
@@ -97,7 +122,7 @@ class Page(QWidget):
 
 # ============================================================================================
 class HomePage(Page):
-    key, title, subtitle = "home", "Home", "What Hue Ghost is doing right now"
+    key, title, subtitle = "home", "Home", "What Hue Ghost is doing right now, and the controls you reach for mid-film"
 
     def __init__(self, ctx: Context):
         super().__init__(ctx)
@@ -397,7 +422,7 @@ class HomePage(Page):
 
 # ============================================================================================
 class SyncPage(Page):
-    key, title, subtitle = "sync", "Sync", "How tightly the ghost follows the TV, and when the lights go off"
+    key, title, subtitle = "sync", "Sync", "How closely the ghost tracks the real player, and when the lights give up and go off"
 
     def __init__(self, ctx: Context):
         super().__init__(ctx)
@@ -457,8 +482,13 @@ class SyncPage(Page):
             ("sync.idle_stop_delay_s", "Close the ghost after", 2.0, 120.0, 1.0, " s",
              "The ghost player stays on standby this long, so a TV that comes straight back (next episode, "
              "a seek that restarts playback) does not need a fresh launch."),
-            ("sync.pause_stop_min", "Lights off when paused for", 0.0, 240.0, 1.0, " min",
-             "0 = never. Lights stop when the TV has been paused this long and return when it plays again."),
+            ("sync.pause_stop_min", "Films: lights off when paused for", 0.0, 240.0, 1.0, " min",
+             "A film is usually paused to come back to, so this waits minutes. 0 = never. The lights "
+             "return the moment it plays again."),
+            ("sync.music_pause_stop_s", "Music: lights off when paused for", 0.0, 600.0, 5.0, " s",
+             "Music needs a much shorter limit than a film. A phone that stops a track often leaves the "
+             "session open in the background instead of closing it, so without this the lights would stay "
+             "on long after the music ended. 0 = never."),
         ]
         for key, name, lo, hi, step, suffix, tip in stop_specs:
             sp = self._spin(lo, hi, step, suffix)
@@ -596,16 +626,26 @@ class PlayerRow(QWidget):
         name = (player.get("name") or player.get("exe") or player.get("device_name_contains")
                 or player.get("device_id") or "?")
         if self.is_pc:
-            how = "on this PC"
+            how = "on this PC, " + (player.get("exe") or "?")
             glyph = "display"
         else:
-            how = "device" if player.get("device_id") else "name match"
+            how = "this exact device" if player.get("device_id") else (
+                "any device matching '%s'" % player.get("device_name_contains", ""))
             glyph = "tv"
+            if player.get("client"):
+                how += ", app " + player["client"]
             if player.get("user"):
                 how += ", user " + player["user"]
         lay.addWidget(icon(glyph, 14, theme.MUTED))
-        self.lbl = QLabel("%s   <span style='color:%s'>%s</span>" % (name, theme.MUTED, how))
+        # the name is yours to set: Jellyfin calls most phones "Android", which
+        # is no help at all when two of them are on the same network
+        self.name = QLineEdit(name)
+        self.name.setToolTip("Call it whatever you like - this name is only for you.")
+        self.name.setMinimumWidth(150)
+        lay.addWidget(self.name, 1)
+        self.lbl = QLabel("<span style='color:%s'>%s</span>" % (theme.MUTED, how))
         self.lbl.setTextFormat(Qt.RichText)
+        self.lbl.setToolTip("How Hue Ghost recognises it")
         lay.addWidget(self.lbl, 1)
 
         self.mode = self.detect = None
@@ -661,6 +701,7 @@ class PlayerRow(QWidget):
     def value(self) -> dict:
         p = dict(self.player)
         p["enabled"] = self.enabled.isChecked()
+        p["name"] = self.name.text().strip() or p.get("name") or ""
         p["area_id"] = self.area.currentData() or ""
         p["area_name"] = self.area.currentText() if p["area_id"] else ""
         if self.mode is not None:
@@ -676,7 +717,24 @@ class PlayerPage(Page):
 
     def __init__(self, ctx: Context):
         super().__init__(ctx)
-        c = Card("Jellyfin server")
+        intro = Card("How this works", "worth one read before you add anything")
+        intro.add(label(
+            "The Philips Hue Sync app can only light up what is on a screen attached to this PC. That "
+            "is fine for a game or a browser here, but not for a film playing on a TV or a phone "
+            "somewhere else in the house.", "hint", wrap=True))
+        intro.add(label(
+            "So Hue Ghost plays the same thing a second time, on this PC, on a display you never look "
+            "at - the 'ghost' - and keeps it in step with the real player to within a fraction of a "
+            "second. Hue Sync captures the ghost, you watch the TV, and the lights match. Music works "
+            "the same way, played into an audio output you cannot hear.", "hint", wrap=True))
+        intro.add(label(
+            "Below you say what to follow. A Jellyfin player on the network needs a ghost; an app on "
+            "this PC does not, because Hue Sync can already see it. Each source can drive its own "
+            "entertainment area, and only one syncs at a time - of everything playing, the one "
+            "highest in the list wins.", "hint", wrap=True))
+        self.lay.addWidget(intro)
+
+        c = Card("Jellyfin server", "where Hue Ghost looks to see what is playing on the network")
         self.url = QLineEdit()
         self.url.setPlaceholderText("http://192.168.0.10:8096")
         self.key = QLineEdit()
@@ -702,27 +760,45 @@ class PlayerPage(Page):
         self.rows_box.setSpacing(8)
         c2.body.addLayout(self.rows_box)
         self.rows: list[PlayerRow] = []
-        self.empty = label("No players yet - add one below.", "muted")
+        self.empty = label("Nothing here yet. Add a Jellyfin player or an app on this PC below - "
+                           "without at least one, Hue Ghost has nothing to follow.", "muted", wrap=True)
         c2.add(self.empty)
         self.lay.addWidget(c2)
 
-        c3 = Card("Add a player")
-        c3.add(label("Play something on the device so it shows up here, select it and add it. Matching by exact "
-                     "device is most reliable; matching by name survives app reinstalls.", "hint", wrap=True))
+        c3 = Card("Add a player", "anything signed in to Jellyfin - a TV, a phone, a tablet")
+        c3.add(label("Open the app on the device and play something, then hit Refresh and pick it here. "
+                     "Each entry is one app on one device. Phones report a generic device name (most arrive "
+                     "as plain 'Android'), so the app and the signed-in user are shown too, and a piece of "
+                     "the device id when even those are identical. Jellyfin issues a separate id per app, so "
+                     "one phone can appear more than once - add each entry and give them different settings, "
+                     "for instance its music app lighting one room and its video app another.",
+                     "hint", wrap=True))
         self.list = QListWidget()
         self.list.setMinimumHeight(150)
         c3.add(self.list)
         self.by_name = QLineEdit()
         self.by_name.setPlaceholderText("device name contains... e.g. Apple TV")
-        c3.add_row(button("Add selected player", None, self._add_selected, icon_name="add"), label("or", "hint"),
+        c3.add_row(button("Refresh list", None, self._test, icon_name="refresh"),
+                   button("Add selected player", "primary", self._add_selected, icon_name="add"),
+                   label("or", "hint"),
                    self.by_name, button("Add by name", None, self._add_by_name))
+        c3.add(label("Add by name follows any device whose name or app contains that text. Useful for a TV that "
+                     "gets a new id when its app is reinstalled - but it will follow every device that matches, "
+                     "so it is the wrong tool for phones.", "hint", wrap=True))
         self.lay.addWidget(c3)
 
         c4 = Card("Add an app on this PC", "a browser, a player, a game")
-        c4.add(label("Anything playing on this PC's own screen is already something Hue Sync can capture - "
-                     "no ghost needed. Pick the app (start it so it shows up, or type its .exe for a game you "
-                     "have not launched yet), say what Hue Sync should react to, and bind it to an area.",
+        c4.add(label("Anything playing on this PC's own screen is already something Hue Sync can capture, so "
+                     "there is no ghost to run and nothing to keep in step - Hue Ghost only has to notice that "
+                     "the app is playing and turn the lights on. Start the app so it appears below (or type "
+                     "its .exe for a game you have not launched yet), then say what Hue Sync should react to "
+                     "and which lights it drives. Apps in front or making sound are listed first.",
                      "hint", wrap=True))
+        self.proc_filter = QLineEdit()
+        self.proc_filter.setPlaceholderText("search the running apps...")
+        self.proc_filter.setClearButtonEnabled(True)
+        self.proc_filter.textChanged.connect(self._filter_processes)
+        c4.add(self.proc_filter)
         self.proc_list = QListWidget()
         self.proc_list.setMinimumHeight(150)
         c4.add(self.proc_list)
@@ -788,10 +864,12 @@ class PlayerPage(Page):
                 info.get("ServerName"), info.get("Version"), len(res["sessions"])))
             self.list.clear()
             for s in res["sessions"]:
-                txt = "%s  -  %s%s" % (s["device_name"] or "?", s["client"] or "?",
-                                       ("  (%s)" % s["user"]) if s.get("user") else "")
+                txt = s.get("label") or (s["device_name"] or "?")
                 if s.get("now_playing"):
-                    txt += "\n    playing: " + s["now_playing"]
+                    txt += "\n    playing now: " + s["now_playing"]
+                else:
+                    seen = _ago(s.get("last_activity"))
+                    txt += "\n    idle%s" % ((" - last seen " + seen) if seen else "")
                 it = QListWidgetItem(txt)
                 it.setData(Qt.UserRole, s)
                 self.list.addItem(it)
@@ -808,10 +886,15 @@ class PlayerPage(Page):
             return
         s = items[0].data(Qt.UserRole)
         if any(r.player.get("device_id") == s["device_id"] for r in self.rows if s.get("device_id")):
-            self.ctx.toast("That player is already in the list", "warn")
+            self.ctx.toast("That app on that device is already in the list", "warn")
             return
+        # The exact device id and nothing else. Jellyfin issues one per app
+        # install, so it is both unique and per-app - whereas also storing the
+        # device *name* would quietly follow every other phone calling itself
+        # "Android", which is how two handsets end up fighting over the lights.
         self._append_row({"source": "jellyfin", "device_id": s.get("device_id") or "",
-                          "device_name_contains": s.get("device_name") or "", "name": s.get("device_name") or "",
+                          "device_name_contains": "", "client": s.get("client") or "",
+                          "name": s.get("label") or s.get("device_name") or "",
                           "user": "", "area_id": "", "area_name": ""})
 
     def _add_by_name(self) -> None:
@@ -837,12 +920,17 @@ class PlayerPage(Page):
                     why.append("in front")
                 if p.get("playing_audio"):
                     why.append("playing sound")
-                txt = p["exe"] + (("   -   " + ", ".join(why)) if why else "")
+                # the name a person knows it by, with the process kept in sight
+                # because that is what Hue Ghost actually matches on
+                txt = "%s   -   %s" % (p.get("name") or p["exe"], p["exe"])
+                if why:
+                    txt += "   (" + ", ".join(why) + ")"
                 if p.get("title"):
                     txt += "\n    " + p["title"][:80]
                 it = QListWidgetItem(txt)
                 it.setData(Qt.UserRole, p)
                 self.proc_list.addItem(it)
+            self._filter_processes(self.proc_filter.text())
 
         run_async(lambda: self.ctx.api.handle("GET", "/api/processes", {}, {}), done,
                   lambda e: self.ctx.toast("Could not list the running apps: %s" % e, "bad"))
@@ -859,12 +947,20 @@ class PlayerPage(Page):
         self._append_row({"source": "pc", "exe": exe, "name": name or exe, "mode": "video",
                           "detect": "audio", "area_id": "", "area_name": ""})
 
+    def _filter_processes(self, text: str) -> None:
+        """129 running processes is not a list anyone reads; a name is."""
+        needle = (text or "").strip().lower()
+        for i in range(self.proc_list.count()):
+            it = self.proc_list.item(i)
+            it.setHidden(bool(needle) and needle not in it.text().lower())
+
     def _add_process(self) -> None:
         items = self.proc_list.selectedItems()
         if not items or not isinstance(items[0].data(Qt.UserRole), dict):
             self.ctx.toast("Select an app in the list first", "warn")
             return
-        self._add_exe(items[0].data(Qt.UserRole)["exe"])
+        p = items[0].data(Qt.UserRole)
+        self._add_exe(p["exe"], p.get("name") or "")
 
     def _add_by_exe(self) -> None:
         self._add_exe(self.by_exe.text())
@@ -887,7 +983,7 @@ class PlayerPage(Page):
 
 # ============================================================================================
 class DisplayPage(Page):
-    key, title, subtitle = "display", "Display", "Where the ghost plays (what Hue Sync captures)"
+    key, title, subtitle = "display", "Display", "Which screen the ghost plays on - the one Hue Sync must be set to capture"
 
     def __init__(self, ctx: Context):
         super().__init__(ctx)
@@ -1035,7 +1131,7 @@ class DisplayPage(Page):
 
 # ============================================================================================
 class HueSyncPage(Page):
-    key, title, subtitle = "huesync", "Hue Sync", "The official Hue Sync app turns the ghost into light"
+    key, title, subtitle = "huesync", "Hue Sync", "The official Philips app drives the bulbs - this is how Hue Ghost talks to it"
 
     def __init__(self, ctx: Context):
         super().__init__(ctx)

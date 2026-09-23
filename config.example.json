@@ -1,16 +1,63 @@
 {
   "enabled": true,
   "log_level": "INFO",
+
   "jellyfin": {
     "url": "http://192.168.0.10:8096",
     "api_key": "PASTE-JELLYFIN-API-KEY",
-    "follow": {
-      "device_id": "",
-      "device_name_contains": "Apple TV",
-      "user": ""
-    },
     "poll_interval_s": 0.5
   },
+
+  "sources": [
+    {
+      "name": "Living room TV",
+      "enabled": true,
+      "source": "jellyfin",
+      "device_id": "tvOS_C51C221C-EXAMPLE",
+      "client": "Swiftfin tvOS",
+      "kinds": ["video", "music"],
+      "area_id": "",
+      "area_name": ""
+    },
+    {
+      "name": "S23 music",
+      "enabled": true,
+      "source": "jellyfin",
+      "device_id": "s4ZdiK0Ufso7lc-EXAMPLE",
+      "client": "CAMusic",
+      "kinds": ["music"],
+      "area_id": "",
+      "area_name": ""
+    },
+    {
+      "name": "S23 films",
+      "enabled": true,
+      "source": "jellyfin",
+      "device_id": "fa9d65da834b107f-EXAMPLE",
+      "client": "Jellyfin for Android",
+      "kinds": ["video"],
+      "area_id": "",
+      "area_name": ""
+    },
+    {
+      "name": "Google Chrome",
+      "enabled": true,
+      "source": "pc",
+      "exe": "chrome.exe",
+      "mode": "video",
+      "detect": "audio",
+      "area_id": "",
+      "area_name": ""
+    }
+  ],
+
+  "pc": {
+    "poll_interval_s": 1.0,
+    "audio_peak": 0.002,
+    "audio_hold_s": 3.0,
+    "start_confirm_s": 1.0
+  },
+
   "sync": {
     "offset_s": 1.5,
     "seek_threshold_s": 1.0,
@@ -21,8 +68,10 @@
     "jitter_tolerance_s": 1.5,
     "lights_off_delay_s": 1.5,
     "idle_stop_delay_s": 10.0,
-    "pause_stop_min": 0
+    "pause_stop_min": 0,
+    "music_pause_stop_s": 15.0
   },
+
   "ghost": {
     "mpv_path": "mpv",
     "fullscreen": true,
@@ -32,10 +81,13 @@
     "ipc": "",
     "hwdec": "auto",
     "keep_awake": "playing",
+    "audio_device": "",
+    "music_volume": 100,
     "relaunch_cooldown_s": 5.0,
     "relaunch_max_per_5min": 6,
     "extra_args": []
   },
+
   "engine": {
     "type": "huesync",
     "huesync": {
@@ -45,11 +97,14 @@
       "intensity": "high",
       "use_audio": null,
       "manage_area": true,
+      "manage_monitor": true,
+      "manage_audio_device": true,
       "required": false,
       "launch_exe": ""
     },
     "httphook": { "url": "" }
   },
+
   "control": {
     "bind": "127.0.0.1",
     "port": 8787,

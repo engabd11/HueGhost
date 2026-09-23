@@ -60,6 +60,10 @@ DEFAULTS: dict[str, Any] = {
         "idle_stop_delay_s": 10.0,   # ... and the ghost mpv closes after this long
         "pause_stop_min": 0.0,       # stop syncing after the client is paused this
                                      # many minutes (0 = never); resumes on play
+        # Music needs its own, far shorter limit. A phone that stops a track
+        # usually leaves the session open in the background rather than closing
+        # it, so waiting for it to disappear means the lights never go out.
+        "music_pause_stop_s": 15.0,  # ... but only this many SECONDS for music (0 = never)
         "stall_estimates": {},       # learned client buffering after seek/start/resume (auto-saved)
     },
     "ghost": {
@@ -122,7 +126,9 @@ def _binding_selector(b: dict) -> str:
     """What identifies the thing: an exe for a PC app, a device for Jellyfin."""
     if b.get("source") == "pc":
         return str(b.get("exe", "") or "")
-    return str(b.get("device_id", "") or b.get("device_name_contains", "") or "")
+    dev = str(b.get("device_id", "") or b.get("device_name_contains", "") or "")
+    app = str(b.get("client", "") or "")
+    return ("%s %s" % (dev, app)).strip() if app else dev
 
 
 def _binding(b: dict) -> dict:
@@ -146,6 +152,11 @@ def _binding(b: dict) -> dict:
         "name": name,
         "device_id": str(b.get("device_id", "") or ""),
         "device_name_contains": str(b.get("device_name_contains", "") or ""),
+        # the Jellyfin app, e.g. "CAMusic" or "Jellyfin for Android". Phones
+        # report a generic DeviceName ("Android"), so the app is often the only
+        # thing that tells one entry from another - and it is what lets the same
+        # phone have one config for music and another for films.
+        "client": str(b.get("client", "") or ""),
         "user": str(b.get("user", "") or ""),
         "kinds": kinds,
         "exe": str(b.get("exe", "") or "").lower(),
@@ -333,12 +344,14 @@ class Config:
         f = self.get("jellyfin.follow", {}) or {}
         if f.get("device_id") or f.get("device_name_contains"):
             out.append({"device_id": f.get("device_id", "") or "", "device_name_contains": f.get("device_name_contains", "") or "",
+                        "client": f.get("client", "") or "",
                         "user": f.get("user", "") or "", "area_id": self.get("jellyfin.follow_area_id", "") or "",
                         "area_name": self.get("jellyfin.follow_area_name", "") or ""})
         for p in self.get("jellyfin.players", []) or []:
             if not isinstance(p, dict) or not (p.get("device_id") or p.get("device_name_contains")):
                 continue
             out.append({"device_id": p.get("device_id", "") or "", "device_name_contains": p.get("device_name_contains", "") or "",
+                        "client": p.get("client", "") or "",
                         "user": p.get("user", "") or "", "area_id": p.get("area_id", "") or "",
                         "area_name": p.get("area_name", "") or ""})
         return out
@@ -348,10 +361,11 @@ class Config:
         players = [p for p in players if p.get("device_id") or p.get("device_name_contains")]
         first = players[0] if players else {"device_id": "", "device_name_contains": "", "user": "", "area_id": "", "area_name": ""}
         self.set("jellyfin.follow", {"device_id": first.get("device_id", ""), "device_name_contains": first.get("device_name_contains", ""),
-                                     "user": first.get("user", "")})
+                                     "client": first.get("client", ""), "user": first.get("user", "")})
         self.set("jellyfin.follow_area_id", first.get("area_id", "") or "")
         self.set("jellyfin.follow_area_name", first.get("area_name", "") or "")
         self.set("jellyfin.players", [{"device_id": p.get("device_id", ""), "device_name_contains": p.get("device_name_contains", ""),
+                                       "client": p.get("client", ""),
                                        "user": p.get("user", ""), "area_id": p.get("area_id", "") or "",
                                        "area_name": p.get("area_name", "") or ""} for p in players[1:]])
 
