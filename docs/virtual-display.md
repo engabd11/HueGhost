@@ -63,6 +63,24 @@ displays awake*):
 - `always` - hold them awake all the time (a dedicated media PC).
 - `off` - do nothing.
 
+### Screen care (OLED)
+
+Holding every display awake for a film leaves your real monitor on one static
+picture for hours. Display page > *Screen care* (both apply live, both only
+while a video ghost plays - music and apps on this PC are left alone):
+
+- `ghost.pixel_shift_min` (default `3`, `0` = off) - every N minutes the
+  ghost's picture moves round a 9-point orbit via mpv's `video-pan-x/y`
+  (0.3 % of the picture per step: ~6 px at 1080p). The orbit carries on
+  across ghosts, so a night of episodes wears every position equally.
+- `ghost.blackout_idle_min` (default `0` = off) - once `GetLastInputInfo` says
+  nobody has touched the mouse or keyboard for N minutes, every display except
+  the ghost display (and the one Hue Sync reports capturing) is covered by a
+  borderless, always-on-top, focus-never mpv window playing solid black. Any
+  input closes them within a tick. If the ghost display is not set (or not
+  plugged in) nothing is covered: there would be no telling which screen the
+  lights come from.
+
 Two things Hue Ghost cannot do: wake a PC that has gone to **sleep** (set the
 sleep timeout to *Never* on a PC that should light the room unattended), and
 capture a **locked** desktop (the lock screen is a secure desktop no app can

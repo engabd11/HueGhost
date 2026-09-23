@@ -286,3 +286,13 @@ def test_a_paused_film_is_not_held_to_the_music_limit(world):
     world.step(1.0, playing(101.0, world.t, paused=True))
     world.step(20.0)
     assert world.engine_on and world.d.state != STANDBY
+
+
+def test_a_new_ghost_does_not_wake_displays_screen_care_has_blacked_out(world):
+    """The wake-up jiggle is input: at every new episode of a binge it would
+    take the black away. Blacked-out displays are on anyway - held awake."""
+    world.d.care.covers = {r"\\.\DISPLAY1": object()}
+    world.step(1.0, playing(100.0, 0.5))
+    assert world.ghost is not None and world.engine_on
+    assert ("wake",) not in world.power.calls
+    world.d.care.covers = {}

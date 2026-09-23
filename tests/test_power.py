@@ -11,10 +11,21 @@ def test_helpers_are_safe_everywhere():
         assert winutil.keep_awake(False) is True
         assert isinstance(winutil.wake_display(), bool)
         assert winutil.desktop_locked() in (True, False)
+        idle = winutil.idle_seconds()
+        assert idle is None or idle >= 0.0
+        import subprocess
+        p = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"])
+        try:
+            assert winutil.kill_on_exit(p) is True
+        finally:
+            p.kill()
+            p.wait()
     else:
         assert winutil.keep_awake(True) is False
         assert winutil.wake_display() is False
         assert winutil.desktop_locked() is None
+        assert winutil.idle_seconds() is None
+        assert winutil.kill_on_exit(object()) is False
 
 
 def test_audio_and_display_enumeration_survive_a_pc_with_no_sound_card():

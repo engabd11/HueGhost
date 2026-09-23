@@ -26,10 +26,13 @@ excludes = [
     "tkinter", "unittest", "pydoc", "doctest",
 ]
 
+# mpv input bindings: the ghost's, and screen care's black cover
+DATAS = [(os.path.join(ROOT, "hueghost", name), "hueghost") for name in ("ghost_input.conf", "cover_input.conf")]
+
 a_gui = Analysis([ENTRY], pathex=[ROOT], hiddenimports=hidden, excludes=excludes,
-                 datas=[(os.path.join(ROOT, "hueghost", "ghost_input.conf"), "hueghost")], noarchive=False)
+                 datas=DATAS, noarchive=False)
 a_cli = Analysis([ENTRY], pathex=[ROOT], hiddenimports=hidden, excludes=excludes,
-                 datas=[(os.path.join(ROOT, "hueghost", "ghost_input.conf"), "hueghost")], noarchive=False)
+                 datas=DATAS, noarchive=False)
 MERGE((a_gui, "HueGhost", "HueGhost"), (a_cli, "hue-ghost", "hue-ghost"))
 
 pyz_gui = PYZ(a_gui.pure)

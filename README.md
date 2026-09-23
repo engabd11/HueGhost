@@ -215,6 +215,20 @@ stops; the PC itself must not be set to sleep (Hue Ghost cannot wake a
 sleeping PC). A locked PC cannot be captured either: Hue Ghost says so on the
 Home page.
 
+**OLED screens** (Display page > *Screen care*): holding the displays awake
+for a whole film means hours of one unchanging picture - the desktop on the
+screens nobody is looking at, the frame the ghost is paused on - and an OLED
+burns that in. Two remedies, both live, both only while the ghost plays:
+
+- *Shift the ghost picture every* N minutes (default **3**, 0 = off) moves the
+  ghost's picture a few pixels round a slow orbit. Invisible, and the lights
+  cannot tell - Hue Sync averages much larger areas of the screen.
+- *Black out the other displays after* N minutes (default **off**) covers
+  every display Hue Sync is *not* capturing in black once nobody has touched
+  the mouse or keyboard for that long - a black OLED pixel is switched off.
+  Any input brings them straight back. The ghost display, and whichever one
+  Hue Sync reports capturing, is never covered, so the lights carry on.
+
 ## Home Assistant
 
 **Home Assistant** page: switch *Allow control from the LAN* on, generate a
@@ -293,6 +307,10 @@ driven over its local "Public Control" WebSocket, documented in
   to sleep. Display page > *Keep displays awake* = *While the ghost plays*
   (default) wakes them when a movie starts. Make sure the PC's *sleep* timeout
   is off; the *display* timeout can stay.
+- **OLED burn-in while a film plays?** Display page > *Screen care*: set
+  *Black out the other displays after* to a few minutes. The desktop you are
+  not looking at goes black, the ghost keeps the lights going, and the mouse
+  brings it all back.
 - **Accuracy**: about +/-0.1-0.2 s in steady state; a seek on the TV is
   followed within ~1 s plus the TV's own buffering. A Sync Box is ~0.1 s.
   Bias/mood lighting: indistinguishable; frame-critical flashes: close.
@@ -334,6 +352,14 @@ automation.
 
 ## Changelog
 
+- **2.7.0** - **Screen care for OLEDs.** Keeping the displays awake so Hue
+  Sync can capture the ghost also meant hours of one static desktop on your
+  real monitor. The ghost's picture now shifts a few pixels every 3 minutes
+  (invisible, and the lights cannot tell), and *Black out the other displays
+  after* N idle minutes covers every display Hue Sync does not capture in black
+  until the mouse or keyboard is touched. Both are on the Display page, apply
+  live, show under `system.screen_care` in `/status`, and can be set over
+  `/set` (`pixel_shift_min`, `blackout_idle_min`).
 - **2.6.0** - **Phones stop being a guessing game.** Jellyfin calls most of
   them "Android", so two handsets looked identical in the list and one could
   quietly answer for the other. Entries now show the app and the user (and a
@@ -432,6 +458,7 @@ Layout: `hueghost/gui/` (PySide6 app), `daemon.py` (orchestration),
 `sources/` (where "something is playing" comes from: Jellyfin, this PC),
 `watcher.py` (position model), `pcwatch.py` (PC playback detection),
 `lockstep.py` (pure policy), `ghost.py` (mpv + IPC readback),
+`screencare.py` (OLED pixel shift and black-out),
 `engines/huesync.py` (Hue Sync Public Control), `control.py` + `webapi.py`
 (HTTP API), `cli.py`, `installer/` (PyInstaller spec + Inno Setup).
 

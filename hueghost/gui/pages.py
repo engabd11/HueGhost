@@ -1012,6 +1012,23 @@ class DisplayPage(Page):
                      "hint", wrap=True))
         self.lay.addWidget(c1)
 
+        c6 = Card("Screen care", "for OLEDs: no picture held still all night by the above")
+        c6.add(label("Displays held awake for a whole film show one unchanging picture: the desktop on the "
+                     "screens nobody is looking at, the frame the ghost is paused on. On an OLED that burns in. "
+                     "Both of these only run while the ghost plays; an app playing on this PC is left alone.",
+                     "hint", wrap=True))
+        self.pixel_shift = self._minutes_spin(60)
+        c6.form("Shift the ghost picture every", self.pixel_shift,
+                hint="Moves the ghost's picture a few pixels round a slow orbit. Invisible, and the lights "
+                     "cannot tell - Hue Sync averages much larger areas. Worth it when the ghost display is a "
+                     "real panel; harmless on a virtual one.")
+        self.blackout = self._minutes_spin(240)
+        c6.form("Black out the other displays after", self.blackout,
+                hint="Once nobody has touched the mouse or keyboard for this long, every display Hue Sync is "
+                     "not capturing turns black (a black OLED pixel is off). Any input brings them straight "
+                     "back. The ghost display is never covered, so the lights carry on.")
+        self.lay.addWidget(c6)
+
         c5 = Card("Ghost audio output", "for music: the one thing the ghost has to be heard on")
         c5.add(label("Music has no picture to copy, so the ghost plays the track's sound instead and Hue Sync "
                      "runs in music mode against it. That only works if you cannot hear it: pick an output with "
@@ -1045,8 +1062,19 @@ class DisplayPage(Page):
         self.footer(button("Save display settings", "primary", self._save, icon_name="check"))
         self.lay.addStretch(1)
 
+    @staticmethod
+    def _minutes_spin(hi: int) -> QSpinBox:
+        sp = QSpinBox()
+        sp.setRange(0, hi)
+        sp.setSuffix(" min")
+        sp.setSpecialValueText("Off")          # 0
+        sp.setFixedWidth(110)
+        return sp
+
     def on_show(self) -> None:
         cfg = self.ctx.daemon.cfg
+        self.pixel_shift.setValue(int(round(float(cfg.get("ghost.pixel_shift_min") or 0))))
+        self.blackout.setValue(int(round(float(cfg.get("ghost.blackout_idle_min") or 0))))
         self.fullscreen.setChecked(bool(cfg.get("ghost.fullscreen", True)))
         self.geometry.setText(cfg.get("ghost.geometry") or "")
         self.mpv_path.setText("" if (cfg.get("ghost.mpv_path") in (None, "", "mpv")) else cfg.get("ghost.mpv_path"))
@@ -1123,10 +1151,12 @@ class DisplayPage(Page):
         partial = {"ghost": {"fullscreen": self.fullscreen.isChecked(), "geometry": self.geometry.text().strip() or "28%x28%-40-40",
                              "mpv_path": self.mpv_path.text().strip() or "mpv", "hwdec": self.hwdec.currentText(),
                              "keep_awake": self.keep_awake.value() or "playing",
+                             "pixel_shift_min": float(self.pixel_shift.value()),
+                             "blackout_idle_min": float(self.blackout.value()),
                              "audio_device": self.audio_out.currentData() or "",
                              "music_volume": int(self.music_volume.value()),
                              "screen_name": d["name"] if d else "", "screen_index": d["index"] if d else None}}
-        self.save(partial, "Display settings saved (used at the next playback)")
+        self.save(partial, "Display settings saved (screen care applies now, the rest at the next playback)")
 
 
 # ============================================================================================

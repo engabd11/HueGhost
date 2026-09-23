@@ -368,5 +368,11 @@ class GhostPlayer:
                 self.ipc.send("set_property", "pause", False)
                 self.paused = False
 
+    def set_pan(self, x: float, y: float) -> None:
+        """Move the picture by a fraction of its own size (screen care's pixel
+        shift). Applies at once, paused or playing; the position is untouched."""
+        self.ipc.send("set_property", "video-pan-x", x)
+        self.ipc.send("set_property", "video-pan-y", y)
+
     def toggle_fullscreen(self) -> None:
         self.ipc.send("cycle", "fullscreen")

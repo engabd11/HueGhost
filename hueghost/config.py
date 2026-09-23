@@ -76,6 +76,10 @@ DEFAULTS: dict[str, Any] = {
         "hwdec": "auto",
         "keep_awake": "playing",     # off | playing | always: hold the displays awake (Windows idle timeout
                                      # switches the virtual ghost display off -> Hue Sync captures nothing)
+        # Screen care, for OLEDs kept awake by the above (0 = off for both):
+        "pixel_shift_min": 3.0,      # every N minutes move the ghost picture a few pixels
+        "blackout_idle_min": 0.0,    # after N minutes with no mouse/keyboard, cover every display
+                                     # Hue Sync does not capture with black; any input brings them back
         "audio_device": "",          # render endpoint a music ghost plays into, and that Hue Sync
                                      # listens to in music mode: pick one you cannot hear
         "music_volume": 100,

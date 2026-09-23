@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "hue-ghost"
-version = "2.6.0"
+version = "2.7.0"
 description = "Software Hue Sync Box for Jellyfin: sync Philips Hue lights to a TV client by ghosting its playback on a PC running the Hue Sync app"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -37,7 +37,7 @@ Issues = "https://github.com/engabd11/HueGhost/issues"
 packages = ["hueghost", "hueghost.engines", "hueghost.gui", "hueghost.sources"]
 
 [tool.setuptools.package-data]
-hueghost = ["ghost_input.conf"]
+hueghost = ["ghost_input.conf", "cover_input.conf"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
