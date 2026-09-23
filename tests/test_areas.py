@@ -5,7 +5,7 @@ import time
 import pytest
 
 from hueghost.config import Config
-from hueghost.engines import huesync as hs
+from hueghost.engines import AUTO, huesync as hs
 from hueghost.engines.huesync import HueSyncEngine
 from hueghost.watcher import PlayerSet, SessionWatcher
 from tests.mock_huesync import MockHueSync
@@ -66,11 +66,15 @@ class SwitchableEngine(HueSyncEngine):
     """HueSyncEngine with the OS side replaced by a scripted fake app."""
 
     def __init__(self, app: MockHueSync, area="area-office", audio=False,
-                 monitor="MONITOR\\VDD\\0002", audio_device="{0.0.0.0}.{spk}", **kw):
+                 monitor="MONITOR\\VDD\\0002", audio_device="{0.0.0.0}.{spk}",
+                 auto_display=False, auto_audio=False, **kw):
         self.fake_area = area
         self.fake_audio = {"video": audio, "games": audio}
         self.fake_monitor = monitor
         self.fake_audio_device = audio_device
+        # the app's own "choose it for me" flags - what AUTO really asks for
+        self.fake_auto_display = auto_display
+        self.fake_auto_audio = auto_audio
         self.ops: list[str] = []
         self.app = app
         super().__init__("127.0.0.1", app.port, mode="video", intensity="", **kw)
@@ -82,26 +86,32 @@ class SwitchableEngine(HueSyncEngine):
         self.ops.append("write:" + area_id)
         self.fake_area = area_id
 
-    def _read_use_audio(self, mode):
-        return self.fake_audio.get(mode)
+    def _read_app_config(self):
+        return {"with_audio": dict(self.fake_audio), "monitor": self.fake_monitor,
+                "audio_device": self.fake_audio_device,
+                "automatic_display": self.fake_auto_display,
+                "automatic_audio_device": self.fake_auto_audio}
 
-    def _write_use_audio(self, mode, on):
-        self.ops.append("audio:%s=%s" % (mode, "on" if on else "off"))
-        self.fake_audio[mode] = on
-
-    def _read_monitor(self):
-        return self.fake_monitor
-
-    def _write_monitor(self, monitor):
-        self.ops.append("monitor:" + monitor)
-        self.fake_monitor = monitor
-
-    def _read_audio_device(self):
-        return self.fake_audio_device
-
-    def _write_audio_device(self, endpoint):
-        self.ops.append("audiodev:" + endpoint)
-        self.fake_audio_device = endpoint
+    def _write_app_config(self, *, with_audio=None, monitor=None, audio_device=None):
+        """One patch of config.json, recorded as the same ops the old per-setting
+        writes produced - so what a restart costs stays readable in the tests."""
+        for mode in hs.AUDIO_MODES:
+            if with_audio and mode in with_audio:
+                on = with_audio[mode]
+                self.ops.append("audio:%s=%s" % (mode, "on" if on else "off"))
+                self.fake_audio[mode] = on
+        if monitor:
+            self.ops.append("monitor:" + monitor)
+            if monitor == AUTO:
+                self.fake_auto_display = True
+            else:
+                self.fake_monitor, self.fake_auto_display = monitor, False
+        if audio_device:
+            self.ops.append("audiodev:" + audio_device)
+            if audio_device == AUTO:
+                self.fake_auto_audio = True
+            else:
+                self.fake_audio_device, self.fake_auto_audio = audio_device, False
 
     def _kill_app(self):
         self.ops.append("kill")
@@ -164,7 +174,7 @@ def test_every_startup_only_setting_lands_in_one_restart():
                             use_audio=True))
         eng.start()
         assert wait(lambda: eng.state().syncing and eng.state().area_id == "area-living", 8.0)
-        assert eng.ops == ["kill", "write:area-living", "audio:video=on",
+        assert eng.ops == ["kill", "write:area-living", "audio:video=on", "audio:games=on",
                            "monitor:MONITOR\\REAL\\0001", "launch"]
         assert eng.ops.count("kill") == 1 and eng.ops.count("launch") == 1
         assert eng.state().monitor_id == "MONITOR\\REAL\\0001"
@@ -381,7 +391,8 @@ def test_audio_switch_and_area_are_applied_in_one_restart():
         eng.set_use_audio(True)
         eng.start()
         assert wait(lambda: eng.state().syncing and eng.state().area_id == "area-living", 8.0)
-        assert eng.ops == ["kill", "write:area-living", "audio:video=on", "launch"]
+        assert eng.ops == ["kill", "write:area-living", "audio:video=on",
+                           "audio:games=on", "launch"]
         assert eng.state().use_audio is True
     finally:
         eng.close()
@@ -396,7 +407,7 @@ def test_audio_switch_alone_restarts_the_app_once_per_session():
         eng.set_use_audio(False)
         eng.start()
         assert wait(lambda: "audio:video=off" in eng.ops, 8.0)
-        assert eng.ops == ["kill", "audio:video=off", "launch"]
+        assert eng.ops == ["kill", "audio:video=off", "audio:games=off", "launch"]
         assert wait(lambda: eng.state().syncing, 8.0)
         time.sleep(0.8)
         assert eng.ops.count("kill") == 1
@@ -424,7 +435,9 @@ def test_audio_none_means_leave_the_apps_own_setting_alone():
         app.close()
 
 
-def test_music_mode_has_no_audio_switch_to_apply():
+def test_a_music_session_still_pre_applies_the_audio_switch_for_video_and_games():
+    """Music has no audio switch of its own, but the session pays for both other
+    modes up front - which is exactly what buys a free switch out of music later."""
     app = MockHueSync()
     eng = SwitchableEngine(app, area="area-office", audio=False)
     try:
@@ -433,9 +446,109 @@ def test_music_mode_has_no_audio_switch_to_apply():
         eng.set_use_audio(True)
         eng.start()
         assert wait(lambda: eng.state().syncing, 8.0)
-        time.sleep(0.8)
-        assert eng.ops == []
         assert wait(lambda: eng.state().mode == "music", 5.0)
+        time.sleep(0.8)
+        assert eng.ops == ["kill", "audio:video=on", "audio:games=on", "launch"]
+        # music itself has no such switch, so the engine reports none for it
+        assert eng.state().use_audio is None
+        # and the mode the switch *does* apply to now costs nothing to reach
+        eng.set_mode("video")
+        assert wait(lambda: eng.state().mode == "video", 5.0)
+        time.sleep(0.8)
+        assert eng.ops.count("kill") == 1
     finally:
         eng.close()
         app.close()
+
+
+def test_a_mid_session_mode_change_costs_no_restart():
+    """The bug this fixes: mode has a live command, so switching it mid-session
+    must not touch the app's files - and therefore must not restart it."""
+    from hueghost.engines import Plan
+    app = MockHueSync()
+    eng = SwitchableEngine(app, area="area-office", audio=True)
+    try:
+        assert wait(lambda: eng.state().connected)
+        eng.apply_plan(Plan(area_id="area-living", mode="video", use_audio=True,
+                            monitor="MONITOR\\VDD\\0002"))
+        eng.start()
+        assert wait(lambda: eng.state().syncing and eng.state().area_id == "area-living", 8.0)
+        settled = list(eng.ops)
+        assert settled.count("kill") == 1        # the one restart a session is allowed
+        for mode in ("games", "music", "video"):
+            eng.set_mode(mode)
+            assert wait(lambda m=mode: app.mode == m, 5.0)
+        time.sleep(0.8)
+        assert eng.ops == settled                # not one further file write or restart
+        assert app.commands().count("start_sync") == 1   # and the session never dropped
+    finally:
+        eng.close()
+        app.close()
+
+
+def test_auto_display_no_longer_restarts_on_every_mode_change():
+    """AUTO is satisfied by the app's own AutomaticDisplay flag. Compared against
+    a monitor id - which it can never equal - it restarted the app forever."""
+    from hueghost.engines import Plan
+    app = MockHueSync()
+    eng = SwitchableEngine(app, area="area-office", auto_display=False)
+    try:
+        assert wait(lambda: eng.state().connected)
+        eng.apply_plan(Plan(area_id="area-office", mode="video", monitor=AUTO))
+        eng.start()
+        assert wait(lambda: eng.state().syncing, 8.0)
+        assert wait(lambda: "monitor:" + AUTO in eng.ops, 5.0)
+        assert eng.fake_auto_display is True
+        assert eng.ops.count("kill") == 1
+        for mode in ("games", "video", "games"):
+            eng.set_mode(mode)
+            assert wait(lambda m=mode: app.mode == m, 5.0)
+        time.sleep(0.8)
+        assert eng.ops.count("kill") == 1
+    finally:
+        eng.close()
+        app.close()
+
+
+def test_auto_is_free_when_the_app_already_chooses_for_itself():
+    from hueghost.engines import Plan
+    app = MockHueSync()
+    eng = SwitchableEngine(app, area="area-office", auto_display=True, auto_audio=True)
+    try:
+        assert wait(lambda: eng.state().connected)
+        eng.apply_plan(Plan(area_id="area-office", mode="music", monitor=AUTO, audio_device=AUTO))
+        eng.start()
+        assert wait(lambda: eng.state().syncing, 8.0)
+        time.sleep(0.8)
+        assert eng.ops == []                     # nothing to apply: no restart at all
+    finally:
+        eng.close()
+        app.close()
+
+
+def test_the_daemon_persists_what_the_app_changed(tmp_path):
+    """Mirroring, end to end: every surface reads mode and intensity from the
+    config, so persisting the engine's adoption is what makes the whole app
+    follow Hue Sync - window, tray, API and Home Assistant alike."""
+    from hueghost.daemon import Daemon
+    path = str(tmp_path / "c.json")
+    cfg = Config({"jellyfin": {"url": "http://127.0.0.1:1", "api_key": "k"},
+                  "engine": {"type": "none", "huesync": {"mode": "video", "intensity": "high"}},
+                  "control": {"port": 0}}, path)
+    d = Daemon(cfg)
+    try:
+        d._engine_events.put({"mode": "music"})
+        d._engine_events.put({"intensity": "subtle"})
+        d._drain_engine_events()
+        assert d.cfg.get("engine.huesync.mode") == "music"
+        assert d.cfg.get("engine.huesync.intensity") == "subtle"
+        assert d.status()["mode"] == "music" and d.status()["intensity"] == "subtle"
+        assert Config.load(path).get("engine.huesync.mode") == "music"   # survives a restart
+        # "scenes" is a Hue Sync mode hue-ghost has no setting for: the engine
+        # stops fighting it, but the config must stay one hue-ghost can run
+        d._engine_events.put({"mode": "scenes"})
+        d._drain_engine_events()
+        assert d.cfg.get("engine.huesync.mode") == "music"
+        assert "engine.huesync.mode" not in " ".join(d.cfg.problems())
+    finally:
+        d.engine.close()

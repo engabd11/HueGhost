@@ -576,16 +576,7 @@ def _with_audio_span(raw: str, mode: str) -> tuple[int, int] | None:
 def hue_sync_with_audio(mode: str = "video") -> bool | None:
     """"Use audio for light effects" as the Hue Sync app has it for ``mode``
     (video | games), or None when it cannot be read."""
-    p = hue_sync_config_file()
-    if not p or (mode or "").lower() not in AUDIO_MODES or not os.path.exists(p):
-        return None
-    try:
-        with open(p, "r", encoding="utf-8", errors="replace", newline="") as f:
-            raw = f.read()
-    except OSError:
-        return None
-    span = _with_audio_span(raw, mode.lower())
-    return raw[span[0]:span[1]] == "true" if span else None
+    return hue_sync_app_config()["with_audio"].get((mode or "").lower())
 
 
 def hue_sync_write_with_audio(mode: str, enabled: bool) -> bool:
@@ -616,40 +607,77 @@ def _core_bool_span(raw: str, key: str) -> tuple[int, int] | None:
 
 def hue_sync_preferred_monitor() -> str | None:
     """Monitor DeviceID the Hue Sync app captures, or None when unreadable."""
-    p = hue_sync_config_file()
-    if not p or not os.path.exists(p):
-        return None
-    try:
-        with open(p, "r", encoding="utf-8", errors="replace", newline="") as f:
-            raw = f.read()
-    except OSError:
-        return None
-    span = _preferred_monitor_span(raw)
-    return json.loads('"%s"' % raw[span[0]:span[1]]) if span else None
+    return hue_sync_app_config()["monitor"]
 
 
 def hue_sync_audio_device() -> str | None:
     """Render endpoint the Hue Sync app listens to in music mode."""
+    return hue_sync_app_config()["audio_device"]
+
+
+def _read_config_raw() -> str | None:
     p = hue_sync_config_file()
     if not p or not os.path.exists(p):
         return None
     try:
         with open(p, "r", encoding="utf-8", errors="replace", newline="") as f:
-            raw = f.read()
+            return f.read()
     except OSError:
         return None
-    span = _core_str_span(raw, "PreferredAudioDevice")
+
+
+def _str_at(raw: str, span: tuple[int, int] | None) -> str | None:
     return json.loads('"%s"' % raw[span[0]:span[1]]) if span else None
+
+
+def _bool_at(raw: str, span: tuple[int, int] | None) -> bool | None:
+    return raw[span[0]:span[1]] == "true" if span else None
+
+
+def hue_sync_app_config() -> dict:
+    """Everything the engine needs out of ``config.json``, from a single read.
+
+    Five separate reads of a file the app rewrites on exit can tear; one cannot.
+    ``with_audio`` covers *every* audio mode, not just the current one, and the
+    two ``automatic_*`` flags are what make :data:`AUTO` a thing we can check
+    against - without them "let the app choose" never compares equal to the id
+    the app actually chose, and every reconcile looks like a setting to apply."""
+    out: dict = {"with_audio": {m: None for m in AUDIO_MODES}, "monitor": None,
+                 "audio_device": None, "automatic_display": None,
+                 "automatic_audio_device": None}
+    raw = _read_config_raw()
+    if raw is None:
+        return out
+    for m in AUDIO_MODES:
+        out["with_audio"][m] = _bool_at(raw, _with_audio_span(raw, m))
+    out["monitor"] = _str_at(raw, _preferred_monitor_span(raw))
+    out["audio_device"] = _str_at(raw, _core_str_span(raw, "PreferredAudioDevice"))
+    out["automatic_display"] = _bool_at(raw, _core_bool_span(raw, "AutomaticDisplay"))
+    out["automatic_audio_device"] = _bool_at(raw, _core_bool_span(raw, "AutomaticAudioDevice"))
+    return out
 
 
 AUTO = "auto"       # "let the app choose again", as opposed to pinning a value
 
 
-def hue_sync_patch(*, with_audio: tuple[str, bool] | None = None, monitor: str | None = None,
-                   audio_device: str | None = None) -> bool:
+def _audio_pairs(with_audio) -> list[tuple[str, bool]]:
+    """``{"video": True, "games": True}`` or the older ``("video", True)``."""
+    if with_audio is None:
+        return []
+    if isinstance(with_audio, dict):
+        return list(with_audio.items())
+    return [with_audio]
+
+
+def hue_sync_patch(*, with_audio: dict[str, bool] | tuple[str, bool] | None = None,
+                   monitor: str | None = None, audio_device: str | None = None) -> bool:
     """Apply every start-up-only setting the app has in **one** read, one write
     and one digest rewrite - a sync session restarts the app at most once, so it
     must not leave intermediate states on disk in between.
+
+    ``with_audio`` takes a whole ``{mode: on}`` mapping, because the audio switch
+    is per mode: writing every mode the session could enter in this one patch is
+    what lets a later video <-> games switch happen live, with no restart at all.
 
     ``monitor`` / ``audio_device`` take a value to pin, or ``AUTO`` to hand the
     choice back to the app (the flag it reads at start-up, not the value)."""
@@ -657,8 +685,7 @@ def hue_sync_patch(*, with_audio: tuple[str, bool] | None = None, monitor: str |
     def edit(raw: str) -> str | None:
         edits: list[tuple[tuple[int, int], str]] = []
 
-        if with_audio is not None:
-            mode, on = with_audio
+        for mode, on in _audio_pairs(with_audio):
             if mode.lower() not in AUDIO_MODES:
                 raise ValueError("only %s have an audio switch" % " and ".join(AUDIO_MODES))
             span = _with_audio_span(raw, mode.lower())

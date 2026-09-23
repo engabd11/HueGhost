@@ -130,3 +130,105 @@ def test_set_intensity_live_and_brightness(app):
             eng.set_intensity("max")
     finally:
         eng.close()
+
+
+def test_a_user_mode_change_in_the_app_is_adopted_not_fought(app):
+    """Mirroring: once our own wish is live, a mode we did not ask for is the
+    user at the app's own controls. Adopt it, tell the daemon, send nothing back."""
+    seen = []
+    eng = HueSyncEngine("127.0.0.1", app.port, mode="video", intensity="high",
+                        on_app_change=seen.append)
+    try:
+        eng.start()
+        assert wait(lambda: eng.state().syncing and app.mode == "video", 5.0)
+        sent = len([c for c in app.commands() if c == "set_app_mode"])
+        app.mode = "games"                       # the user picks it in Hue Sync
+        app.broadcast_state()
+        assert wait(lambda: eng.want_mode == "games", 5.0)
+        assert seen == [{"mode": "games"}]
+        time.sleep(hs.RESEND_AFTER_S * 3)
+        # the whole point: we do not put ours back
+        assert len([c for c in app.commands() if c == "set_app_mode"]) == sent
+        assert app.mode == "games"
+    finally:
+        eng.close()
+
+
+def test_a_user_intensity_change_in_the_app_is_adopted(app):
+    seen = []
+    eng = HueSyncEngine("127.0.0.1", app.port, mode="video", intensity="high",
+                        on_app_change=seen.append)
+    try:
+        eng.start()
+        assert wait(lambda: eng.state().syncing and app.intensity == "high", 5.0)
+        sent = len([c for c in app.commands() if c == "set_intensity"])
+        app.intensity = "subtle"
+        app.broadcast_state()
+        assert wait(lambda: eng.want_intensity == "subtle", 5.0)
+        assert seen == [{"intensity": "subtle"}]
+        time.sleep(hs.RESEND_AFTER_S * 3)
+        assert len([c for c in app.commands() if c == "set_intensity"]) == sent
+        assert app.intensity == "subtle"
+    finally:
+        eng.close()
+
+
+def test_the_state_that_answers_start_sync_is_not_a_user_choice(app):
+    """The update answering start_sync still carries the app's *previous* mode.
+    Adopting that would quietly retire hue-ghost's own mode setting."""
+    app.mode, app.intensity = "games", "subtle"
+    seen = []
+    eng = HueSyncEngine("127.0.0.1", app.port, mode="video", intensity="extreme",
+                        on_app_change=seen.append)
+    try:
+        eng.start()
+        assert wait(lambda: app.mode == "video" and app.intensity == "extreme", 5.0)
+        assert eng.want_mode == "video" and eng.want_intensity == "extreme"
+        assert seen == []
+    finally:
+        eng.close()
+
+
+def test_our_own_mode_change_is_not_reverted_by_a_later_state_update(app):
+    """inc_bri is answered with an app_state_update carrying mode and intensity
+    too. Without forgetting the old confirmation, that reply reads as the user
+    choosing the previous mode - and hue-ghost would undo its own action."""
+    seen = []
+    eng = HueSyncEngine("127.0.0.1", app.port, mode="video", intensity="high",
+                        on_app_change=seen.append)
+    try:
+        eng.start()
+        assert wait(lambda: eng.state().syncing and app.mode == "video", 5.0)
+        eng.set_mode("games")
+        eng.adjust_brightness(-5)                # its reply still says mode=video
+        assert wait(lambda: app.mode == "games", 5.0)
+        time.sleep(hs.RESEND_AFTER_S * 3)
+        assert eng.want_mode == "games" and app.mode == "games"
+        assert seen == []                        # nothing was adopted: it was us
+    finally:
+        eng.close()
+
+
+def test_a_mode_switch_does_not_steal_the_intensity_setting(app):
+    """Hue Sync keeps an intensity per mode (Core.AppMode.<Mode>.Default), so a
+    mode switch reports that mode's preset. It is the mode's doing, not somebody
+    choosing an intensity - hue-ghost must put its own back, not adopt it.
+
+    Found on the real app: without this, every mode change silently rewrote the
+    saved intensity."""
+    seen = []
+    eng = HueSyncEngine("127.0.0.1", app.port, mode="video", intensity="subtle",
+                        on_app_change=seen.append)
+    try:
+        eng.start()
+        assert wait(lambda: eng.state().syncing and app.mode == "video"
+                    and app.intensity == "subtle", 5.0)
+        # the app moves to games and brings that mode's preset with it
+        app.mode, app.intensity = "games", "high"
+        app.broadcast_state()
+        assert wait(lambda: eng.want_mode == "games", 5.0)      # the mode is the user's
+        assert wait(lambda: app.intensity == "subtle", 5.0)     # the intensity is ours
+        assert eng.want_intensity == "subtle"
+        assert seen == [{"mode": "games"}]
+    finally:
+        eng.close()

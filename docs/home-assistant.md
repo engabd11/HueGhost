@@ -22,10 +22,16 @@ Settings > Devices & services > Hue Synco > **Configure** > fill in
 | `switch.hue_ghost_audio_effects` | "use audio for light effects" in video/games mode |
 | `number.hue_ghost_sync_offset` | the lead in seconds, live (tune from the couch) |
 
-Mode and intensity apply live, mid-movie. The audio switch is the one setting
-the Hue Sync app only reads at start-up, so it restarts the app (~3 s) the next
-time sync starts; while movie mode is off it just remembers your choice. Its
-state shows the app's own setting until you pick one.
+Mode and intensity apply live, mid-movie - switching Video to Music or Games
+never restarts the Hue Sync app or drops the sync. They also **mirror** it:
+change the mode or the intensity in Hue Sync itself and the selects follow,
+because hue-ghost adopts your choice instead of asserting its own. (Hue Sync
+keeps an intensity per mode, so the one hue-ghost is set to is re-applied when
+the mode changes; only an intensity you pick yourself becomes the new setting.)
+
+The audio switch is the one setting the Hue Sync app only reads at start-up, so
+it restarts the app (~3 s); while movie mode is off it just remembers your
+choice. Its state shows the app's own setting until you pick one.
 
 Turning movie mode **on** first stops any active music-sync area (the bridge
 allows one streamer per entertainment area), then enables hue-ghost.
