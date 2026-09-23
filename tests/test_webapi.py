@@ -53,7 +53,7 @@ def test_setup_required_surfaces_in_status(tmp_path):
     d = Daemon(cfg)
     try:
         st = d.status()
-        assert st["setup_required"] and "api_key" in st["setup_required"][0]
+        assert st["setup_required"] and "nothing to follow" in " ".join(st["setup_required"])
         d._poll(0.0)                     # must not raise or touch Jellyfin
         assert d.jf_error.startswith("setup required")
     finally:

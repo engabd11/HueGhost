@@ -42,6 +42,7 @@ class Report:
     runtime_s: float | None
     device_id: str | None = None
     device_label: str = ""
+    media_type: str = "video"      # video | music
 
     @property
     def key(self) -> tuple:
@@ -84,17 +85,23 @@ class ClockOffset:
 
 class SessionMatcher:
     def __init__(self, device_id: str = "", name_contains: str = "", user: str = "",
-                 area_id: str = "", area_name: str = ""):
+                 area_id: str = "", area_name: str = "", kinds: tuple = ("video", "music")):
         self.device_id = (device_id or "").strip()
         self.needle = (name_contains or "").strip().lower()
         self.user = (user or "").strip().lower()
         self.area_id = (area_id or "").strip() or None
         self.area_name = (area_name or "").strip() or None
+        self.kinds = tuple(kinds) or ("video", "music")
 
     @classmethod
     def from_player(cls, p: dict) -> "SessionMatcher":
         return cls(p.get("device_id", ""), p.get("device_name_contains", ""), p.get("user", ""),
-                   p.get("area_id", ""), p.get("area_name", ""))
+                   p.get("area_id", ""), p.get("area_name", ""),
+                   tuple(p.get("kinds") or ("video", "music")))
+
+    def wants(self, r: "Report | None") -> bool:
+        """A player followed for films only should not light up for an album."""
+        return r is not None and r.media_type in self.kinds
 
     def label(self) -> str:
         return self.device_id or self.needle or "?"
@@ -137,17 +144,23 @@ class PlayerSet:
             s = m.pick(sessions)
             if s is None:
                 continue
-            if report_from_session(s) is not None:
+            if m.wants(report_from_session(s)):
                 return s, m
             first_seen = first_seen or (s, m)
         return first_seen if first_seen else (None, None)
 
 
+MEDIA_KINDS = {"Video": "video", "Audio": "music"}
+
+
 def report_from_session(s: dict) -> Report | None:
     np = s.get("NowPlayingItem")
     ps = s.get("PlayState") or {}
-    if not np or np.get("MediaType") != "Video":
+    if not np:
         return None
+    kind = MEDIA_KINDS.get(np.get("MediaType") or "")
+    if kind is None:
+        return None          # a photo, a book: nothing with a position to follow
     ticks = ps.get("PositionTicks")
     if ticks is None:
         return None
@@ -162,6 +175,7 @@ def report_from_session(s: dict) -> Report | None:
         runtime_s=(float(rt) / TICKS_PER_S) if rt else None,
         device_id=s.get("DeviceId"),
         device_label="%s / %s" % (s.get("DeviceName") or "?", s.get("Client") or "?"),
+        media_type=kind,
     )
 
 
@@ -218,6 +232,7 @@ class PlaybackModel:
     stall_report_mono: float = 0.0
     last_debug: str = ""
     device_id: str | None = None
+    media_type: str = "video"
 
     # -- queries ---------------------------------------------------------------------
     def position_at(self, now_mono: float) -> float:
@@ -341,7 +356,9 @@ class SessionWatcher:
             self.model = None
             return Observation(False, False, None, None, None)
         r = report_from_session(s)
-        if r is None:
+        if r is None or (who is not None and not who.wants(r)):
+            # connected, but playing nothing we follow: a film on a player bound
+            # to music only, or an album on one bound to films only
             self.model = None
             return Observation(True, False, None, None, None, player=who)
         self._playing_last_poll = True
@@ -354,7 +371,8 @@ class SessionWatcher:
                 item_id=r.item_id, media_source_id=r.media_source_id, name=r.name,
                 runtime_s=r.runtime_s, paused=r.paused,
                 anchor_pos=r.pos, anchor_mono=report_mono, stalls=self.stalls,
-                last_key=r.key, reports=1, last_report_mono=report_mono, device_id=r.device_id)
+                last_key=r.key, reports=1, last_report_mono=report_mono, device_id=r.device_id,
+                media_type=r.media_type)
             # playback that just appeared (not: the daemon started mid-movie)
             # is a fresh start: the client reports its position, then buffers
             just_started = prev_poll is not None and not was_playing and (now_mono - report_mono) < 3.0

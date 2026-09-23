@@ -189,6 +189,11 @@ def cmd_set(args) -> int:
         payload["use_audio"] = args.use_audio
     if args.brightness_step is not None:
         payload["brightness_step"] = args.brightness_step
+    if args.brightness is not None:
+        payload["brightness"] = args.brightness
+    if args.enable_source or args.disable_source:
+        payload["binding"] = {"key": args.enable_source or args.disable_source,
+                              "enabled": bool(args.enable_source)}
     if not payload:
         print("nothing to set (see --help)")
         return 2
@@ -529,6 +534,9 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--use-audio", choices=("on", "off", "app"),
                    help="use audio for light effects in video/games mode ('app' = leave the Hue Sync app's own setting)")
     s.add_argument("--brightness-step", type=int, help="Hue Sync brightness step (signed)")
+    s.add_argument("--brightness", type=int, help="Hue Sync brightness, 0-100")
+    s.add_argument("--enable-source", metavar="ID", help="follow this source again (see `status --json`)")
+    s.add_argument("--disable-source", metavar="ID", help="stop following this source")
     s.set_defaults(fn=cmd_set)
     s = sub.add_parser("test-mpv", help="check the mpv IPC plumbing with a local file")
     s.add_argument("file")

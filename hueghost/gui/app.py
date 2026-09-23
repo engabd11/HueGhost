@@ -8,8 +8,9 @@ import subprocess
 import sys
 import threading
 
-from PySide6.QtCore import QRectF, Qt, QTimer
-from PySide6.QtGui import QAction, QColor, QIcon, QLinearGradient, QPainter, QPixmap
+from PySide6.QtCore import QRectF, QSettings, Qt, QTimer
+from PySide6.QtGui import (QAction, QColor, QGuiApplication, QIcon, QLinearGradient,
+                           QPainter, QPixmap)
 from PySide6.QtWidgets import (QApplication, QFrame, QHBoxLayout, QLabel, QMainWindow, QMenu, QPushButton,
                                QStackedWidget, QSystemTrayIcon, QVBoxLayout, QWidget)
 
@@ -114,9 +115,9 @@ class MainWindow(QMainWindow):
         self.daemon = daemon
         self.api = WebApi(daemon)
         self.setWindowTitle("Hue Ghost")
-        self.resize(1080, 720)
-        self.setMinimumSize(900, 620)
+        self.setMinimumSize(960, 660)
         self.setWindowIcon(ghost_icon(None))
+        self._restore_geometry()
         self.last_status: dict = {}
 
         root = QWidget()
@@ -280,8 +281,44 @@ class MainWindow(QMainWindow):
             except Exception:
                 log.exception("refresh failed")
 
+    # -- window geometry ------------------------------------------------------
+    def _settings(self) -> QSettings:
+        return QSettings("Cyborg Automation AU", "Hue Ghost")
+
+    def _restore_geometry(self) -> None:
+        """Open big enough for the content, where it was left last time.
+
+        The default used to be 1080x720, which cut the Home grid off - every
+        launch started with a resize. Both the default and a remembered size
+        are clamped to the screen, so a smaller display still gets a window
+        that fits on it."""
+        screen = QGuiApplication.primaryScreen()
+        avail = screen.availableGeometry() if screen else None
+        saved = self._settings().value("geometry")
+        if saved is not None and self.restoreGeometry(saved):
+            if avail is None or avail.intersects(self.frameGeometry()):
+                return                    # still on a screen that exists
+        w, h = 1260, 840
+        if avail is not None:
+            w = max(self.minimumWidth(), min(w, avail.width() - 80))
+            h = max(self.minimumHeight(), min(h, avail.height() - 80))
+        self.resize(w, h)
+        if avail is not None:
+            self.move(avail.center() - self.rect().center())
+
+    def _save_geometry(self) -> None:
+        try:
+            self._settings().setValue("geometry", self.saveGeometry())
+        except Exception:
+            log.debug("could not save the window geometry", exc_info=True)
+
+    def hideEvent(self, e) -> None:  # noqa: N802
+        self._save_geometry()
+        super().hideEvent(e)
+
     def closeEvent(self, e) -> None:  # noqa: N802
         # keep running in the tray
+        self._save_geometry()
         e.ignore()
         self.hide()
 

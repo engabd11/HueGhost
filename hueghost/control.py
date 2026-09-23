@@ -5,7 +5,7 @@
   POST /on | /off | /toggle | /reload      (GET accepted too, for curl / .bat files)
   POST /set  {"enabled": bool, "mode": "video|music|games", "intensity": "high",
               "use_audio": true|false|null, "manage_area": bool, "offset_s": 1.5,
-              "offset_delta": 0.25, "brightness_step": 10}
+              "offset_delta": 0.25, "brightness_step": 10, "brightness": 0-100}
        (GET /set?offset_delta=0.25 ... accepted too)
 
 Bind to 127.0.0.1 (default) or 0.0.0.0 + ``control.token`` (sent as
