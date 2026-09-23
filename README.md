@@ -138,10 +138,19 @@ starts, so it no longer depends on what the app was last left on:
   the lights react to the soundtrack as well as the picture. Leave it on
   *App's own* and Hue Ghost never touches it.
 
-Mode and intensity go over the Public Control socket and apply live, mid-movie.
-The audio switch is the one setting the app only reads at start-up, so choosing
-On or Off means Hue Sync is restarted (~3 s) the next time sync starts - it is
-applied in the same restart as an area change, never twice.
+Mode and intensity go over the Public Control socket and apply live,
+mid-movie: switching from Video to Music or Games costs one message and never
+restarts the app or drops the sync. The audio switch is the one setting the app
+only reads at start-up, so choosing On or Off restarts Hue Sync (~3 s) - applied
+in the same restart as an area change, never twice, and written for Video *and*
+Games together so that switching between them afterwards stays free.
+
+**Hue Ghost mirrors the app.** Change the mode or the intensity in Hue Sync
+itself while a sync is running and Hue Ghost adopts it: it stops asserting its
+own choice and saves yours, so Home, the tray, the API and Home Assistant all
+show what Hue Sync is really doing. Hue Sync keeps an intensity per mode, so the
+one Hue Ghost is set to is re-applied when the mode changes - only an intensity
+*you* pick is taken as a new setting.
 
 All three are on **Home** and on the **Sync** page, and are exposed to Home
 Assistant and the CLI.
@@ -296,6 +305,18 @@ automation.
 
 ## Changelog
 
+- **2.5.0** - **Hue Sync stops restarting mid-movie.** Changing the mode from
+  Video to Music or Games while the lights are running no longer restarts the
+  Hue Sync app: the mode has always had a live command, and Hue Ghost was
+  needlessly re-deriving the app's start-up-only settings every time it changed.
+  Everything those settings need is now applied once, before sync starts - and
+  the audio switch is written for Video *and* Games together, so moving between
+  them later costs nothing. **Fixed:** "let the app choose" for the capture
+  display or the music input could never be satisfied, so it restarted Hue Sync
+  on *every* mode change, forever. **Hue Ghost now mirrors the app:** change the
+  mode or intensity in Hue Sync itself and Hue Ghost adopts and saves it instead
+  of putting its own back two seconds later - window, tray, API and Home
+  Assistant included.
 - **2.4.0** - **The lights follow more than a TV.** Add an app on this PC - a
   browser playing YouTube, a player, a game - and it lights its own
   entertainment area with no ghost involved, because Hue Sync can capture your

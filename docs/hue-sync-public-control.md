@@ -55,6 +55,16 @@ Live-verified behaviour:
 - **`set_app_mode` and `set_intensity` only act on an active sync session.**
   Sent while not syncing they are silently ignored (no reply). hue-ghost
   therefore reconciles `start_sync -> set_app_mode -> set_intensity`.
+- Both are **live**: they take effect on the running session, in place, with no
+  restart and no gap in the light stream. Nothing about a mode change requires
+  touching the app's files.
+- The app keeps an **intensity per mode** (`Core.AppMode.<Mode>.Default`), so a
+  `set_app_mode` is answered with an update carrying *that mode's* intensity.
+  That is the mode's doing, not a choice: hue-ghost re-asserts its own.
+- An `app_state_update` that answers nothing we sent is the user at the app's
+  own controls. hue-ghost adopts the mode/intensity from it rather than fighting
+  it. Note the update answering `start_sync` still carries the app's *previous*
+  mode, so it is not a choice either.
 - `inc_bri` works any time; `step` is signed.
 - Unknown commands are logged by the app (`Unknown command: %s`) and ignored;
   a message without `command` logs `Unknown message`. Neither closes the socket.

@@ -15,6 +15,7 @@ from __future__ import annotations
 import copy
 import logging
 import os
+import queue
 import statistics
 import subprocess
 import threading
@@ -120,7 +121,10 @@ class Daemon:
         self.cfg = cfg
         self.sources = build_sources(cfg)
         self.params = Params.from_config(cfg)
-        self.engine: Engine = build_engine(cfg)
+        # what the engine's own app changed under us, drained on the next tick:
+        # Queue.put never blocks, so the engine thread never waits on our lock
+        self._engine_events: queue.Queue[dict] = queue.Queue()
+        self.engine: Engine = build_engine(cfg, on_app_change=self._engine_events.put)
         self.ghost: GhostPlayer | None = None
         self.enabled = bool(cfg.get("enabled", True))
         self.state = IDLE
@@ -308,6 +312,7 @@ class Daemon:
 
     # -- polling the followed session --------------------------------------------
     def _poll(self, now: float) -> None:
+        self._drain_engine_events()
         problems = self.cfg.problems()
         if problems:
             self.jf_ok, self.jf_error = False, "setup required: " + problems[0]
@@ -342,7 +347,7 @@ class Daemon:
                 self.engine.close()
             except Exception:
                 pass
-            self.engine = build_engine(self.cfg)
+            self.engine = build_engine(self.cfg, on_app_change=self._engine_events.put)
             self._engine_started = False
             self._push_engine_prefs()
             if act.playing:
@@ -812,7 +817,7 @@ class Daemon:
                     self.engine.close()
                 except Exception:
                     pass
-                self.engine = build_engine(self.cfg)
+                self.engine = build_engine(self.cfg, on_app_change=self._engine_events.put)
                 self._engine_started = False
                 self.state = GHOSTING if self.ghost is not None else IDLE
             self._push_engine_prefs()
@@ -910,6 +915,41 @@ class Daemon:
                     getattr(e, attr)(bool(self.cfg.get("engine.huesync." + key, True)))
                 except (ValueError, RuntimeError):
                     pass
+
+    def _drain_engine_events(self) -> None:
+        """Adopt what the user changed in the engine's own app.
+
+        Everything that shows mode and intensity - the window, the tray, the API,
+        Home Assistant - reads them from the config, so persisting here is all it
+        takes for the whole app to mirror Hue Sync. Deliberately no
+        ``_push_engine_prefs()``: the engine already holds the value, and pushing
+        it back is precisely the feedback loop this is meant to avoid."""
+        got: dict = {}
+        while True:
+            try:
+                got.update(self._engine_events.get_nowait())
+            except queue.Empty:
+                break
+        if not got:
+            return
+        changed = False
+        if got.get("mode") in MODES and self.cfg.get("engine.huesync.mode") != got["mode"]:
+            self.cfg.set("engine.huesync.mode", got["mode"])
+            changed = True
+        if got.get("intensity") in INTENSITIES                 and self.cfg.get("engine.huesync.intensity") != got["intensity"]:
+            self.cfg.set("engine.huesync.intensity", got["intensity"])
+            changed = True
+        if not changed:
+            # e.g. Hue Sync's "scenes", which hue-ghost has no setting for: the
+            # engine stops fighting it, but the saved config stays one we can run
+            log.debug("Hue Sync is in %s; nothing hue-ghost stores, leaving the config alone", got)
+            return
+        log.info("adopted from the Hue Sync app: %s", got)
+        if self.cfg.path:
+            try:
+                self.cfg.save()
+            except OSError as e:
+                log.warning("could not persist the adopted settings: %s", e)
 
     def _apply_settings(self, p: dict) -> None:
         changed = False

@@ -26,6 +26,9 @@ class EngineState:
     mode: str | None = None
     intensity: str | None = None
     use_audio: bool | None = None  # the app's "use audio for light effects" for `mode`
+    # the same switch for *every* mode that has one: a session pre-applies all of
+    # them, which is what makes a mid-session mode change free
+    audio_modes: dict[str, bool | None] = field(default_factory=dict)
     bri: int | None = None
     error: str | None = None
     area_id: str | None = None     # entertainment area the engine currently targets
@@ -34,6 +37,10 @@ class EngineState:
     monitor_name: str | None = None
     audio_device_id: str | None = None    # render endpoint it listens to in music mode
     audio_device_name: str | None = None
+    # "the app is choosing this itself" - what AUTO is asking for, and the only
+    # way to tell whether AUTO has already been applied
+    monitor_auto: bool | None = None
+    audio_device_auto: bool | None = None
     switching: bool = False        # area switch in progress
     updated_mono: float = field(default_factory=time.monotonic)
 
@@ -181,7 +188,9 @@ class HttpHookEngine(Engine):
             return EngineState(**{**self._st.__dict__})
 
 
-def build_engine(cfg) -> Engine:
+def build_engine(cfg, on_app_change: Callable[[dict], None] | None = None) -> Engine:
+    """``on_app_change`` is called with e.g. ``{"mode": "music"}`` when the user
+    changes something in the engine's own app and hue-ghost adopts it."""
     kind = str(cfg.get("engine.type", "huesync") or "none").lower()
     if kind == "huesync":
         from .huesync import HueSyncEngine
@@ -194,7 +203,8 @@ def build_engine(cfg) -> Engine:
             manage_area=bool(h.get("manage_area", True)),
             manage_monitor=bool(h.get("manage_monitor", True)),
             manage_audio_device=bool(h.get("manage_audio_device", True)),
-            launch_exe=h.get("launch_exe", ""))
+            launch_exe=h.get("launch_exe", ""),
+            on_app_change=on_app_change)
     if kind == "httphook":
         url = cfg.get("engine.httphook.url", "")
         if url:
