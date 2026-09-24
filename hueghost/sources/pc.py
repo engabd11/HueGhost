@@ -80,7 +80,9 @@ class PcSource(Source):
             # it has to be able to undo an endpoint a Jellyfin-music session pinned
             audio_device=(b.get("audio_device") or AUTO) if mode == "music" else None,
             use_audio=self.cfg.get("engine.huesync.use_audio"),
-            intensity=self.cfg.get("engine.huesync.intensity") or None)
+            # the binding's own level, else the global one
+            intensity=(b.get("intensity")
+                       or self.cfg.get("engine.huesync.intensity") or None))
 
 
 def _primary_monitor() -> str:

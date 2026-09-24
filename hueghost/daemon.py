@@ -152,6 +152,12 @@ class Daemon:
         self._guard_logged = False
         self._pending_seek = False
         self._engine_started = False
+        # the Plan the engine was last pointed at, and which binding the live
+        # ghost belongs to: both are how a change of winner gets noticed
+        self._plan_applied = None
+        self._ghost_binding: str | None = None
+        self._parked_since: float | None = None  # ... and since when another one has the lights
+        self._pause_stopped: str | None = None   # item stopped for sitting paused
         self._eof_item: str | None = None
         self._last_report_count = 0
         self._stalls_saved_mono = float("-inf")
@@ -367,8 +373,9 @@ class Daemon:
             self.engine = build_engine(self.cfg, on_app_change=self._engine_events.put)
             self._engine_started = False
             self._push_engine_prefs()
+            self._plan_applied = None
             if act.playing:
-                self.engine.apply_plan(act.plan)
+                self._apply_plan(act)
 
         if obs is not None and obs.model is not None and obs.model.last_debug \
                 and log.isEnabledFor(logging.DEBUG):
@@ -386,8 +393,8 @@ class Daemon:
     def _playing(self, now: float, act) -> None:
         """Something is playing. What that costs us depends on where it is: a
         client on the network has to be mirrored, an app on this PC does not."""
-        if act.event == "new_item":
-            self.engine.apply_plan(act.plan)
+        self._hand_over(now, act)
+        self._apply_plan(act)
         if not act.needs_ghost:
             self._follow_ghostless(now, act)
             return
@@ -403,6 +410,8 @@ class Daemon:
             if self._standby == "paused" and self.ghost is not None:
                 self._lights_on("client resumed after a long pause")
             self._paused_since = None
+        if self._pause_stopped is not None and (self._pause_stopped != m.item_id or not m.paused):
+            self._pause_stopped = None      # it plays again, or moved on: stop latching
         if act.event == "new_item" and obs.stale:
             log.warning("first report for '%s' is stale (>30 s old); position may be off", _asc(m.name))
         if self.ghost is not None and self.ghost.item_id != m.item_id:
@@ -420,6 +429,60 @@ class Daemon:
         elif act.event == "stalled":
             log.info("followed client still buffering at %.1fs", m.anchor_pos)
 
+    def _apply_plan(self, act) -> None:
+        """Point the engine at what the *winning* binding wants: its mode,
+        intensity, entertainment area, capture display and music input.
+
+        Whenever the plan changes - not only when a source reports a new item.
+        The binding that drives the lights can change without either source
+        seeing anything new (an app on this PC taking over from a client that
+        is still connected), and that used to leave Hue Sync in the previous
+        source's mode and area for the whole session.
+
+        A mode or intensity changed by hand mid-session is not undone here:
+        ``act.plan`` only changes when the binding or its settings do."""
+        if act.plan == self._plan_applied:
+            return
+        b = act.binding or {}
+        log.info("'%s' drives the lights: %s, %s%s", _asc(b.get("name") or b.get("id") or "?"),
+                 act.plan.mode or "the app's own mode",
+                 act.plan.intensity or "the app's own intensity",
+                 (" -> " + _asc(b.get("area_name"))) if b.get("area_name") else "")
+        self.engine.apply_plan(act.plan)
+        self._plan_applied = act.plan
+
+    def _hand_over(self, now: float, act) -> None:
+        """A different binding won: park the ghost the old one left behind, and
+        close it once the standby window is over.
+
+        Only ``_idle`` ever closed a ghost, and it never runs while something
+        else is playing - so an app on this PC taking the lights over left the
+        previous client's mpv running for as long as that app kept playing.
+
+        Parked rather than killed, for the same reason a client that stops is:
+        a source that has the lights for a moment must not cost a relaunch and
+        a re-sync. Nothing captures the parked ghost, so it holds its frame."""
+        bid = (act.binding or {}).get("id") or None
+        if self.ghost is None or self._ghost_binding is None or bid == self._ghost_binding:
+            if self._parked_since is not None:
+                self._parked_since = None
+                self._pending_seek = True   # it stood still while the other source played
+            return
+        if act.needs_ghost:
+            # another client, which needs a ghost of its own: the item check in
+            # ``_playing`` already reuses this one or relaunches it
+            self._ghost_binding = bid
+            self._parked_since = None
+            return
+        if self._parked_since is None:
+            self._parked_since = now
+            log.info("'%s' took the lights over -> parking the ghost it left behind",
+                     _asc(act.title or bid or "another source"))
+            if not self.ghost.paused:
+                self.ghost.apply([Pause()], now)
+        if now - self._parked_since >= float(self.cfg.get("sync.idle_stop_delay_s", 10.0)):
+            self._stop_ghost("another source has the lights")
+
     def _follow_ghostless(self, now: float, act) -> None:
         """An app on this PC: nothing to launch, nothing to keep in step - the
         picture is already on a screen Hue Sync captures. Just light it."""
@@ -435,6 +498,7 @@ class Daemon:
         self.state = SYNCING if est.syncing else GHOSTING
 
     def _idle(self, now: float, act) -> None:
+        self._parked_since = None       # nothing else has the lights any more
         if self.ghost is not None:
             if self._idle_since is None:
                 self._idle_since = now
@@ -457,6 +521,7 @@ class Daemon:
                 self._engine_started = False
                 self._standby = None
                 self._idle_since = None
+                self._plan_applied = None   # the next session re-asserts the binding's settings
                 self.state = IDLE
                 log.info("lights off")
         elif not self.enabled and self.state != IDLE:
@@ -513,6 +578,8 @@ class Daemon:
             if m.runtime_s is None or m.position_at(now) > m.runtime_s - 5.0:
                 return
             self._eof_item = None
+        if self._pause_stopped == m.item_id and m.paused:
+            return                  # stopped because it sat paused; wait for play
         self._launches = deque(t for t in self._launches if now - t < 300)
         same_item = m.item_id == self._last_launch_item
         cooldown_ok = (not same_item) or (now - self._last_launch >= float(g.get("relaunch_cooldown_s", 5.0)))
@@ -544,6 +611,7 @@ class Daemon:
             return
         self._last_launch = now
         self._last_launch_item = m.item_id
+        self._ghost_binding = (act.binding or {}).get("id") or None
         self._launches.append(now)
         self._launch_mono = now
         self._guard_logged = False
@@ -619,8 +687,15 @@ class Daemon:
         if pause_stop_due(self._paused_since, now, self._pause_stop_limit_s(m),
                           self._standby is not None) and self._engine_started:
             held = now - self._paused_since
-            log.info("%s paused for %s -> lights off (ghost holds, resumes on play)",
-                     "music" if m.media_type == "music" else "client",
+            if m.media_type == "music":
+                # Music does not wait on standby. A phone leaves its session open
+                # for hours after the last track, so a parked music ghost is a
+                # process doing nothing and a source that looks busy for ever.
+                log.info("music paused for %.0f s -> sync off (nothing kept on standby)", held)
+                self._pause_stopped = m.item_id
+                self._stop_ghost("music paused")
+                return
+            log.info("client paused for %s -> lights off (ghost holds, resumes on play)",
                      "%.0f s" % held if held < 120 else "%.0f min" % (held / 60.0))
             self._lights_off("paused", now)
 
@@ -671,9 +746,12 @@ class Daemon:
         self.ghost = None
         self.state = IDLE
         self._engine_started = False
+        self._ghost_binding = None
+        self._parked_since = None
         self._idle_since = None
         self._paused_since = None
         self._standby = None
+        self._plan_applied = None       # the next session re-asserts the binding's settings
         s = self.stats.flush()
         if s:
             log.info("sync quality (session tail): mean|drift| %.3fs p95 %.3fs max %.3fs seeks %d",
@@ -697,6 +775,7 @@ class Daemon:
                 "area_id": b["area_id"] or None,
                 "area_name": b["area_name"] or None,
                 "mode": b["mode"] or None,
+                "intensity": b["intensity"] or None,
                 "exe": b["exe"] or None,
                 "device": b["device_id"] or b["device_name_contains"] or None,
                 "problems": probs,
@@ -724,6 +803,7 @@ class Daemon:
                 self._stop_ghost("binding switched off")
             self._rebuild_sources()
             self.last_act = IDLE_ACTIVITY
+            self._plan_applied = None
             log.info("binding '%s' %s", hit["name"] or hit["id"], "on" if on else "off")
         return {"id": hit["id"], "enabled": bool(on)}
 
@@ -782,6 +862,9 @@ class Daemon:
                     "seeks": g.seeks if g else 0,
                     "nudges": g.nudges if g else 0,
                     "standby": self._standby,
+                    # parked: alive, holding its frame, because another source
+                    # has the lights - closed when the standby window is over
+                    "parked": self._parked_since is not None,
                     "standby_closes_in_s": (round(max(0.0, float(self.cfg.get("sync.idle_stop_delay_s", 10.0))
                                                       - (now - self._idle_since)), 1)
                                             if (g and self._idle_since is not None) else None),
@@ -831,6 +914,7 @@ class Daemon:
                 self._rebuild_sources(keep_client=not server_moved)
                 self.last_obs = None
                 self.last_act = IDLE_ACTIVITY
+                self._plan_applied = None
             self.watcher.jitter_tol = float(self.cfg.get("sync.jitter_tolerance_s", 1.5))
             self.params = Params.from_config(self.cfg)
             if changed("engine.type", "engine.huesync.host", "engine.huesync.port",
@@ -842,6 +926,7 @@ class Daemon:
                     pass
                 self.engine = build_engine(self.cfg, on_app_change=self._engine_events.put)
                 self._engine_started = False
+                self._plan_applied = None
                 self.state = GHOSTING if self.ghost is not None else IDLE
             self._push_engine_prefs()
             if changed("enabled"):
@@ -902,6 +987,7 @@ class Daemon:
             self._stop_ghost("disabled")
         if not on:
             self.engine.stop()
+            self._plan_applied = None
         self._guard_logged = False
         self._launches.clear()
 

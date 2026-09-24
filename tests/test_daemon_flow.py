@@ -12,7 +12,9 @@ import pytest
 from hueghost import daemon as dm
 from hueghost.config import Config
 from hueghost.daemon import IDLE, STANDBY, SYNCING, Daemon
+from hueghost.engines import Plan
 from hueghost.lockstep import Pause, Resume, Seek
+from hueghost.sources import Activity, Source
 from tests.test_watcher import LOCAL0, MONO0, session
 
 POLL = 0.5
@@ -35,6 +37,8 @@ class FakeGhost:
         self.actions = []
 
     class _Proc:
+        pid = 4242            # the PC probe is told to ignore our own ghost
+
         def poll(self):
             return 0
 
@@ -261,22 +265,104 @@ def _music(pos, t, paused=False):
     return [s]
 
 
-def test_music_paused_in_the_background_turns_the_lights_off_quickly(world):
+def test_music_paused_in_the_background_stops_instead_of_waiting_on_standby(world):
     """A phone that stops a track usually leaves the session open rather than
-    closing it, so music cannot wait for the minutes a film is given."""
+    closing it, so music cannot wait for the minutes a film is given - and it
+    is not parked on standby either: nothing is coming back to a paused song,
+    so the ghost is closed and the source stops looking busy."""
     world.d.cfg.set("sync.pause_stop_min", 0.0)        # films: never, the default
     # music only syncs into an output nobody can hear
     world.d.cfg.set("ghost.audio_device", "{0.0.0.00000000}.{silent}")
     world.step(1.0, _music(30.0, 0.5))
     assert world.engine_on
+    g = world.ghost
     world.step(2.0, _music(31.0, world.t, paused=True))
     assert world.engine_on                             # a short gap is not the end
     world.step(15.0)
-    assert not world.engine_on and world.d.state == STANDBY
-    assert world.d.status()["ghost"]["standby"] == "paused"
-    # and it comes straight back when the next track plays
+    assert not world.engine_on and world.d.state == IDLE
+    assert world.ghost is None and not g.alive()
+    assert world.d.status()["ghost"]["standby"] is None
+    # ... and it stays off while the session sits there paused
+    world.step(30.0, _music(31.0, world.t, paused=True))
+    assert world.ghost is None and not world.engine_on
+    # the next track brings it straight back, with a fresh ghost
     world.step(1.0, _music(31.0, world.t))
     assert world.engine_on and world.d.state == SYNCING
+    assert world.ghost is not None and len(world.launched) == 2
+
+
+class FakePcSource(Source):
+    """An app on this PC: it plays, it needs no ghost, and it wants its own
+    mode, intensity and entertainment area."""
+    id = "pc"
+
+    def __init__(self, plan, bid="spotify", rank=-1):
+        super().__init__()
+        self.interval_s = 0.5
+        self._act = Activity(
+            binding={"id": bid, "rank": rank, "name": bid, "area_name": "Office"},
+            seen=True, playing=True, kind="music", needs_ghost=False,
+            plan=plan, title=bid, event="new_item")
+
+    def poll(self, now):
+        return self._act
+
+    def ignore_pid(self, pid):
+        self.ignored = pid
+
+
+def test_an_app_on_this_pc_taking_over_parks_the_ghost_and_moves_the_lights(world):
+    """The binding that drives the lights can change without either source
+    seeing anything new. The losing client's mpv used to keep running for as
+    long as the app played (only ``_idle`` ever closed one, and it does not run
+    while something else plays), and Hue Sync kept the old mode and area."""
+    world.step(1.0, playing(100.0, 0.5))
+    g = world.ghost
+    assert g is not None and world.d._plan_applied.mode == "video"
+    plan = Plan(area_id="office", mode="music", intensity="subtle")
+    world.d.sources.hold_s = 0.0             # arbitration is tested in test_sources
+    world.d.sources.sources.append(FakePcSource(plan))
+    world.step(1.0)
+    assert world.d._plan_applied == plan, "the winner's mode/intensity/area must be applied"
+    assert world.engine_on and world.d.state == SYNCING
+    # the ghost holds its frame first: a source that has the lights for a
+    # moment must not cost a relaunch
+    assert world.ghost is g and g.paused and world.d.status()["ghost"]["parked"]
+    world.step(10.0)
+    assert world.ghost is None and not g.alive(), "the losing client's mpv must be closed"
+
+
+def test_a_parked_ghost_comes_back_without_a_relaunch(world):
+    """... and the client that lost the lights for a few seconds picks its own
+    ghost back up, exactly as one that briefly stopped does."""
+    world.step(1.0, playing(100.0, 0.5))
+    g = world.ghost
+    world.d.sources.hold_s = 0.0
+    pc = FakePcSource(Plan(area_id="office", mode="music", intensity="subtle"))
+    world.d.sources.sources.append(pc)
+    world.step(3.0)
+    assert world.ghost is g and g.paused
+    pc._act = Activity(binding=pc._act.binding, seen=True, playing=False,
+                       needs_ghost=False, plan=pc._act.plan)
+    world.step(1.0, playing(106.0, world.t))
+    assert world.ghost is g and len(world.launched) == 1, "no relaunch"
+    assert world.d._plan_applied.mode == "video"
+    world.step(4.0)                          # ... and it re-anchors and plays on
+    assert not g.paused and any(isinstance(a, Resume) for a in g.actions)
+
+
+def test_the_client_coming_back_takes_its_own_plan_with_it(world):
+    """... and back again: the plan is re-applied on every change of winner,
+    not only when a source reports a new item."""
+    world.d.sources.hold_s = 0.0
+    pc = FakePcSource(Plan(area_id="office", mode="music", intensity="subtle"))
+    world.d.sources.sources.append(pc)
+    world.step(1.0, playing(100.0, 0.5))
+    assert world.d._plan_applied.mode == "music" and world.ghost is None
+    pc._act = Activity(binding=pc._act.binding, seen=True, playing=False,
+                       needs_ghost=False, plan=pc._act.plan)
+    world.step(1.0, playing(102.0, world.t))
+    assert world.ghost is not None and world.d._plan_applied.mode == "video"
 
 
 def test_a_paused_film_is_not_held_to_the_music_limit(world):

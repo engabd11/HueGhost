@@ -128,6 +128,44 @@ def test_pc_music_hands_the_audio_input_back_to_the_app():
     assert a.plan.monitor is None          # music captures no screen
 
 
+def test_a_binding_carries_its_own_mode_and_intensity():
+    """Each source is set up once and then simply played: the Apple TV in
+    video/subtle, a phone running a music app in music/high."""
+    cfg = cfg_with([{"source": "jellyfin", "device_id": "atv", "mode": "video",
+                     "intensity": "subtle", "area_id": "living"}],
+                   engine={"type": "none", "huesync": {"mode": "games", "intensity": "extreme"}})
+    jf = build_sources(cfg).sources[0]
+    p = jf._plan(jf.bindings()[0], "video")
+    assert p.mode == "video" and p.intensity == "subtle" and p.area_id == "living"
+
+
+def test_a_binding_with_no_settings_of_its_own_falls_back_to_the_global_ones():
+    cfg = cfg_with([{"source": "jellyfin", "device_id": "atv"}],
+                   engine={"type": "none", "huesync": {"mode": "games", "intensity": "moderate"}})
+    jf = build_sources(cfg).sources[0]
+    p = jf._plan(jf.bindings()[0], "video")
+    assert p.mode == "games" and p.intensity == "moderate"
+
+
+def test_music_is_music_mode_whatever_the_binding_asks_for():
+    # a song has no picture: the binding's intensity still applies, its mode cannot
+    cfg = cfg_with([{"source": "jellyfin", "device_id": "s23", "client": "CAMusic",
+                     "mode": "video", "intensity": "high", "kinds": ["music"]}],
+                   ghost={"audio_device": "{0.0.0.00000000}.{cable}"})
+    jf = build_sources(cfg).sources[0]
+    p = jf._plan(jf.bindings()[0], "music")
+    assert p.mode == "music" and p.intensity == "high" and p.monitor is None
+
+
+def test_a_pc_binding_carries_its_own_intensity_too():
+    cfg = cfg_with([{"source": "pc", "exe": "spotify.exe", "mode": "music", "intensity": "subtle"}],
+                   engine={"type": "none", "huesync": {"intensity": "extreme"}})
+    pc = build_sources(cfg).sources[0]
+    pc.probe.observe(pc.bindings(), [AudioHit(3, "spotify.exe", 0.4)], None, 0.0)
+    a = pc.activities(pc.probe.observe(pc.bindings(), [AudioHit(3, "spotify.exe", 0.4)], None, 2.0))[0]
+    assert a.plan.mode == "music" and a.plan.intensity == "subtle"
+
+
 def test_a_disabled_binding_is_not_polled_at_all():
     cfg = cfg_with([{"source": "pc", "exe": "firefox.exe", "mode": "video", "enabled": False},
                     {"source": "pc", "exe": "vlc.exe", "mode": "video"}])

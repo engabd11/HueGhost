@@ -599,6 +599,10 @@ class SyncPage(Page):
 
 # ============================================================================================
 MODE_LABELS = [("video", "Video"), ("music", "Music"), ("games", "Game")]
+# A Jellyfin client knows what it is playing, so it may leave the choice to the
+# media; an app on this PC cannot - nothing tells a film from a game.
+JF_MODE_LABELS = [("", "Automatic")] + MODE_LABELS
+BINDING_INTENSITY_LABELS = [("", "Default")] + [(i, i.capitalize()) for i in INTENSITIES]
 DETECT_LABELS = [("audio", "Sound"), ("fullscreen", "Fullscreen"), ("either", "Either")]
 
 
@@ -615,7 +619,7 @@ class PlayerRow(QWidget):
         self.is_pc = player.get("source") == "pc"
         lay = QHBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
-        lay.setSpacing(8)
+        lay.setSpacing(6)
 
         self.enabled = ToggleSwitch()
         self.enabled.setChecked(bool(player.get("enabled", True)))
@@ -641,22 +645,37 @@ class PlayerRow(QWidget):
         # is no help at all when two of them are on the same network
         self.name = QLineEdit(name)
         self.name.setToolTip("Call it whatever you like - this name is only for you.")
-        self.name.setMinimumWidth(150)
+        self.name.setMinimumWidth(90)
         lay.addWidget(self.name, 1)
         self.lbl = QLabel("<span style='color:%s'>%s</span>" % (theme.MUTED, how))
         self.lbl.setTextFormat(Qt.RichText)
         self.lbl.setToolTip("How Hue Ghost recognises it")
         lay.addWidget(self.lbl, 1)
 
-        self.mode = self.detect = None
+        # Every source carries its own mode and intensity, so each one is set up
+        # once and then simply played: Apple TV -> video/subtle, a phone running
+        # a music app -> music/high. They are applied when it takes the lights.
+        self.mode = QComboBox()
+        for v, t in (MODE_LABELS if self.is_pc else JF_MODE_LABELS):
+            self.mode.addItem(t, v)
+        self.mode.setCurrentIndex(max(0, self.mode.findData(
+            player.get("mode") or ("video" if self.is_pc else ""))))
+        self.mode.setToolTip("What Hue Sync switches to while this one plays.\n"
+                             "'Automatic' follows the media: music mode for a song, "
+                             "video for anything else.")
+        self.mode.currentIndexChanged.connect(self._mode_changed)
+        lay.addWidget(self.mode)
+
+        self.intensity = QComboBox()
+        for v, t in BINDING_INTENSITY_LABELS:
+            self.intensity.addItem(t, v)
+        self.intensity.setCurrentIndex(max(0, self.intensity.findData(player.get("intensity") or "")))
+        self.intensity.setToolTip("How hard the lights react while this one plays.\n"
+                                  "'Default' uses the intensity on the Home page.")
+        lay.addWidget(self.intensity)
+
+        self.detect = None
         if self.is_pc:
-            self.mode = QComboBox()
-            for v, t in MODE_LABELS:
-                self.mode.addItem(t, v)
-            self.mode.setCurrentIndex(max(0, self.mode.findData(player.get("mode") or "video")))
-            self.mode.setToolTip("What Hue Sync should react to while this app plays")
-            self.mode.currentIndexChanged.connect(self._mode_changed)
-            lay.addWidget(self.mode)
             self.detect = QComboBox()
             for v, t in DETECT_LABELS:
                 self.detect.addItem(t, v)
@@ -667,9 +686,11 @@ class PlayerRow(QWidget):
                                    "Either - whichever happens first")
             lay.addWidget(self.detect)
 
-        lay.addWidget(label("lights", "hint"))
+        bulb = icon("bulb", 14, theme.MUTED)
+        bulb.setToolTip("Which lights this one drives")
+        lay.addWidget(bulb)
         self.area = QComboBox()
-        self.area.addItem("Hue Sync's current area", "")
+        self.area.addItem("Current area", "")
         for a in areas:
             self.area.addItem(a["name"], a["id"])
         idx = self.area.findData(player.get("area_id") or "")
@@ -677,7 +698,9 @@ class PlayerRow(QWidget):
         if player.get("area_id") and idx < 0:
             self.area.addItem(player.get("area_name") or player["area_id"], player["area_id"])
             self.area.setCurrentIndex(self.area.count() - 1)
-        self.area.setMinimumWidth(170)
+        self.area.setMinimumWidth(150)
+        self.area.setToolTip("Which lights this one drives.\n"
+                             "'Current area' leaves whatever is selected in the Hue Sync app alone.")
         lay.addWidget(self.area)
         lay.addWidget(icon_button("up", "Higher priority", lambda: on_move(self, -1)))
         lay.addWidget(icon_button("down", "Lower priority", lambda: on_move(self, 1)))
@@ -694,7 +717,7 @@ class PlayerRow(QWidget):
     def _restyle(self) -> None:
         on = self.enabled.isChecked()
         self.lbl.setStyleSheet("" if on else "color:%s;" % theme.FAINT)
-        for w in (self.area, self.mode, self.detect):
+        for w in (self.area, self.mode, self.intensity, self.detect):
             if w is not None:
                 w.setEnabled(on)
 
@@ -704,8 +727,8 @@ class PlayerRow(QWidget):
         p["name"] = self.name.text().strip() or p.get("name") or ""
         p["area_id"] = self.area.currentData() or ""
         p["area_name"] = self.area.currentText() if p["area_id"] else ""
-        if self.mode is not None:
-            p["mode"] = self.mode.currentData()
+        p["mode"] = self.mode.currentData()
+        p["intensity"] = self.intensity.currentData()
         if self.detect is not None:
             p["detect"] = self.detect.currentData()
         return p
@@ -750,11 +773,13 @@ class PlayerPage(Page):
         self.lay.addWidget(c)
 
         c2 = Card("Sources to follow", "top = priority when several play at once")
-        c2.add(label("Each one can be bound to an entertainment area: when it plays, Hue Sync switches to those "
-                     "lights automatically (the app restarts silently for ~3 s the first time a movie moves rooms). "
-                     "'Hue Sync's current area' leaves the selection alone. Only one thing syncs at a time - Hue "
-                     "Sync has a single area and a single capture display - so when several are playing, the one "
-                     "highest in this list wins. Switch one off to ignore it without deleting it.",
+        c2.add(label("Each one carries its own settings: the mode Hue Sync reacts in, how hard the lights react, "
+                     "and which entertainment area they are. They are applied the moment it starts playing, so the "
+                     "Apple TV can be video and subtle while a phone playing music is music and high (the app "
+                     "restarts silently for ~3 s the first time a source moves the lights to another room). "
+                     "'Automatic', 'Default' and 'Current area' leave those choices to the Hue Sync app. "
+                     "Only one thing syncs at a time - Hue Sync has a single area, mode and capture display - so when several are playing, "
+                     "the one highest in this list wins. Switch one off to ignore it without deleting it.",
                      "hint", wrap=True))
         self.rows_box = QVBoxLayout()
         self.rows_box.setSpacing(8)

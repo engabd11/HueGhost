@@ -104,12 +104,27 @@ its app is reinstalled, but it follows **every** device that matches, so it is
 the wrong tool for a phone.
 
 Each one gets an **on/off switch** - ignore a player for a while without
-deleting it - and an **entertainment area**. Only one thing syncs at a time
-(Hue Sync has a single area and a single capture display), so when several are
-playing, **the one highest in the list wins**; drag a row to change that.
+deleting it - and its own **mode**, **intensity** and **entertainment area**.
+That is the whole point of the list: set a source up once and then just play
+something. The Apple TV can be *Video / Subtle* in the living room while the
+phone running your music app is *Music / High* in the office, and each of them
+puts Hue Sync into its own settings the moment it starts. Leave a row on
+*Automatic*, *Default* or *Current area* and Hue Ghost does not touch that
+choice at all.
 
-For a PC app you also choose what Hue Sync should react to (**Video**, **Music**
-or **Game**) and how Hue Ghost can tell it is playing: **Sound** (it is making
+Only one thing syncs at a time (Hue Sync has a single area, mode and capture
+display), so when several are playing, **the one highest in the list wins**;
+drag a row to change that. When the winner changes - an app on this PC starting
+while a film is still open on a phone, say - the new source's settings are
+applied at once, and the ghost the old source left behind is parked and closed
+10 seconds later. Parked, not killed: a source that has the lights for a moment
+must not cost a relaunch and a re-sync, so a client that gets them straight back
+picks its own ghost up where it left it.
+
+*Automatic* mode, which only a Jellyfin client can have, means "follow the
+media": music mode for a song, video for anything else. A PC app has to say
+what it is, because nothing else can tell a film from a game. For a PC app you
+also choose how Hue Ghost can tell it is playing: **Sound** (it is making
 some), **Fullscreen** (it is the window you are looking at, full screen) or
 either. Video defaults to sound, games to fullscreen. Nothing is scanned or
 guessed - only the executables you actually add are ever looked at, and an
@@ -131,11 +146,14 @@ Music playing **on the PC itself** needs none of that: the sound is already
 here, so Hue Sync just listens to its own output.
 
 Music also **stops differently**. A film is paused to be come back to, so the
-lights wait minutes for it. A phone that stops a track usually just leaves the
-session open in the background instead of closing it, and waiting for that to
-disappear means the lights stay on long after the music ended - so music has
-its own, much shorter limit: **15 seconds paused and the lights go off**, and
-they come straight back on the next track. Both limits are on the *Sync* page.
+lights wait minutes for it and the ghost waits with them, parked on standby.
+A phone that stops a track usually just leaves the session open in the
+background instead of closing it, and waiting for that to disappear means the
+lights stay on long after the music ended - so music has its own, much shorter
+limit: **15 seconds paused and the sync stops outright**. Not standby: the
+lights go off, the ghost is closed and the source stops looking busy, because
+nothing is coming back to a paused song. The next track starts it again from
+scratch. Both limits are on the *Sync* page.
 
 ## One PC, several rooms
 
@@ -181,7 +199,14 @@ one Hue Ghost is set to is re-applied when the mode changes - only an intensity
 *you* pick is taken as a new setting.
 
 All three are on **Home** and on the **Sync** page, and are exposed to Home
-Assistant and the CLI.
+Assistant and the CLI. They are the **defaults**: a source with a mode or an
+intensity of its own overrides them while it is the one playing, and hands them
+back when it stops.
+
+The chosen settings are re-applied whenever the **source** changes, not only
+when a new item starts. That matters because the two are not the same thing: an
+app on this PC can take the lights over from a phone that is still connected,
+and no source ever reports anything "new" at that moment.
 
 ## Tuning the timing (from the couch)
 
@@ -352,6 +377,21 @@ automation.
 
 ## Changelog
 
+- **2.8.0** - **Every source brings its own settings, and hand-overs work.**
+  Each row on the Sources page now carries a **mode** and an **intensity** as
+  well as an area, applied the moment it starts playing: *Apple TV -> Video,
+  Subtle*, *phone running a music app -> Music, High*. They were only ever
+  applied when a source reported a **new item**, which is not the same thing as
+  a source **winning**: an app on this PC taking the lights over from a client
+  that was still connected left Hue Sync in the previous source's mode and
+  area for the whole session. Two things fell out of the same gap: the losing
+  client's **ghost was never closed** (only the idle timer closed one, and it
+  does not run while something else plays), so an mpv could be left playing to
+  nobody for hours - it is now parked and closed like any other idle ghost; and
+  **paused music waited on standby** instead of stopping,
+  so a phone that stopped a track kept the source busy until it was switched
+  off by hand. Music now stops outright after its 15 seconds - lights off,
+  ghost closed - and starts again on the next track.
 - **2.7.0** - **Screen care for OLEDs.** Keeping the displays awake so Hue
   Sync can capture the ghost also meant hours of one static desktop on your
   real monitor. The ghost's picture now shifts a few pixels every 3 minutes

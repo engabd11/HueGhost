@@ -472,6 +472,12 @@ class HueSyncEngine(Engine):
                 return
             try:
                 self._reconcile(ws)
+            except (WebSocketClosed, WebSocketError, OSError):
+                # the socket is gone - usually because the reconcile itself
+                # restarted the app to apply an area. There is nothing to retry
+                # on a dead connection, and a stack trace for something we did
+                # on purpose is alarming: reconnect instead.
+                return
             except Exception:
                 # keep the connection: the next tick retries the reconcile
                 log.exception("reconcile failed - will retry")

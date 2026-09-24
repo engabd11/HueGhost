@@ -16,6 +16,8 @@
       "device_id": "tvOS_C51C221C-EXAMPLE",
       "client": "Swiftfin tvOS",
       "kinds": ["video", "music"],
+      "mode": "video",
+      "intensity": "subtle",
       "area_id": "",
       "area_name": ""
     },
@@ -26,6 +28,8 @@
       "device_id": "s4ZdiK0Ufso7lc-EXAMPLE",
       "client": "CAMusic",
       "kinds": ["music"],
+      "mode": "music",
+      "intensity": "high",
       "area_id": "",
       "area_name": ""
     },
@@ -36,6 +40,8 @@
       "device_id": "fa9d65da834b107f-EXAMPLE",
       "client": "Jellyfin for Android",
       "kinds": ["video"],
+      "mode": "",
+      "intensity": "",
       "area_id": "",
       "area_name": ""
     },
@@ -45,6 +51,7 @@
       "source": "pc",
       "exe": "chrome.exe",
       "mode": "video",
+      "intensity": "moderate",
       "detect": "audio",
       "area_id": "",
       "area_name": ""
@@ -101,6 +108,7 @@
       "manage_area": true,
       "manage_monitor": true,
       "manage_audio_device": true,
+      "min_session_s": 20.0,
       "required": false,
       "launch_exe": ""
     },

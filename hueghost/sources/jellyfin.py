@@ -79,7 +79,9 @@ class JellyfinSource(Source):
 
     def _plan(self, binding: dict | None, kind: str) -> Plan:
         b = binding or {}
-        want = self.cfg.get("engine.huesync.mode", "video")
+        # the binding's own setting first, the global one as the fallback: this
+        # is what lets the Apple TV be video/subtle and a phone music/high
+        want = (b.get("mode") or "").lower() or self.cfg.get("engine.huesync.mode", "video")
         # what the app must react to follows the media, not a global preference:
         # a song has no picture, an episode has no reason to be in music mode
         mode = "music" if kind == "music" else (want if want != "music" else "video")
@@ -90,7 +92,8 @@ class JellyfinSource(Source):
         return Plan(area_id=b.get("area_id") or None, mode=mode, monitor=monitor,
                     audio_device=adev,
                     use_audio=self.cfg.get("engine.huesync.use_audio"),
-                    intensity=self.cfg.get("engine.huesync.intensity") or None)
+                    intensity=(b.get("intensity")
+                               or self.cfg.get("engine.huesync.intensity") or None))
 
     def _ghost_spec(self, m, kind: str) -> GhostSpec:
         # kind is only passed for music, so every existing caller of the
