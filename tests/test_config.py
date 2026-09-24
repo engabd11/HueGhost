@@ -101,6 +101,34 @@ def test_music_binding_without_an_output_says_so():
     assert cfg.binding_problems({"source": "jellyfin", "device_id": "atv", "kinds": ["video"]}) == []
 
 
+def test_a_binding_keeps_its_own_mode_and_intensity():
+    """Each source is set up once and then simply played, so its mode and
+    intensity have to survive the round trip like any other field."""
+    cfg = Config({"jellyfin": {"url": "http://x", "api_key": "k"}})
+    cfg.set_bindings([
+        {"source": "jellyfin", "device_id": "atv", "name": "Apple TV",
+         "mode": "video", "intensity": "subtle"},
+        {"source": "jellyfin", "device_id": "s23", "client": "CAMusic", "name": "S23 music",
+         "mode": "music", "intensity": "high"},
+        {"source": "pc", "exe": "spotify.exe", "mode": "MUSIC", "intensity": "Extreme"},
+    ])
+    got = cfg.bindings()
+    assert [(b["mode"], b["intensity"]) for b in got] == [
+        ("video", "subtle"), ("music", "high"), ("music", "extreme")]
+
+
+def test_a_binding_with_no_settings_of_its_own_leaves_them_empty():
+    # "" means "whatever the global setting says"; only a PC app must declare a
+    # mode, because nothing else can tell a film from a game
+    cfg = Config({})
+    cfg.set_bindings([{"source": "jellyfin", "device_id": "atv"},
+                      {"source": "pc", "exe": "vlc.exe"},
+                      {"source": "jellyfin", "device_id": "tv", "mode": "nonsense",
+                       "intensity": "blinding"}])
+    got = cfg.bindings()
+    assert [(b["mode"], b["intensity"]) for b in got] == [("", ""), ("video", ""), ("", "")]
+
+
 def test_reload_picks_up_changes(tmp_path):
     p = tmp_path / "config.json"
     cfg = Config({"jellyfin": {"api_key": "a"}}, str(p))

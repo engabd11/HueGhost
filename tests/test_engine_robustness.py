@@ -59,6 +59,30 @@ def test_reconcile_crash_keeps_connection(app):
         app.close()
 
 
+def test_a_reconcile_on_a_dead_socket_reconnects_quietly(app):
+    """A reconcile that restarts the app closes the connection on purpose, so
+    the send that follows fails. That is a reconnect, not an error worth a
+    stack trace - and there is nothing to retry on a dead socket."""
+    eng = HueSyncEngine("127.0.0.1", app.port, mode="video", intensity="")
+    orig = eng._reconcile
+    calls = {"n": 0}
+
+    def flaky(ws):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise hs.WebSocketClosed("not connected")
+        orig(ws)
+
+    eng._reconcile = flaky
+    try:
+        eng.start()
+        assert wait(lambda: eng.state().syncing, 8.0)
+        assert app.connections >= 2 and eng.alive()
+    finally:
+        eng.close()
+        app.close()
+
+
 def test_run_survives_a_session_crash_and_reconnects(app):
     eng = HueSyncEngine("127.0.0.1", app.port, mode="video", intensity="")
     orig = eng._session

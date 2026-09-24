@@ -91,12 +91,28 @@ class MpvIpc:
             time.sleep(0.01)
         return b""
 
-    def _write(self, data: bytes) -> None:
+    def _write(self, data: bytes) -> bool:
+        """False when the connection has gone.
+
+        mpv exits on its own - end of file, the user closing the window - and a
+        command already on its way at that moment used to raise out of
+        ``apply()``, through the daemon tick, and take the whole daemon down
+        with it. That left the ghost mpv orphaned, playing to nobody. The
+        daemon notices the exit on its next tick through ``alive()``; until
+        then a write that cannot land is simply a write that cannot land."""
         with self._lock:
-            if self._sock is not None:
-                self._sock.sendall(data)
-            else:
-                self._fh.write(data)  # type: ignore[union-attr]
+            if self.closed:
+                return False
+            try:
+                if self._sock is not None:
+                    self._sock.sendall(data)
+                else:
+                    self._fh.write(data)  # type: ignore[union-attr]
+            except (OSError, ValueError) as e:
+                self.closed = True
+                log.debug("mpv IPC write failed (%s); mpv has gone", e)
+                return False
+            return True
 
     def _read_loop(self) -> None:
         buf = b""
@@ -133,9 +149,9 @@ class MpvIpc:
                 log.exception("ipc event handler failed")
 
     # -- commands ------------------------------------------------------------
-    def send(self, *cmd: Any) -> None:
-        """Fire-and-forget command."""
-        self._write((json.dumps({"command": list(cmd)}) + "\n").encode("utf-8"))
+    def send(self, *cmd: Any) -> bool:
+        """Fire-and-forget command. False when mpv has gone."""
+        return self._write((json.dumps({"command": list(cmd)}) + "\n").encode("utf-8"))
 
     def request(self, *cmd: Any, timeout: float = 2.0) -> dict | None:
         with self._lock:
@@ -143,7 +159,9 @@ class MpvIpc:
             rid = self._req_id
         ev, box = threading.Event(), []
         self._pending[rid] = (ev, box)
-        self._write((json.dumps({"command": list(cmd), "request_id": rid}) + "\n").encode("utf-8"))
+        if not self._write((json.dumps({"command": list(cmd), "request_id": rid}) + "\n").encode("utf-8")):
+            self._pending.pop(rid, None)
+            return None              # no point waiting out the timeout on a dead pipe
         if ev.wait(timeout):
             return box[0] if box else None
         self._pending.pop(rid, None)

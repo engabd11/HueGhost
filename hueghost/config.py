@@ -99,6 +99,10 @@ DEFAULTS: dict[str, Any] = {
             "manage_area": True,     # False -> never take the app's entertainment area over
             "manage_monitor": True,  # False -> never change which display it captures
             "manage_audio_device": True,   # False -> never change its music-mode input
+            # how long the source that got the lights keeps them when another one
+            # outranks it: switching costs a Hue Sync restart, so two things
+            # playing at once must not trade the app back and forth
+            "min_session_s": 20.0,
             "required": False,       # True -> ghost only runs when Hue Sync is reachable
             "launch_exe": "",        # optional path to HueSync.exe to start when absent
         },
@@ -140,8 +144,14 @@ def _binding(b: dict) -> dict:
     nowhere else - this is the only shape the rest of the app ever sees."""
     src = b.get("source") if b.get("source") in SOURCE_KINDS else "jellyfin"
     mode = str(b.get("mode", "") or "").lower()
-    if src == "pc" and mode not in MODES:
-        mode = "video"
+    if mode not in MODES:
+        # An app on this PC has to declare what it is - nothing else can tell a
+        # film from a game. A Jellyfin client knows what it is playing, so ""
+        # there means "follow the media": music mode for a song, video for the rest.
+        mode = "video" if src == "pc" else ""
+    level = str(b.get("intensity", "") or "").lower()
+    if level not in INTENSITIES:
+        level = ""                   # "" = whatever the global intensity is set to
     detect = str(b.get("detect", "") or "").lower()
     if detect not in DETECT_MODES:
         # sound is what tells a playing video from an open window; a game is
@@ -165,7 +175,11 @@ def _binding(b: dict) -> dict:
         "kinds": kinds,
         "exe": str(b.get("exe", "") or "").lower(),
         "detect": detect,
+        # what Hue Sync is put into while THIS one plays, so every source can be
+        # set up once and then simply played: Apple TV -> video/subtle, a phone
+        # running CAMusic -> music/high
         "mode": mode,
+        "intensity": level,
         "area_id": str(b.get("area_id", "") or ""),
         "area_name": str(b.get("area_name", "") or ""),
         "monitor": str(b.get("monitor", "") or ""),
