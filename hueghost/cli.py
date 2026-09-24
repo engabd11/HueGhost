@@ -152,9 +152,11 @@ def cmd_status(args) -> int:
     print("  engine   : %s  connected=%s  state=%s  mode=%s  intensity=%s  bri=%s%s" % (
         e["name"], e["connected"], e["state"], e["mode"], e["intensity"], e["bri"],
         ("  error=" + e["error"]) if e.get("error") else ""))
-    print("  offset   : %+.2fs   wanted: mode %s, intensity %s, audio %s" % (
-        st["offset_s"], st.get("mode"), st["intensity"],
-        {True: "on", False: "off"}.get(st.get("use_audio"), "app's own")))
+    print("  live     : mode %s, intensity %s, audio %s   (defaults: %s / %s)" % (
+        st.get("mode"), st["intensity"],
+        {True: "on", False: "off"}.get(st.get("use_audio"), "app's own"),
+        st.get("mode_default"), st.get("intensity_default")))
+    print("  offset   : %+.2fs" % st["offset_s"])
     dl = st.get("drift_last_minute")
     if dl:
         print("  last min : mean|drift| %.3fs  p95 %.3fs  max %.3fs  seeks %d" % (

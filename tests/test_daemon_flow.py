@@ -365,6 +365,79 @@ def test_the_client_coming_back_takes_its_own_plan_with_it(world):
     assert world.ghost is not None and world.d._plan_applied.mode == "video"
 
 
+def test_home_reports_the_mode_and_intensity_that_are_live(world):
+    """Every source carries its own mode and intensity now, so the global
+    settings are only a fallback. Reporting them left every control that shows
+    "the mode" - Home, the tray, the CLI, Home Assistant - on whatever the
+    previous session happened to leave behind, all through this one."""
+    from hueghost.engines import EngineState
+
+    d = world.d
+    d.cfg.set("engine.huesync.mode", "music")          # left over from last time
+    d.cfg.set("engine.huesync.intensity", "high")
+    d.engine.state = lambda: EngineState(name="x", connected=True, syncing=True,
+                                         mode="video", intensity="subtle")
+    st = d.status()
+    assert (st["mode"], st["intensity"]) == ("video", "subtle")
+    assert (st["mode_default"], st["intensity_default"]) == ("music", "high")
+    assert (st["engine"]["mode"], st["engine"]["intensity"]) == ("video", "subtle")
+
+
+def test_a_mode_hue_ghost_has_no_control_for_falls_back_to_the_default(world):
+    """Hue Sync also has "scenes", which syncs nothing and has no button here -
+    and before it connects there is nothing live to report at all."""
+    from hueghost.engines import EngineState
+
+    d = world.d
+    d.cfg.set("engine.huesync.mode", "video")
+    d.cfg.set("engine.huesync.intensity", "high")
+    d.engine.state = lambda: EngineState(name="x", connected=True, mode="scenes")
+    assert (d.status()["mode"], d.status()["intensity"]) == ("video", "high")
+    d.engine.state = lambda: EngineState(name="x", connected=False)
+    assert (d.status()["mode"], d.status()["intensity"]) == ("video", "high")
+
+
+def test_the_controls_follow_the_hue_sync_app_across_a_restart(world):
+    """Hue Ghost restarts the app itself to apply an area, and the user can
+    restart it too. The engine keeps the last mode and intensity the app
+    reported while the socket is down, so the controls hold what the app said
+    instead of flicking back to a saved default mid-restart - and they pick up
+    whatever it says the moment it is back."""
+    from hueghost.engines import EngineState
+
+    d = world.d
+    d.cfg.set("engine.huesync.mode", "music")        # a stale default, nobody chose it
+    d.cfg.set("engine.huesync.intensity", "high")
+    live = {"mode": "video", "intensity": "subtle", "connected": True, "state": "syncing"}
+    d.engine.state = lambda: EngineState(name="x", **live)
+    assert (d.status()["mode"], d.status()["intensity"]) == ("video", "subtle")
+    live.update(connected=False, state=None)         # the app is killed to apply an area
+    assert (d.status()["mode"], d.status()["intensity"]) == ("video", "subtle")
+    live.update(connected=True, state="syncing", mode="games", intensity="extreme")
+    assert (d.status()["mode"], d.status()["intensity"]) == ("games", "extreme")
+
+
+def test_a_mode_picked_in_the_app_is_not_saved_over_a_source_that_sets_its_own(world):
+    """The saved setting is the default for sources that have *not* chosen a
+    mode of their own, so a mode picked during one film must not quietly
+    become every other source's. The engine keeps the user's choice for the
+    session either way; only where it is stored changes."""
+    d = world.d
+    d.cfg.set("engine.huesync.mode", "video")
+    world.step(1.0, playing(100.0, 0.5))
+    assert d.last_act.playing and d.last_act.binding is not None
+
+    d.last_act.binding["mode"] = "video"             # this source sets its own
+    d._engine_events.put({"mode": "music"})
+    d._drain_engine_events()
+    assert d.cfg.get("engine.huesync.mode") == "video", "the default must not drift"
+
+    d.last_act.binding["mode"] = ""                  # this one leaves it to the default
+    d._engine_events.put({"mode": "music"})
+    d._drain_engine_events()
+    assert d.cfg.get("engine.huesync.mode") == "music"
+
+
 def test_a_paused_film_is_not_held_to_the_music_limit(world):
     """The music limit must not leak into video: a film paused for 20 s is
     still a film someone is coming back to."""

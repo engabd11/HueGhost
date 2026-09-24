@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "hue-ghost"
-version = "2.8.0"
+version = "2.8.1"
 description = "Software Hue Sync Box for Jellyfin: sync Philips Hue lights to a TV client by ghosting its playback on a PC running the Hue Sync app"
 readme = "README.md"
 requires-python = ">=3.10"

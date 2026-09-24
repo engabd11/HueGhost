@@ -191,12 +191,20 @@ only reads at start-up, so choosing On or Off restarts Hue Sync (~3 s) - applied
 in the same restart as an area change, never twice, and written for Video *and*
 Games together so that switching between them afterwards stays free.
 
-**Hue Ghost mirrors the app.** Change the mode or the intensity in Hue Sync
-itself while a sync is running and Hue Ghost adopts it: it stops asserting its
-own choice and saves yours, so Home, the tray, the API and Home Assistant all
-show what Hue Sync is really doing. Hue Sync keeps an intensity per mode, so the
-one Hue Ghost is set to is re-applied when the mode changes - only an intensity
-*you* pick is taken as a new setting.
+**The controls follow the Hue Sync app, always.** Mode and intensity on Home,
+in the tray, over the API and in Home Assistant show what the app is really
+doing - not what is saved here. Change either one in Hue Sync itself and the
+buttons move with it; Hue Ghost stops asserting its own choice for the rest of
+that session. They keep following it across the restart Hue Ghost performs to
+apply an entertainment area, too: while the socket is down the last thing the
+app said stands, and the first update after it is back wins. Hue Sync keeps an
+intensity per mode, so the one Hue Ghost is set to is re-applied when the mode
+changes - only an intensity *you* pick is taken as a new setting.
+
+What gets **saved** is narrower. The settings below are the default for sources
+that have not chosen a mode or an intensity of their own, so a change made
+while a source that *has* chosen one is playing is kept for the session and no
+further: saving it would quietly hand one film's choice to every other source.
 
 All three are on **Home** and on the **Sync** page, and are exposed to Home
 Assistant and the CLI. They are the **defaults**: a source with a mode or an
@@ -377,6 +385,19 @@ automation.
 
 ## Changelog
 
+- **2.8.1** - **The Home controls follow the Hue Sync app.** With a mode and an
+  intensity per source, the saved settings became a *default* - but Home, the
+  tray, the CLI and Home Assistant still read them, so the buttons sat on the
+  previous session's choice while the app reported something else entirely
+  (`mode video · intensity subtle` next to **Music** and **High** lit up). They
+  report what the engine is really set to now, falling back to the saved
+  default only for a mode Hue Ghost has no button for (Hue Sync's "scenes") or
+  before the app has said anything at all - so they also hold steady through
+  the restart that applies an entertainment area. `/status` gains
+  `mode_default` and `intensity_default`. Related: a mode or intensity picked
+  in the Hue Sync app is no longer saved over the global default while a source
+  that sets its own is playing - that is how a config ends up defaulting to
+  something nobody chose.
 - **2.8.0** - **Every source brings its own settings, and hand-overs work.**
   Each row on the Sources page now carries a **mode** and an **intensity** as
   well as an area, applied the moment it starts playing: *Apple TV -> Video,
