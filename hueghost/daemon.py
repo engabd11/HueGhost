@@ -814,6 +814,7 @@ class Daemon:
             m = obs.model if obs else None
             now = time.monotonic()
             g = self.ghost
+            est = self.engine.state()
             f = self.cfg.get("jellyfin.follow", {}) or {}
             target = (m.position_at(now) + self.offset) if m else None
             drift = (g.pos - target) if (g and g.pos is not None and target is not None) else None
@@ -877,14 +878,29 @@ class Daemon:
                 },
                 "drift_s": round(drift, 3) if drift is not None else None,
                 "drift_last_minute": self.stats.last_summary,
-                "engine": self.engine.state().as_dict(),
+                "engine": est.as_dict(),
                 "offset_s": self.offset,
-                "intensity": self.cfg.get("engine.huesync.intensity"),
-                "mode": self.cfg.get("engine.huesync.mode"),
+                # What is live, not what the config defaults to. Since every
+                # source carries its own mode and intensity, the global settings
+                # are only the fallback - reporting them left every control that
+                # shows "the mode" (Home, the tray, the CLI, Home Assistant) on
+                # the previous session's choice for the whole of this one.
+                "intensity": self._live("intensity", est.intensity, INTENSITIES),
+                "mode": self._live("mode", est.mode, MODES),
+                "intensity_default": self.cfg.get("engine.huesync.intensity"),
+                "mode_default": self.cfg.get("engine.huesync.mode"),
                 "use_audio": self.cfg.get("engine.huesync.use_audio"),
                 "manage_area": bool(self.cfg.get("engine.huesync.manage_area", True)),
                 "lights_off_delay_s": self.lights_off_delay,
             }
+
+    def _live(self, key: str, value: str | None, allowed: tuple) -> str | None:
+        """What the engine is really set to, falling back to the global default.
+
+        The engine has nothing to report before it connects, and Hue Sync also
+        has modes hue-ghost has no control for ("scenes"), so a value that is
+        not one of ours is not one to show."""
+        return value if value in allowed else self.cfg.get("engine.huesync." + key)
 
     def ui_url(self) -> str:
         c = self.cfg.section("control")
@@ -1028,11 +1044,19 @@ class Daemon:
     def _drain_engine_events(self) -> None:
         """Adopt what the user changed in the engine's own app.
 
-        Everything that shows mode and intensity - the window, the tray, the API,
-        Home Assistant - reads them from the config, so persisting here is all it
-        takes for the whole app to mirror Hue Sync. Deliberately no
-        ``_push_engine_prefs()``: the engine already holds the value, and pushing
-        it back is precisely the feedback loop this is meant to avoid."""
+        The engine has already stopped asserting its own choice, so the change
+        is live either way; this decides where it is *kept*. Deliberately no
+        ``_push_engine_prefs()``: the engine already holds the value, and
+        pushing it back is precisely the feedback loop this is meant to avoid.
+
+        What is saved is the **global default**, which is what sources that
+        have not chosen a mode or an intensity of their own fall back to. So a
+        source that *has* chosen one keeps its choice out of it: the engine
+        holds what the user picked for the rest of this session, and the source
+        re-asserts its own at the next. Saving it globally instead would let a
+        mode picked during a film quietly become the setting for every other
+        source - which is exactly how a config ends up defaulting to something
+        nobody chose."""
         got: dict = {}
         while True:
             try:
@@ -1041,24 +1065,39 @@ class Daemon:
                 break
         if not got:
             return
-        changed = False
-        if got.get("mode") in MODES and self.cfg.get("engine.huesync.mode") != got["mode"]:
-            self.cfg.set("engine.huesync.mode", got["mode"])
-            changed = True
-        if got.get("intensity") in INTENSITIES                 and self.cfg.get("engine.huesync.intensity") != got["intensity"]:
-            self.cfg.set("engine.huesync.intensity", got["intensity"])
-            changed = True
-        if not changed:
+        saved, held = {}, []
+        for field, allowed in (("mode", MODES), ("intensity", INTENSITIES)):
+            v = got.get(field)
+            if v not in allowed:
+                continue
+            if self._source_sets_its_own(field):
+                held.append(field)
+                continue
+            if self.cfg.get("engine.huesync." + field) != v:
+                self.cfg.set("engine.huesync." + field, v)
+                saved[field] = v
+        if held:
+            log.info("%s changed in the Hue Sync app; kept for this session ('%s' sets its own)",
+                     " and ".join(held),
+                     _asc((self.last_act.binding or {}).get("name") or "the source playing"))
+        if not saved:
             # e.g. Hue Sync's "scenes", which hue-ghost has no setting for: the
             # engine stops fighting it, but the saved config stays one we can run
-            log.debug("Hue Sync is in %s; nothing hue-ghost stores, leaving the config alone", got)
+            log.debug("Hue Sync is in %s; nothing new to store, leaving the config alone", got)
             return
-        log.info("adopted from the Hue Sync app: %s", got)
+        log.info("adopted from the Hue Sync app: %s", saved)
         if self.cfg.path:
             try:
                 self.cfg.save()
             except OSError as e:
                 log.warning("could not persist the adopted settings: %s", e)
+
+    def _source_sets_its_own(self, field: str) -> bool:
+        """Whether the binding currently driving the lights carries its own
+        value for ``mode`` or ``intensity``."""
+        act = self.last_act
+        b = act.binding if act.playing else None
+        return bool(b and (b.get(field) or ""))
 
     def _pause_stop_limit_s(self, m) -> float:
         """How long the followed client may sit paused before the lights go out.
