@@ -7,6 +7,8 @@ sessions), mpv is a FakeGhost, the light engine is the NullEngine (its
 ``syncing`` mirrors ``desired_sync``), and the Windows power helpers are
 recorded instead of called.
 """
+import time
+
 import pytest
 
 from hueghost import daemon as dm
@@ -357,7 +359,10 @@ def test_healthy_run_refunds_the_launch_budget(world):
     world.step(1.0, _music(30.0, 0.5, item="track1"))
     g = world.ghost
     world.d._launches.extend([MONO0 + world.t] * 5)    # a storm's worth of launches
-    g.started_mono = MONO0 + world.t - 60              # but this one ran 60 s
+    # _stop_ghost measures the run against the REAL clock (it has no tick);
+    # a fresh CI runner's time.monotonic() can be seconds past boot, so the
+    # fake ghost's age must be set on the same real clock.
+    g.started_mono = time.monotonic() - 60             # but this one ran 60 s
     g.end_reason = "eof"
     g._alive = False
     world.step(1.0, _music(1.0, world.t, item="track2"))
