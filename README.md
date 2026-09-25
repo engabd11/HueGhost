@@ -385,6 +385,25 @@ automation.
 
 ## Changelog
 
+- **2.9.0** - **Music that changes track no longer blinks the lights.** Skipping
+  a song on a music source used to tear the whole session down - stop the
+  sync, kill the ghost, launch a new one, start the sync again - so the lights
+  went dark for a second between songs. The music ghost is invisible and the
+  lights ride on the audio endpoint, not on a picture, so a track change now
+  swaps the file the live ghost plays (`loadfile`) and the sync simply
+  continues; the ghost lands on the new track's anchor with a forced seek. The
+  same for the moment the ghost itself reaches the end of a track: the engine
+  stays on until the client reports the next one (or the idle path stops the
+  lights, when nothing follows). Also fixed: two ways a music session could
+  take 10+ seconds to start. A client that finished a song sits at its last
+  position, and launching a ghost there sent mpv past the end of the file,
+  where it died rc=2 in a loop - launches now refuse positions at/after the
+  end of the track and clamp the start inside it. And when the configured
+  ghost audio output is missing (it rides on its display; asleep, it is gone),
+  mpv died the same way - the daemon now checks the endpoint first, wakes the
+  display to bring it back, and launches only once it is there. A ghost that
+  ran for 30 s or more no longer counts against the launch rate guard, so one
+  rough patch of deaths cannot block the next track for minutes.
 - **2.8.1** - **The Home controls follow the Hue Sync app.** With a mode and an
   intensity per source, the saved settings became a *default* - but Home, the
   tray, the CLI and Home Assistant still read them, so the buttons sat on the

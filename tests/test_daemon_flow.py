@@ -32,9 +32,11 @@ class FakeGhost:
         self.end_reason = None
         self.user_quit = False
         self.last_seek_mono = float("-inf")
+        self.started_mono = float("inf")   # "ran for ever": never a healthy refund by accident
         self.seeks = 0
         self.nudges = 0
         self.actions = []
+        self.swapped: list[str] = []
 
     class _Proc:
         pid = 4242            # the PC probe is told to ignore our own ghost
@@ -70,6 +72,14 @@ class FakeGhost:
                 self.last_seek_mono = now
                 self.seeks += 1
 
+    def swap(self, url: str) -> bool:
+        self.swapped.append(url)
+        self.end_reason = None
+        self.eof = False
+        self.paused = False
+        self._time_pos = 0.0     # the new file's first position
+        return True
+
 
 class Power:
     def __init__(self):
@@ -98,6 +108,7 @@ def world(monkeypatch, tmp_path):
     monkeypatch.setattr(dm, "keep_awake", power.keep_awake)
     monkeypatch.setattr(dm, "wake_display", power.wake)
     monkeypatch.setattr(dm, "desktop_locked", lambda: False)
+    monkeypatch.setattr(dm, "audio_endpoint_present", lambda endpoint: True)
     launched = []
 
     def launch(cfg_, url, hdr, start, item_id, err_path=None, **kw):
@@ -256,12 +267,12 @@ def test_settings_action_validates_keep_awake(world):
         world.d.action("set", {"keep_awake": "sometimes"})
 
 
-def _music(pos, t, paused=False):
+def _music(pos, t, paused=False, item="track1", runtime=240.0):
     """One music session, as a phone app reports it."""
-    s = session(pos, paused, LOCAL0 + t, item="track1")
-    s["NowPlayingItem"] = {"Id": "track1", "Name": "Song", "MediaType": "Audio",
+    s = session(pos, paused, LOCAL0 + t, item=item)
+    s["NowPlayingItem"] = {"Id": item, "Name": "Song", "MediaType": "Audio",
                            "Type": "Audio", "Album": "Album",
-                           "RunTimeTicks": int(240 * 10_000_000)}
+                           "RunTimeTicks": int(runtime * 10_000_000)}
     return [s]
 
 
@@ -289,6 +300,94 @@ def test_music_paused_in_the_background_stops_instead_of_waiting_on_standby(worl
     world.step(1.0, _music(31.0, world.t))
     assert world.engine_on and world.d.state == SYNCING
     assert world.ghost is not None and len(world.launched) == 2
+
+
+def test_music_skip_hot_swaps_without_stopping_the_lights(world):
+    """Skipping a song on a music source must not blink the lights: the ghost
+    swaps files in place and the engine never stops."""
+    world.d.cfg.set("ghost.audio_device", "{0.0.0.00000000}.{silent}")
+    world.step(1.0, _music(30.0, 0.5))
+    g = world.ghost
+    assert world.engine_on and len(world.launched) == 1
+    world.step(1.0, _music(1.0, world.t, item="track2"))
+    assert world.ghost is g, "the track change must keep the ghost process"
+    assert g.item_id == "track2" and g.swapped == ["http://jf/stream/track2"]
+    assert len(world.launched) == 1, "a swap must not consume a launch"
+    assert world.engine_on and world.d.state == SYNCING
+    world.step(2.0)
+    assert any(isinstance(a, Seek) for a in g.actions), "it lands on the new anchor"
+
+
+def test_music_eof_between_tracks_keeps_the_engine(world):
+    """The ghost reaches the end of its file a moment before the client reports
+    the next track: that gap used to stop and restart the sync."""
+    world.d.cfg.set("ghost.audio_device", "{0.0.0.00000000}.{silent}")
+    world.step(1.0, _music(30.0, 0.5, item="track1"))
+    g = world.ghost
+    g.end_reason = "eof"
+    g._alive = False
+    world.step(1.0, _music(239.0, world.t, item="track1"))
+    assert world.engine_on, "the engine rides through the eof gap"
+    assert world.ghost is None and world.d._eof_item == "track1"
+    assert len(world.launched) == 1, "the finished track is not relaunched"
+    world.step(1.0, _music(1.0, world.t, item="track2"))
+    assert world.ghost is not None and world.ghost.item_id == "track2"
+    assert len(world.launched) == 2 and world.engine_on
+
+
+def test_finished_track_does_not_launch_a_ghost(world):
+    """A phone that finished a song sits at its last position; launching a
+    ghost there sent mpv past the end of the file, where it died rc=2 in a
+    loop and burned the launch budget (the 10 s sync starts)."""
+    world.d.cfg.set("ghost.audio_device", "{0.0.0.00000000}.{silent}")
+    world.step(1.0, _music(239.9, 0.5, item="track1"))
+    assert world.ghost is None and len(world.launched) == 0
+    world.step(2.0, _music(239.9, world.t, item="track1"))
+    assert world.ghost is None and len(world.launched) == 0, "still waiting: the track is over"
+    world.step(1.0, _music(238.0, world.t, item="track2"))
+    assert len(world.launched) == 1 and world.ghost.item_id == "track2"
+    assert world.launched[0]._time_pos <= 239.0, "the start never lands past the end of the file"
+
+
+def test_healthy_run_refunds_the_launch_budget(world):
+    """A ghost that ran for real (>=30 s) proves the environment works: its
+    launch must stop counting against the crash-loop window, or one rough
+    patch of rc=2 deaths blocks the next track for minutes."""
+    world.d.cfg.set("ghost.audio_device", "{0.0.0.00000000}.{silent}")
+    world.step(1.0, _music(30.0, 0.5, item="track1"))
+    g = world.ghost
+    world.d._launches.extend([MONO0 + world.t] * 5)    # a storm's worth of launches
+    g.started_mono = MONO0 + world.t - 60              # but this one ran 60 s
+    g.end_reason = "eof"
+    g._alive = False
+    world.step(1.0, _music(1.0, world.t, item="track2"))
+    assert world.ghost is not None and len(world.launched) == 2, "the refund happened"
+
+
+def test_missing_audio_output_blocks_launch_and_wakes_the_display(world, monkeypatch):
+    """The endpoint the ghost's music plays into rides on a display; asleep, it
+    vanishes. No launch then (mpv would die rc=2) - wake the display instead
+    and retry on a later poll."""
+    monkeypatch.setattr(dm, "audio_endpoint_present", lambda endpoint: False)
+    world.d.cfg.set("ghost.audio_device", "{0.0.0.00000000}.{silent}")
+    world.step(1.0, _music(30.0, 0.5))
+    assert world.ghost is None and len(world.launched) == 0
+    assert ("wake",) in world.power.calls
+    world.step(2.0, _music(31.0, world.t))
+    assert world.ghost is None, "still no launch while the endpoint is gone"
+    monkeypatch.setattr(dm, "audio_endpoint_present", lambda endpoint: True)
+    world.step(1.0, _music(32.0, world.t))
+    assert world.ghost is not None and world.engine_on
+
+
+def test_video_item_change_still_relaunches(world):
+    """Only music hot-swaps: a video ghost swap would show the wrong picture on
+    the captured display, so a new item keeps the stop/relaunch dance."""
+    world.step(1.0, playing(100.0, 0.5))
+    g = world.ghost
+    world.step(1.0, [session(5.0, False, LOCAL0 + world.t, item="item2")])
+    assert world.ghost is not g and world.ghost.item_id == "item2"
+    assert len(world.launched) == 2 and world.engine_on
 
 
 class FakePcSource(Source):
