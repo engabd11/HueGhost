@@ -392,5 +392,27 @@ class GhostPlayer:
         self.ipc.send("set_property", "video-pan-x", x)
         self.ipc.send("set_property", "video-pan-y", y)
 
+    def swap(self, url: str) -> bool:
+        """Swap what this ghost is playing without leaving the process.
+
+        A music track change is only another file in the same invisible player:
+        killing mpv for it stopped the sync and started it again, blinking the
+        lights between songs. The daemon forces a seek to the new track's
+        anchor once the new file's first position arrives. False when mpv has
+        gone - the caller falls back to a full relaunch."""
+        ok = self.ipc.send("loadfile", url, "replace")
+        self._time_pos = None
+        self._time_pos_mono = 0.0
+        self.paused = False
+        self.speed = 1.0
+        self.buffering = False
+        self.eof = False
+        self.core_idle = True
+        self.user_quit = False
+        self.end_reason = None
+        self.seeks = 0
+        self.nudges = 0
+        return ok
+
     def toggle_fullscreen(self) -> None:
         self.ipc.send("cycle", "fullscreen")

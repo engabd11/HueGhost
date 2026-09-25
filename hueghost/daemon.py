@@ -62,6 +62,24 @@ def _tri_state(v) -> bool | None:
     return bool(v)
 
 
+def audio_endpoint_present(endpoint_id: str) -> bool:
+    """Whether the render endpoint the ghost's music plays into exists right now.
+
+    HDMI/DP audio rides on its display: the display goes to sleep and the
+    endpoint disappears with it - and mpv then dies (rc=2) the moment it opens
+    a file pinned to the missing device. Best effort: True when we cannot tell
+    (not Windows, audio service stopped, old endpoint-id shape)."""
+    try:
+        from .winutil import list_audio_outputs
+
+        outputs = list_audio_outputs() or []
+    except Exception:
+        return True
+    want = str(endpoint_id).rsplit(".", 1)[-1].strip().strip("{}").lower()
+    return any(str(getattr(o, "guid", "") or "").strip("{}").lower() == want
+               for o in outputs)
+
+
 def pause_stop_due(paused_since: float | None, now: float, limit_s: float,
                    already_stopped: bool) -> bool:
     """True when sync should stop because the followed client has been paused
@@ -159,6 +177,7 @@ class Daemon:
         self._parked_since: float | None = None  # ... and since when another one has the lights
         self._pause_stopped: str | None = None   # item stopped for sitting paused
         self._eof_item: str | None = None
+        self._adev_warned: str | None = None
         self._last_report_count = 0
         self._stalls_saved_mono = float("-inf")
         self._startup_latency = 1.0   # EMA of launch -> first time-pos
@@ -415,8 +434,9 @@ class Daemon:
         if act.event == "new_item" and obs.stale:
             log.warning("first report for '%s' is stale (>30 s old); position may be off", _asc(m.name))
         if self.ghost is not None and self.ghost.item_id != m.item_id:
-            log.info("followed client switched to '%s' -> relaunching ghost", _asc(m.name))
-            self._stop_ghost("item changed")
+            if not self._swap_ghost(now, act, m):
+                log.info("followed client switched to '%s' -> relaunching ghost", _asc(m.name))
+                self._stop_ghost("item changed")
         if self.ghost is None:
             self._maybe_launch(now, act)
         elif act.event in ("seek", "resume", "new_item", "resync"):
@@ -450,6 +470,34 @@ class Daemon:
                  (" -> " + _asc(b.get("area_name"))) if b.get("area_name") else "")
         self.engine.apply_plan(act.plan)
         self._plan_applied = act.plan
+
+    def _swap_ghost(self, now: float, act, m) -> bool:
+        """A music source moved on to the next track: swap the file the live
+        ghost plays instead of tearing the whole session down.
+
+        The music ghost is invisible - the lights ride on the audio endpoint,
+        not on a picture - so stopping the engine for every track only made
+        the lights blink off and on between songs. False when a swap is not
+        possible (video ghost, another binding won, mpv has gone) and the
+        caller must relaunch."""
+        spec = act.ghost
+        g = self.ghost
+        if g is None or not self._ghost_audio_only or spec is None or not spec.audio_only:
+            return False
+        if self._ghost_binding != ((act.binding or {}).get("id") or None):
+            return False              # a different binding won: give it a fresh ghost
+        if not g.alive() or not g.swap(spec.url):
+            return False              # mpv has gone: relaunch
+        g.item_id = m.item_id
+        self._last_launch_item = m.item_id
+        self._eof_item = None
+        self._pending_seek = True     # land exactly on the new track's anchor
+        self._paused_since = None
+        if self._standby is not None:
+            self._lights_on("the next track is here")
+        log.info("'%s' playing on %s -> hot-swapping the track (lights stay on)",
+                 _asc(m.name), _asc((act.binding or {}).get("name") or "?"))
+        return True
 
     def _hand_over(self, now: float, act) -> None:
         """A different binding won: park the ghost the old one left behind, and
@@ -547,6 +595,15 @@ class Daemon:
         if self._engine_started:
             self.engine.start()
 
+    def _refund_launch(self, g, now: float) -> None:
+        """A ghost that ran for >= 30 s proves its environment works: forget its
+        launch (and any older ones), or one rough patch of rc=2 deaths keeps
+        the rate guard blocking relaunches - and the next track with them -
+        for minutes afterwards."""
+        started = getattr(g, "started_mono", None)
+        if started is not None and now - started >= 30 and not g.user_quit:
+            self._launches.clear()
+
     def _persist_stalls(self, now: float) -> None:
         st = self.watcher.stalls
         if not st.changed or now - self._stalls_saved_mono < 60 or not self.cfg.path:
@@ -580,6 +637,14 @@ class Daemon:
             self._eof_item = None
         if self._pause_stopped == m.item_id and m.paused:
             return                  # stopped because it sat paused; wait for play
+        target = m.position_at(now) + self.offset
+        runtime = m.runtime_s
+        if runtime and target >= runtime - 0.5:
+            # the track is already over: a phone that finished a song sits at
+            # its last position, and launching a ghost there sends mpv past the
+            # end of the file, where it dies (rc=2) - over and over, burning
+            # the launch budget. Wait for the client to report the next track.
+            return
         self._launches = deque(t for t in self._launches if now - t < 300)
         same_item = m.item_id == self._last_launch_item
         cooldown_ok = (not same_item) or (now - self._last_launch >= float(g.get("relaunch_cooldown_s", 5.0)))
@@ -591,14 +656,27 @@ class Daemon:
             return
         if not cooldown_ok:
             return
-        target = m.position_at(now) + self.offset
         held = m.paused or m.frozen(now)
         start = target + (0.0 if held else self._startup_latency)
+        if runtime:
+            start = min(start, max(0.0, runtime - 1.0))   # never start past the end
         log.info("'%s' playing on %s -> ghost at %.1fs (offset %+.2fs, startup est %.2fs)",
                  _asc(m.name), _asc(obs.report.device_label if obs.report else "?"), start,
                  self.offset, self._startup_latency)
         if spec is None or not spec.audio_only:
             self._prepare_display()      # music has no picture: no display to wake
+        else:
+            adev = spec.audio_device or ""
+            if adev and not audio_endpoint_present(adev):
+                # HDMI/DP audio lives on its display: asleep, the endpoint is
+                # gone, and mpv would die rc=2 opening the file. Wake the
+                # display (that brings the endpoint back) and retry next poll.
+                if self._adev_warned != m.item_id:
+                    self._adev_warned = m.item_id
+                    log.warning("the ghost's audio output %s is not present - waking the "
+                                "display; launching when it is back", adev)
+                wake_display()
+                return
         extra = {"audio_only": True, "audio_device": spec.audio_device} if spec.audio_only else {}
         self._ghost_audio_only = bool(spec.audio_only)
         try:
@@ -652,16 +730,29 @@ class Daemon:
             log.info("ghost mpv exited (rc=%s, reason=%s)", rc, reason)
             g.kill()
             self.ghost = None
+            if reason == "eof":
+                self._eof_item = g.item_id
+            self._refund_launch(g, now)
+            if g.user_quit:
+                self.enabled = False
+                log.info("ghost closed by user -> sync disabled (hue-ghost on / tray to re-enable)")
+            act = self.last_act
+            if self._ghost_audio_only and not g.user_quit and bool(getattr(act, "playing", False)):
+                # Music: the lights ride on the audio endpoint, not on a
+                # picture, so there is nothing to stop for. Keep the engine
+                # through the gap; the next track relaunches the ghost without
+                # a stop/start blink, and if nothing follows the idle path
+                # stops the lights after their usual delay.
+                self.state = SYNCING if self._engine_started else GHOSTING
+                self._paused_since = None
+                self._standby = None
+                self._idle_since = None
+                return
             self.state = IDLE
             self.engine.stop()
             self._paused_since = None
             self._standby = None
             self._idle_since = None
-            if reason == "eof":
-                self._eof_item = g.item_id
-            if g.user_quit:
-                self.enabled = False
-                log.info("ghost closed by user -> sync disabled (hue-ghost on / tray to re-enable)")
             return
 
         obs = self.last_obs
@@ -693,7 +784,15 @@ class Daemon:
                 # process doing nothing and a source that looks busy for ever.
                 log.info("music paused for %.0f s -> sync off (nothing kept on standby)", held)
                 self._pause_stopped = m.item_id
-                self._stop_ghost("music paused")
+                if self.ghost is not None:
+                    self._stop_ghost("music paused")
+                    return
+                self.engine.stop()      # the ghost is already gone (e.g. eof):
+                self._engine_started = False
+                self._plan_applied = None
+                self._standby = None
+                self._paused_since = None
+                self.state = IDLE
                 return
             log.info("client paused for %s -> lights off (ghost holds, resumes on play)",
                      "%.0f s" % held if held < 120 else "%.0f min" % (held / 60.0))
@@ -739,6 +838,7 @@ class Daemon:
         if g is None:
             return
         log.info("stopping ghost (%s)", reason)
+        self._refund_launch(g, time.monotonic())
         self.engine.stop()
         if self._engine_started:
             self.engine.wait_until(lambda s: not s.syncing or not s.connected, ENGINE_STOP_WAIT_S)
