@@ -376,3 +376,47 @@ def test_seek_pause_and_resume_release_the_lock():
     sim.run(w, 100.0, hook=hook)
     assert [e for (e, _) in seen] == ["seek", "pause", "resume"]
     assert not any(locked for (_, locked) in seen), "every client event hands back to the corrections"
+
+
+# -- which binding a session belongs to (2.10.1) --------------------------------------
+
+def _sess(device_id, name, client, playing=True):
+    s = session(10.0, False, LOCAL0 + 5)
+    s["DeviceId"], s["DeviceName"], s["Client"] = device_id, name, client
+    if not playing:
+        s.pop("NowPlayingItem")
+        s["PlayState"] = {}
+    return s
+
+
+def test_a_disabled_device_is_not_picked_up_by_another_binding_by_name():
+    """Live 2.9.0: 'Android S23' (its own device id, plus the name "Android"
+    from an older version) followed CAMusic-linux - a different device, also
+    called "Android", whose own binding was switched off."""
+    from hueghost.watcher import PlayerSet
+    s23 = {"id": "s23", "device_id": "s4Zd", "device_name_contains": "Android"}
+    linux_off = {"id": "linux", "device_id": "camusic-linux", "enabled": False}
+    players = PlayerSet.from_players([s23], claimed={"s4Zd", "camusic-linux"})
+    linux = _sess("camusic-linux", "Android", "Camusic linux")
+    phone_idle = _sess("s4Zd", "Android", "CAMusic", playing=False)
+    assert players.pick([phone_idle, linux]) == (phone_idle, players.matchers[0])
+    assert players.pick([linux]) == (None, None), "claimed by its own (disabled) binding"
+
+
+def test_the_name_still_finds_a_device_whose_id_was_regenerated():
+    from hueghost.watcher import PlayerSet
+    atv = {"id": "atv", "device_id": "old-id", "device_name_contains": "Apple TV"}
+    players = PlayerSet.from_players([atv])
+    moved = _sess("new-id", "Apple TV", "Moonfin")
+    assert players.pick([moved])[0] is moved
+    # ... but not while the device it was made for is itself connected
+    assert players.pick([_sess("old-id", "Apple TV", "Moonfin", playing=False), moved])[0]["DeviceId"] == "old-id"
+
+
+def test_name_only_bindings_never_take_a_claimed_device():
+    from hueghost.watcher import PlayerSet
+    by_name = {"id": "any-android", "device_name_contains": "Android"}
+    players = PlayerSet.from_players([by_name], claimed={"camusic-linux"})
+    assert players.pick([_sess("camusic-linux", "Android", "Camusic linux")]) == (None, None)
+    other = _sess("pixel-1", "Android", "Jellyfin")
+    assert players.pick([other])[0] is other

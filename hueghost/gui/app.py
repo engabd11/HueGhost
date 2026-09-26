@@ -20,7 +20,7 @@ from ..daemon import IDLE, Daemon
 from ..webapi import WebApi
 from . import theme
 from .pages import PAGES, Context
-from .widgets import StatusPill, ToggleSwitch, icon, icon_css, icon_family, set_pill
+from .widgets import StatusPill, ToggleSwitch, icon, icon_css, icon_family, run_async, set_pill
 
 log = logging.getLogger("hue-ghost.gui")
 
@@ -187,7 +187,7 @@ class MainWindow(QMainWindow):
         self.enable = ToggleSwitch()
         self.enable.setToolTip("Master switch: follow the TV and drive the lights")
         self.enable.setChecked(daemon.enabled)
-        self.enable.clicked.connect(lambda on: daemon.action("on" if on else "off", {}))
+        self.enable.clicked.connect(lambda on: run_async(lambda: daemon.action("on" if on else "off", {})))
         hl.addWidget(self.enable)
         col.addWidget(header)
         self.stack = QStackedWidget()
@@ -229,6 +229,7 @@ class MainWindow(QMainWindow):
         self._toast_timer.setSingleShot(True)
         self._toast_timer.timeout.connect(self.toast_lbl.hide)
 
+        self._status_busy = False
         self.timer = QTimer(self)
         self.timer.setInterval(500)
         self.timer.timeout.connect(self._tick)
@@ -264,10 +265,22 @@ class MainWindow(QMainWindow):
 
     # -- live refresh ---------------------------------------------------------------------
     def _tick(self) -> None:
-        try:
-            st = self.daemon.status()
-        except Exception:
+        """Ask for the status on a worker thread and paint it when it comes.
+        ``status()`` waits for the daemon's lock, and the daemon holds that
+        across a Jellyfin request or an mpv launch: called right here, every
+        slow one froze the window, and a few seconds of that is what Windows
+        closes as "not responding". One request at a time; a slow answer just
+        skips a refresh."""
+        if self._status_busy:
             return
+        self._status_busy = True
+        run_async(self.daemon.status, self._paint_status, self._status_failed)
+
+    def _status_failed(self, _err: str) -> None:
+        self._status_busy = False
+
+    def _paint_status(self, st: dict) -> None:
+        self._status_busy = False
         self.last_status = st
         key = status_key(st)
         self.state_pill.set(theme.STATE_LABELS.get(key, key), theme.STATE_COLORS.get(key, theme.STATE_COLORS["idle"]),
@@ -334,7 +347,7 @@ class Tray(QSystemTrayIcon):
         self.a_enabled = QAction("Sync enabled", menu)
         self.a_enabled.setCheckable(True)
         self.a_enabled.setChecked(daemon.enabled)
-        self.a_enabled.triggered.connect(lambda on: daemon.action("on" if on else "off", {}))
+        self.a_enabled.triggered.connect(lambda on: run_async(lambda: daemon.action("on" if on else "off", {})))
         menu.addAction(self.a_enabled)
         menu.addSeparator()
         a_quit = QAction("Quit", menu)
@@ -360,9 +373,10 @@ class Tray(QSystemTrayIcon):
         self.app.quit()
 
     def _tick(self) -> None:
-        try:
-            st = self.daemon.status()
-        except Exception:
+        # the window keeps the status fresh (off the GUI thread); asking the
+        # daemon again from here would only wait on the same lock
+        st = self.win.last_status
+        if not st:
             return
         key = status_key(st)
         if key != self._last_key:
@@ -380,8 +394,58 @@ class Tray(QSystemTrayIcon):
         self.a_enabled.setChecked(st["enabled"])
 
 
+def _install_diagnostics(app: QApplication) -> None:
+    """Leave evidence when something goes wrong.
+
+    The packaged app has no console: an exception in a slot or a worker went
+    nowhere, and a frozen window was simply closed by Windows as "not
+    responding" - 2.9.0's crash reports had nothing in the log to go on. Now
+    uncaught errors are logged, a native crash writes crash.log, and a window
+    that stops responding for 4 s gets every thread's stack written there too,
+    which names what it was waiting on."""
+    import faulthandler
+    import time as _time
+
+    from ..config import app_data_dir
+
+    def log_exc(t, v, tb):
+        log.error("uncaught error", exc_info=(t, v, tb))
+    sys.excepthook = log_exc
+    threading.excepthook = lambda a: log.error("uncaught error in thread %s", a.thread.name if a.thread else "?",
+                                               exc_info=(a.exc_type, a.exc_value, a.exc_traceback))
+    try:
+        os.makedirs(app_data_dir(), exist_ok=True)
+        crash = open(os.path.join(app_data_dir(), "crash.log"), "a", encoding="utf-8")
+    except OSError:
+        return
+    faulthandler.enable(crash, all_threads=True)
+    beat = {"t": _time.monotonic()}
+    hb = QTimer(app)
+    hb.setInterval(1000)
+    hb.timeout.connect(lambda: beat.__setitem__("t", _time.monotonic()))
+    hb.start()
+    app._hueghost_heartbeat = hb          # keep it alive
+
+    def watchdog():
+        dumped = False
+        while True:
+            _time.sleep(1.0)
+            stalled = _time.monotonic() - beat["t"]
+            if stalled > 4.0 and not dumped:
+                log.warning("the window has not responded for %.0f s - thread stacks written to crash.log", stalled)
+                crash.write("\n==== window unresponsive for %.0f s at %s ====\n" % (stalled, _time.ctime()))
+                crash.flush()
+                faulthandler.dump_traceback(crash, all_threads=True)
+                crash.flush()
+                dumped = True
+            elif stalled < 2.0:
+                dumped = False
+    threading.Thread(target=watchdog, name="hue-ghost-gui-watchdog", daemon=True).start()
+
+
 def run_gui(cfg: Config, minimized: bool = False) -> int:
     app = QApplication.instance() or QApplication(sys.argv)
+    _install_diagnostics(app)
     app.setApplicationName("Hue Ghost")
     app.setOrganizationName(__author__)
     app.setQuitOnLastWindowClosed(False)

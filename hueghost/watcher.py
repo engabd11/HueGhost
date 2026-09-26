@@ -86,8 +86,12 @@ class ClockOffset:
 class SessionMatcher:
     def __init__(self, device_id: str = "", name_contains: str = "", user: str = "",
                  area_id: str = "", area_name: str = "", kinds: tuple = ("video", "music"),
-                 client: str = ""):
+                 client: str = "", binding_id: str = "", claimed: Iterable[str] = ()):
         self.device_id = (device_id or "").strip()
+        self.binding_id = binding_id or ""
+        # device ids that belong to other bindings - disabled ones included: a
+        # name-only binding must not pick up a device someone switched off
+        self.claimed = frozenset(c for c in claimed if c and c != self.device_id)
         self.needle = (name_contains or "").strip().lower()
         self.client = (client or "").strip().lower()
         self.user = (user or "").strip().lower()
@@ -96,10 +100,11 @@ class SessionMatcher:
         self.kinds = tuple(kinds) or ("video", "music")
 
     @classmethod
-    def from_player(cls, p: dict) -> "SessionMatcher":
+    def from_player(cls, p: dict, claimed: Iterable[str] = ()) -> "SessionMatcher":
         return cls(p.get("device_id", ""), p.get("device_name_contains", ""), p.get("user", ""),
                    p.get("area_id", ""), p.get("area_name", ""),
-                   tuple(p.get("kinds") or ("video", "music")), p.get("client", ""))
+                   tuple(p.get("kinds") or ("video", "music")), p.get("client", ""),
+                   binding_id=p.get("id", ""), claimed=claimed)
 
     def wants(self, r: "Report | None") -> bool:
         """A player followed for films only should not light up for an album."""
@@ -108,12 +113,16 @@ class SessionMatcher:
     def label(self) -> str:
         return self.device_id or self.needle or "?"
 
-    def matches(self, s: dict) -> bool:
-        by_id = bool(self.device_id) and (s.get("DeviceId") or "") == self.device_id
-        label = ((s.get("DeviceName") or "") + " " + (s.get("Client") or "")).lower()
-        by_name = bool(self.needle) and self.needle in label
-        if not (by_id or by_name):
-            return False
+    def matches(self, s: dict, by_name: bool = True) -> bool:
+        did = s.get("DeviceId") or ""
+        if not (self.device_id and did == self.device_id):
+            # Names are generic - every phone calls itself "Android" - so a
+            # name never takes a device another binding owns, switched off or
+            # not: that is how one phone's binding followed another phone whose
+            # own binding was disabled.
+            label = ((s.get("DeviceName") or "") + " " + (s.get("Client") or "")).lower()
+            if not (by_name and self.needle and self.needle in label) or did in self.claimed:
+                return False
         # Narrowing by app is what separates two entries a phone reports under
         # the same generic device name - music in one app, films in another.
         if self.client and self.client not in (s.get("Client") or "").lower():
@@ -123,9 +132,13 @@ class SessionMatcher:
         return True
 
     def pick(self, sessions: Iterable[dict]) -> dict | None:
+        sessions = list(sessions or [])
+        # the name is the fallback for a device id that was regenerated (an
+        # app reinstall): not while the device itself is right there
+        own = bool(self.device_id) and any((s.get("DeviceId") or "") == self.device_id for s in sessions)
         best = None
-        for s in sessions or []:
-            if not self.matches(s):
+        for s in sessions:
+            if not self.matches(s, by_name=not own):
                 continue
             if s.get("NowPlayingItem"):
                 return s
@@ -140,8 +153,9 @@ class PlayerSet:
         self.matchers = matchers
 
     @classmethod
-    def from_players(cls, players: list[dict]) -> "PlayerSet":
-        return cls([SessionMatcher.from_player(p) for p in players])
+    def from_players(cls, players: list[dict], claimed: Iterable[str] | None = None) -> "PlayerSet":
+        claimed = set(claimed if claimed is not None else (p.get("device_id") for p in players))
+        return cls([SessionMatcher.from_player(p, claimed) for p in players])
 
     def pick(self, sessions: Iterable[dict]) -> tuple[dict | None, SessionMatcher | None]:
         sessions = list(sessions or [])

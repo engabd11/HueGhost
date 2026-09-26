@@ -723,3 +723,15 @@ def test_a_changed_release_applies_to_a_lock_already_held(running):
     d.apply_config({"sync": {"time_lock_release_s": 0.1}})
     _tv(running, 100.0, 1.0, t0)
     assert m.locked and m.lock_release_s == 0.1
+
+
+def test_a_client_found_paused_does_not_light_up_until_it_plays(world):
+    """2.9.0 at start-up, with a phone sitting on a paused song: the ghost
+    launched, the sync started, and 15 s later the pause timeout switched it
+    all off again. Nothing is playing, so nothing lights up."""
+    world.step(1.0, playing(100.0, 0.5, paused=True))
+    assert world.ghost is None and not world.engine_on
+    world.step(5.0)
+    assert world.ghost is None and not world.engine_on
+    world.step(1.0, playing(100.0, world.t))
+    assert world.ghost is not None and world.engine_on
