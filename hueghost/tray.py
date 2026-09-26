@@ -82,8 +82,9 @@ def run_tray(cfg: Config) -> int:
         if st["state"] == IDLE:
             return "hue-ghost: idle (%s)" % ("client idle" if f["seen"] else "client not connected")
         d = st.get("drift_s")
-        return "hue-ghost: %s '%s'  drift %s s  offset %+.2fs" % (
-            st["state"], (f["item"] or "?")[:40], ("%+.2f" % d) if d is not None else "?", st["offset_s"])
+        return "hue-ghost: %s '%s'  drift %s s%s  offset %+.2fs" % (
+            st["state"], (f["item"] or "?")[:40], ("%+.2f" % d) if d is not None else "?",
+            " (locked)" if (st.get("time_lock") or {}).get("engaged") else "", st["offset_s"])
 
     icon = pystray.Icon("hue-ghost", make_icon(COLORS[IDLE]), "hue-ghost")
 

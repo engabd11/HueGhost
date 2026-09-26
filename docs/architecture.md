@@ -43,7 +43,7 @@ re-anchoring on every poll (v1) turns that into 1-4 s corrections.
 3. **First sighting** (daemon start / new item): age = `now - report time`,
    capped at 30 s, added to the anchor so a 7 s old report does not start the
    ghost 7 s late.
-4. **Jitter vs seek**: a new report within `jitter_tolerance_s` (0.75) of the
+4. **Jitter vs seek**: a new report within `jitter_tolerance_s` (1.5) of the
    model is blended 50 %; beyond it the model re-anchors and reports a `seek`
    event, which the daemon turns into a forced ghost seek (bypassing the seek
    cooldown).
@@ -66,6 +66,30 @@ after the first ~40 s, seeks detected within one poll, no spurious seeks.
 | \|drift\| >= `seek_threshold_s` and cooldown passed, or forced (client seek) | hard seek |
 | `deadband_s` < \|drift\| | speed = 1 - clamp(drift / `converge_s`, ±`max_speed_delta`) |
 | \|drift\| <= `deadband_s` | speed 1.0 |
+
+### Time lock (experimental, `sync.time_lock`, off by default)
+
+Live Moonfin data showed the target itself wandering: every 1 s report
+re-anchored the model by 0.01-0.15 s and the ghost chased each step (nudging on
+~70 % of ticks). Two parts, both switched on by the one setting:
+
+1. **Report timing** (`SessionWatcher.precise_timing`): Moonfin reports its
+   position every second but Jellyfin moves `LastPlaybackCheckIn` only every
+   ~5 s. A new position under an unchanged check-in is timed at the middle of
+   the poll window instead of being aged from the stale check-in (which clamped
+   it to the previous poll and put the model ~0.2 s ahead of the TV).
+2. **Lock** (`PlaybackModel.lock`): while armed the deadband is closed so the
+   ghost converges to 0; once |drift| <= 0.02 s, the ghost plays at 1.0x and the
+   client has sent 3 quiet reports, the model stops re-anchoring. Reports are
+   still measured against the locked timeline; a median gap above
+   `time_lock_release_s` (0.2 s) raises an `unlock` event and the normal
+   corrections resume. Seek / pause / resume / stall events release it too.
+
+Replaying 15 min of recorded Apple TV polls (5 seeks) through the model, scored
+against the line through the precisely-timed reports: today mean 0.19 s / p95
+0.30 s / 338 timeline steps > 10 ms; time lock mean 0.03 s / p95 0.06 s / 10
+steps. `/status` carries `time_lock.{enabled,engaged,residual_s}`; the minute
+summary adds `locked N/M ticks`.
 
 A 0.2 s lead becomes speed 0.96 for ~5 s: inaudible (the ghost is muted) and
 invisible on the lights.

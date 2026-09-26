@@ -194,10 +194,16 @@ class HomePage(Page):
         self.drift_text = label("drift --", "kpi")
         top.addWidget(self.drift_text)
         top.addStretch(1)
-        self.ghost_chips = [chip(""), chip(""), chip(""), chip("")]
-        for c in self.ghost_chips:
-            top.addWidget(c)
         g_card.body.addLayout(top)
+        # the chips get their own row: five of them next to "drift ... · locked"
+        # pushed the card - and the whole grid - wider than the window
+        chips = QHBoxLayout()
+        chips.setSpacing(6)
+        self.ghost_chips = [chip(""), chip(""), chip(""), chip(""), chip("")]
+        for c in self.ghost_chips:
+            chips.addWidget(c)
+        chips.addStretch(1)
+        g_card.body.addLayout(chips)
         self.drift = DriftBar()
         self.spark = Sparkline()
         g_card.add(self.drift)
@@ -381,12 +387,15 @@ class HomePage(Page):
         d = st.get("drift_s")
         self.drift.set_value(d)
         self.spark.push(d if g.get("alive") else None)
-        self.drift_text.setText("drift %+.2f s" % d if d is not None else "drift --")
+        lock = st.get("time_lock") or {}
+        self.drift_text.setText(("drift %+.2f s" % d + ("  ·  locked" if lock.get("engaged") else ""))
+                                if d is not None else "drift --")
         if g.get("alive"):
             vals = ("ghost %s" % _fmt_time(g.get("position_s")), "speed %.3f" % (g.get("speed") or 1.0),
-                    "seeks %d" % (g.get("seeks") or 0), "nudges %d" % (g.get("nudges") or 0))
+                    "seeks %d" % (g.get("seeks") or 0), "nudges %d" % (g.get("nudges") or 0),
+                    _ghost_note(st))
         else:
-            vals = ("no ghost running", "", "", "")
+            vals = ("no ghost running", "", "", "", "")
         for c, v in zip(self.ghost_chips, vals):
             c.setText(v)
             c.setVisible(bool(v))
@@ -416,8 +425,28 @@ class HomePage(Page):
         self.offset_lbl.setText("%+.2f s" % (st.get("offset_s") or 0.0))
         q = st.get("drift_last_minute")
         if q:
-            self.quality.setText("Last minute: mean |drift| %.2f s  ·  p95 %.2f s  ·  max %.2f s  ·  %d seek(s)" % (
-                q["mean_abs"], q["p95_abs"], q["max_abs"], q["seeks"]))
+            self.quality.setText("Last minute: mean |drift| %.2f s  ·  p95 %.2f s  ·  max %.2f s  ·  %d seek(s)%s" % (
+                q["mean_abs"], q["p95_abs"], q["max_abs"], q["seeks"],
+                "  ·  locked %d %%" % round(100.0 * q.get("locked_ticks", 0) / max(1, q["n"]))
+                if lock.get("enabled") else ""))
+
+
+def _ghost_note(st: dict) -> str:
+    """What the ghost is waiting on, when it is not simply playing along:
+    the countdowns /status has always computed but nothing showed."""
+    g, f = st.get("ghost") or {}, st.get("follow") or {}
+    if g.get("parked"):
+        return "parked"
+    closes = g.get("standby_closes_in_s")
+    if closes is not None:
+        return "closes in %.0f s" % closes
+    paused = f.get("paused_for_s")
+    if paused is not None:
+        return "paused %s" % ("%.0f s" % paused if paused < 120 else "%.0f min" % (paused / 60.0))
+    if (st.get("time_lock") or {}).get("engaged"):
+        res = st["time_lock"].get("residual_s")
+        return "locked" + (" (TV %+.2f s)" % res if res is not None else "")
+    return ""
 
 
 # ============================================================================================
@@ -496,6 +525,21 @@ class SyncPage(Page):
             c3.form(name, sp, tip)
         self.lay.addWidget(c3)
 
+        ex = Card("Experimental", "off by default; try it, and switch it off if anything looks wrong")
+        self.time_lock = ToggleSwitch()
+        ex.form("Time lock", self.time_lock,
+                "Once the ghost reaches 0.0 s drift, hold the timeline instead of re-correcting it on every "
+                "report from the TV. Seeks, pauses, buffering - or reports that drift further off than the "
+                "limit below - release it, the usual corrections take over, and it locks again once settled. "
+                "Also times reports from clients that update Jellyfin's check-in only every few seconds "
+                "(Moonfin) properly, which removes a ~0.2 s lead.")
+        sp = self._spin(0.1, 1.0, 0.05, " s")
+        self.fields["sync.time_lock_release_s"] = sp
+        ex.form("Release when the TV is off by", sp,
+                "The median gap between the TV's reports and the locked timeline that hands back to the "
+                "corrections. Smaller follows the TV more closely; larger holds steadier.")
+        self.lay.addWidget(ex)
+
         adv = Card("Advanced lockstep tuning", "defaults are tuned for the 0.5 s Jellyfin poll; change with care")
         specs = [
             ("sync.seek_threshold_s", "Hard-seek beyond", 0.3, 5.0, 0.1, " s", "Drift larger than this jumps the ghost instead of nudging speed."),
@@ -526,6 +570,8 @@ class SyncPage(Page):
         st_card = Card("Learned TV buffering", "after a seek / start / resume the TV shows a still frame while it buffers")
         self.stalls = label("", "muted", wrap=True)
         st_card.add(self.stalls)
+        self.jf_timing = label("", "hint", wrap=True)
+        st_card.add(self.jf_timing)
         st_card.add(label("Hue Ghost learns how long, holds the ghost for that long, then resumes exactly on target.",
                           "hint", wrap=True))
         st_card.add_row(button("Reset learned values", "ghost", self._reset_stalls, icon_name="refresh"), stretch_last=True)
@@ -560,11 +606,16 @@ class SyncPage(Page):
         self.intensity.set_value(cfg.get("engine.huesync.intensity"))
         self.mode.set_value(cfg.get("engine.huesync.mode"))
         self.audio.set_value(cfg.get("engine.huesync.use_audio"))
+        self.time_lock.setChecked(bool(cfg.get("sync.time_lock", False)))
         self._loaded = True
 
     def refresh(self, st: dict) -> None:
         est = (st.get("follow") or {}).get("stall_estimates") or {}
         self.stalls.setText("   ".join("%s: %.1f s" % (k, v) for k, v in est.items()) or "-")
+        off = (st.get("jellyfin") or {}).get("clock_offset_s")
+        self.jf_timing.setText("Jellyfin clock %s  ·  %d report(s) from the TV this item" % (
+            "offset %+.2f s" % off if off is not None else "not measured yet",
+            (st.get("follow") or {}).get("reports") or 0))
         if not self.spin.hasFocus() and not self.slider.isSliderDown():
             v = float(st.get("offset_s") or 0.0)
             if abs(v - self.spin.value()) > 0.001:
@@ -590,6 +641,7 @@ class SyncPage(Page):
         for key, sp in self.fields.items():
             sect, name = key.split(".", 1)
             partial.setdefault(sect, {})[name] = round(sp.value(), 3)
+        partial.setdefault("sync", {})["time_lock"] = bool(self.time_lock.isChecked())
         self.save(partial, "Sync settings saved")
 
     def _reset_stalls(self) -> None:
@@ -1106,7 +1158,7 @@ class DisplayPage(Page):
         self.hwdec.setCurrentText(cfg.get("ghost.hwdec") or "auto")
         mode = str(cfg.get("ghost.keep_awake") or "playing").lower()
         self.keep_awake.set_value(mode if mode in KEEP_AWAKE_MODES else "playing")
-        self.music_volume.setValue(int(cfg.get("ghost.music_volume", 100) or 100))
+        self.music_volume.setValue(int(100 if cfg.get("ghost.music_volume") is None else cfg.get("ghost.music_volume")))
         self._load_displays()
         self._load_audio_outputs()
         self._check_mpv()
@@ -1227,7 +1279,7 @@ class HueSyncPage(Page):
         c3.form("Only run the ghost when Hue Sync is reachable", self.required)
         self.manage_area = ToggleSwitch()
         c3.form("Select the entertainment area for me", self.manage_area,
-                "Hue Ghost points Hue Sync at the area bound to the TV that is playing (Players page). "
+                "Hue Ghost points Hue Sync at the area bound to the TV that is playing (Sources page). "
                 "It only does so when a movie starts, and never while it is idle - so you can still pick "
                 "an area in the Hue Sync app yourself. Off: Hue Ghost never touches your selection.")
         self.hook_url = QLineEdit()

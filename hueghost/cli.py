@@ -157,10 +157,19 @@ def cmd_status(args) -> int:
         {True: "on", False: "off"}.get(st.get("use_audio"), "app's own"),
         st.get("mode_default"), st.get("intensity_default")))
     print("  offset   : %+.2fs" % st["offset_s"])
+    tl = st.get("time_lock") or {}
+    if tl.get("enabled"):
+        if tl.get("engaged"):
+            res = tl.get("residual_s")
+            print("  time lock: ENGAGED  (TV reports %s s off the locked timeline)" % (
+                "%+.3f" % res if res is not None else "?"))
+        else:
+            print("  time lock: armed (locks once drift reaches 0)")
     dl = st.get("drift_last_minute")
     if dl:
-        print("  last min : mean|drift| %.3fs  p95 %.3fs  max %.3fs  seeks %d" % (
-            dl["mean_abs"], dl["p95_abs"], dl["max_abs"], dl["seeks"]))
+        print("  last min : mean|drift| %.3fs  p95 %.3fs  max %.3fs  seeks %d%s" % (
+            dl["mean_abs"], dl["p95_abs"], dl["max_abs"], dl["seeks"],
+            "  locked %d/%d ticks" % (dl.get("locked_ticks", 0), dl["n"]) if tl.get("enabled") else ""))
     return 0
 
 

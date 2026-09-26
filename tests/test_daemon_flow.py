@@ -15,7 +15,7 @@ from hueghost import daemon as dm
 from hueghost.config import Config
 from hueghost.daemon import IDLE, STANDBY, SYNCING, Daemon
 from hueghost.engines import Plan
-from hueghost.lockstep import Pause, Resume, Seek
+from hueghost.lockstep import Pause, Resume, Seek, Speed
 from hueghost.sources import Activity, Source
 from tests.test_watcher import LOCAL0, MONO0, session
 
@@ -559,3 +559,156 @@ def test_a_new_ghost_does_not_wake_displays_screen_care_has_blacked_out(world):
     assert world.ghost is not None and world.engine_on
     assert ("wake",) not in world.power.calls
     world.d.care.covers = {}
+
+
+# -- the time lock (experimental) ---------------------------------------------------
+
+class RunningGhost(FakeGhost):
+    """A ghost whose position moves with the virtual clock at its speed, so
+    the lockstep controller has something real to converge."""
+
+    def __init__(self, item_id, clock, start):
+        super().__init__(item_id)
+        self.clock = clock
+        self._time_pos = start
+        self._t0 = clock()
+
+    @property
+    def pos(self):
+        if self.paused:
+            return self._time_pos
+        return self._time_pos + (self.clock() - self._t0) * self.speed
+
+    def apply(self, actions, now):
+        for a in actions:
+            self.actions.append(a)
+            here = self.pos
+            self._time_pos, self._t0 = here, self.clock()
+            if isinstance(a, Pause):
+                self.paused = True
+            elif isinstance(a, Resume):
+                self.paused = False
+            elif isinstance(a, Speed):
+                self.speed = a.value
+            elif isinstance(a, Seek):
+                self._time_pos = a.pos
+                self.last_seek_mono = now
+                self.seeks += 1
+
+
+@pytest.fixture
+def running(world, monkeypatch):
+    def launch(cfg_, url, hdr, start, item_id, err_path=None, **kw):
+        # a little off target, as a real launch is
+        g = RunningGhost(item_id, lambda: MONO0 + world.t, start + 0.3)
+        world.launched.append(g)
+        return g
+    monkeypatch.setattr(dm.GhostPlayer, "launch", staticmethod(launch))
+    return world
+
+
+def _tv(world, pos0, seconds, t0=None):
+    """The TV plays on from ``pos0`` (at ``t0``) and reports every second."""
+    t0 = world.t if t0 is None else t0
+    end = world.t + seconds
+    while world.t < end - 1e-9:
+        world.step(1.0, playing(pos0 + (world.t - t0), world.t))
+    return t0
+
+
+def _drift(world):
+    """Ghost vs target on the virtual clock (status() reads the real one)."""
+    m = world.d.last_obs.model
+    return world.ghost.pos - m.position_at(MONO0 + world.t)
+
+
+def _time_lock(d, on=True):
+    d.apply_config({"sync": {"time_lock": on}})
+
+
+def test_time_lock_is_off_by_default_and_changes_nothing(running):
+    d = running.d
+    assert d.params.time_lock is False and d.watcher.precise_timing is False
+    _tv(running, 100.0, 60.0)
+    st = d.status()
+    assert st["time_lock"] == {"enabled": False, "engaged": False, "residual_s": None}
+    assert not d.last_obs.model.locked
+
+
+def test_time_lock_engages_at_zero_drift_and_stops_nudging(running):
+    d = running.d
+    _time_lock(d)
+    assert d.watcher.precise_timing
+    t0 = _tv(running, 100.0, 60.0)
+    st = d.status()
+    assert st["time_lock"]["engaged"], st
+    assert abs(_drift(running)) <= 0.05
+    g = running.ghost
+    n = len(g.actions)
+    _tv(running, 100.0, 60.0, t0)
+    assert d.status()["time_lock"]["engaged"]
+    assert [a for a in g.actions[n:] if not (isinstance(a, Speed) and a.value == 1.0)] == [],         "locked: no nudging, no seeks"
+    assert abs(_drift(running)) <= 0.05
+
+
+def test_a_seek_releases_the_time_lock_and_it_locks_again(running):
+    d = running.d
+    _time_lock(d)
+    _tv(running, 100.0, 60.0)
+    assert d.last_obs.model.locked
+    g = running.ghost
+    seeks = g.seeks
+    t0 = _tv(running, 900.0, 2.0)                 # the viewer jumps ahead
+    assert not d.last_obs.model.locked
+    assert g.seeks > seeks and abs(g.pos - 900.0) < 5.0
+    _tv(running, 900.0, 60.0, t0)
+    assert d.last_obs.model.locked, "settled again after the seek"
+
+
+def test_switching_the_time_lock_off_releases_it_at_once(running):
+    d = running.d
+    _time_lock(d)
+    t0 = _tv(running, 100.0, 60.0)
+    assert d.last_obs.model.locked
+    _time_lock(d, False)
+    _tv(running, 100.0, 1.0, t0)
+    assert not d.last_obs.model.locked and not d.status()["time_lock"]["enabled"]
+    assert not d.watcher.precise_timing
+
+
+# -- saving a setting must not undo the playing source's own look -------------------
+
+def _record_engine(d):
+    calls = []
+    d.engine.set_mode = lambda m: calls.append(("mode", m))
+    d.engine.set_intensity = lambda i: calls.append(("intensity", i))
+    return calls
+
+
+def test_saving_a_setting_while_playing_leaves_the_sources_mode_alone(world):
+    """Any saved setting - an offset nudge, the sync page's Save - used to push
+    the global mode and intensity into the engine, flipping a phone playing
+    music (music/high) to the global video/subtle mid-song."""
+    d = world.d
+    d.cfg.set("engine.huesync.mode", "video")
+    d.cfg.set("engine.huesync.intensity", "subtle")
+    world.step(1.0, playing(100.0, 0.5))
+    assert d.last_act.playing
+    calls = _record_engine(d)
+    d.action("set", {"offset_delta": 0.25})
+    d.apply_config({"sync": {"deadband_s": 0.04}})
+    assert calls == [], calls
+
+
+def test_mode_from_home_is_live_but_not_saved_over_a_source_that_sets_its_own(world):
+    d = world.d
+    d.cfg.set("engine.huesync.mode", "video")
+    world.step(1.0, playing(100.0, 0.5))
+    calls = _record_engine(d)
+    d.last_act.binding["mode"] = "video"             # this source sets its own
+    d.action("set", {"mode": "games"})
+    assert calls == [("mode", "games")], "the lights change at once"
+    assert d.cfg.get("engine.huesync.mode") == "video", "the default must not drift"
+    d.last_act.binding["mode"] = ""                  # this one leaves it to the default
+    d.action("set", {"mode": "music"})
+    assert calls[-1] == ("mode", "music") and d.cfg.get("engine.huesync.mode") == "music"

@@ -239,6 +239,13 @@ class PlaybackModel:
     last_debug: str = ""
     device_id: str | None = None
     media_type: str = "video"
+    # time lock (experimental, sync.time_lock): once the ghost sits on the target,
+    # the timeline stops taking per-report corrections and just runs at 1.0x;
+    # reports are still measured against it and release it when they disagree
+    locked: bool = False
+    lock_release_s: float = 0.2
+    lock_residual: float | None = None     # median report-vs-locked-timeline gap
+    steady_reports: int = 0                # quiet reports since the last event
 
     # -- queries ---------------------------------------------------------------------
     def position_at(self, now_mono: float) -> float:
@@ -255,12 +262,24 @@ class PlaybackModel:
         self.anchor_pos = float(pos)
         self.anchor_mono = float(mono)
 
+    def lock(self, release_s: float) -> None:
+        self.locked = True
+        self.lock_release_s = float(release_s)
+        self.lock_residual = None
+        self.residuals.clear()
+
+    def unlock(self) -> None:
+        self.locked = False
+        self.lock_residual = None
+        self.steady_reports = 0
+
     def begin_stall(self, kind: str, pos: float, report_mono: float) -> None:
         self._anchor(pos, report_mono + self.stalls.predict(kind))
         self.stall_kind = kind
         self.stall_pos = float(pos)
         self.stall_report_mono = report_mono
         self.residuals.clear()
+        self.unlock()
 
     def apply(self, r: Report, report_mono: float, jitter_tol: float) -> str | None:
         """Fold a (new) report in. Returns an event name or None."""
@@ -312,16 +331,34 @@ class PlaybackModel:
                 # steady state: the rate is exactly 1.0, only the intercept is
                 # uncertain - correct it slowly from the median residual so
                 # per-report position jitter does not reach the ghost
+                self.steady_reports += 1
                 self.residuals.append(delta)
                 med = statistics.median(self.residuals)
+                if self.locked:
+                    # locked: the timeline stands; the median residual is only
+                    # watched, and a persistent gap (a short re-buffer, clock
+                    # skew over a long film) hands back to the corrections
+                    self.lock_residual = med
+                    if abs(med) <= self.lock_release_s:
+                        self._debug(r, pred, delta, None)
+                        return None
+                    self.unlock()
+                    self.lock_residual = med      # what released it, for the log
+                    event = "unlock"
                 corr = max(-RESIDUAL_MAX_STEP, min(RESIDUAL_MAX_STEP, med)) * RESIDUAL_GAIN
                 self._anchor(pred + corr, report_mono)
                 self.residuals = deque((x - corr for x in self.residuals), maxlen=RESIDUAL_WINDOW)
-        self.last_debug = ("report #%d pos=%.2f%s pred=%.2f delta=%+.2f%s stall=%s" % (
+        if event and event != "unlock":
+            self.unlock()
+        self._debug(r, pred, delta, event)
+        return event
+
+    def _debug(self, r: Report, pred: float, delta: float, event: str | None) -> None:
+        self.last_debug = ("report #%d pos=%.2f%s pred=%.2f delta=%+.2f%s%s stall=%s" % (
             self.reports, r.pos, " paused" if r.paused else "", pred, delta,
             (" -> " + event) if event else "",
+            " locked (median %+.2f)" % self.lock_residual if self.locked and self.lock_residual is not None else "",
             {k: round(v, 1) for k, v in self.stalls.est.items()}))
-        return event
 
 
 @dataclass
@@ -348,6 +385,9 @@ class SessionWatcher:
         self._prev_poll_mono: float | None = None
         self._playing_last_poll = False
         self.last_error: str | None = None
+        # time lock (experimental) also times reports properly: see _report_time
+        self.precise_timing = False
+        self._last_checkin: float | None = None
 
     # -- pure core --------------------------------------------------------
     def observe(self, sessions: list[dict], server_epoch: float | None,
@@ -394,8 +434,19 @@ class SessionWatcher:
                      prev_poll: float | None, first: bool) -> tuple[float, bool]:
         """Local monotonic time at which the client took this report."""
         fallback = now_mono if first else now_mono - self.poll_interval / 2.0
+        stale_checkin = not first and r.checkin is not None and r.checkin == self._last_checkin
+        self._last_checkin = r.checkin
         if r.checkin is None:
             return fallback, False
+        if stale_checkin and self.precise_timing:
+            # Moonfin sends its position every second, but Jellyfin moves
+            # LastPlaybackCheckIn only every ~5 s. A new position under an old
+            # check-in was not timed by it: it arrived somewhere since the last
+            # poll, so the middle of that window is the unbiased guess. (Aging
+            # it from the stale check-in clamps it to the previous poll, which
+            # put the model ~0.2 s ahead of the TV on live data.)
+            lo = prev_poll if prev_poll is not None else now_mono - self.poll_interval
+            return now_mono - max(0.0, now_mono - lo) / 2.0, False
         if not first:
             # the report was not there at the previous poll, so it happened
             # before *now*: checkin - now is a valid lower bound of the offset

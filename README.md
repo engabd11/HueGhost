@@ -233,6 +233,17 @@ learns how long your TV buffers after a seek (shown under *Sync > Learned TV
 buffering*), and nudges the ghost's speed by a few percent instead of jumping.
 The **Sync** page exposes the advanced knobs if you want them.
 
+**Time lock (experimental, Sync page, off by default).** Normally every
+progress report from the TV nudges the ghost's timeline a little, so the
+ghost is always correcting. With *Time lock* on, once the drift reaches 0.0 s
+the timeline is held and the ghost simply plays at 1.0x; Home shows
+*drift +0.00 s · locked*. Seeking, pausing, buffering - or the TV's reports
+drifting more than *Release when the TV is off by* (0.2 s) from the locked
+timeline - releases it, the usual corrections take over, and it locks again
+once playback has settled. It also fixes the timing of clients (Moonfin on the
+Apple TV) whose Jellyfin check-in only moves every 5 s, which otherwise
+leaves the ghost ~0.2 s ahead - so re-check your offset after turning it on.
+
 **Stopping** (Sync page): the lights go off **1.5 s** after the TV stops
 (*Lights off after the TV stops*); the ghost player itself stays on standby
 for 10 s (*Close the ghost after*) so a TV that comes straight back - next
@@ -385,6 +396,24 @@ automation.
 
 ## Changelog
 
+- **2.10.0** - **Time lock (experimental, off by default).** Live data from an
+  Apple TV (Moonfin) showed the ghost correcting its speed on ~70 % of ticks:
+  every 1 s report moved the model's timeline by 0.01-0.15 s, because Jellyfin
+  only moves the check-in every 5 s and those reports were timed from the stale
+  check-in (~0.2 s lead). The new *Time lock* switch (Sync page, `/set
+  {"time_lock": true}`) times such reports from the poll window and, once the
+  drift reaches 0, holds the timeline instead of chasing each report; seeks,
+  pauses, buffering or a persistent gap (> 0.2 s) release it. Replaying 15 min
+  of recorded Apple TV reports with 5 seeks: mean error 0.19 -> 0.03 s, p95 0.30
+  -> 0.06 s, timeline steps 338 -> 10. `/status` gains `time_lock`, the
+  per-minute log line `locked N/M ticks`. Fixes: saving any setting while
+  something played (even an offset nudge) pushed the global mode and intensity
+  over the playing source's own - a phone playing music flipped to video; a
+  mode or intensity picked on Home / `/set` while a source with its own value
+  played became the global default (now: live for the session only); a music
+  ghost volume of 0 % played at 100 %; the Home Assistant REST switch example
+  posted to `/status`. Home shows the ghost's *parked* / *closes in N s* /
+  *paused* state, the Sync page the Jellyfin clock offset and report count.
 - **2.9.0** - **Music that changes track no longer blinks the lights.** Skipping
   a song on a music source used to tear the whole session down - stop the
   sync, kill the ghost, launch a new one, start the sync again - so the lights
