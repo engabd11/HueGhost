@@ -33,10 +33,11 @@ class PcSource(Source):
     def bindings(self) -> list[dict]:
         return list(self._bindings)
 
-    def ignore_pid(self, pid: int | None) -> None:
-        """Our own ghost must never be detected as content - someone who binds
-        mpv.exe would otherwise sync to the ghost we launched ourselves."""
-        self.probe.ignore_pids = {int(pid)} if pid else set()
+    def ignore_pid(self, pid: int | None, *others: int | None) -> None:
+        """Our own ghost - and screen care's black covers - must never be
+        detected as content: someone who binds mpv.exe, or "any app", would
+        otherwise sync to the windows we put up ourselves."""
+        self.probe.ignore_pids = {int(p) for p in (pid, *others) if p}
 
     def poll(self, now: float) -> list[Activity]:
         return self.activities(self.probe.poll(self._bindings, now))

@@ -29,8 +29,11 @@ class JellyfinSource(Source):
         self._warned_no_output = None
 
     def _make_watcher(self) -> SessionWatcher:
+        # every Jellyfin binding's device, the switched-off ones too
+        claimed = {b.get("device_id") for b in self.cfg.bindings()
+                   if b.get("source") == "jellyfin" and b.get("device_id")}
         w = SessionWatcher(
-            PlayerSet.from_players(self._bindings),
+            PlayerSet.from_players(self._bindings, claimed),
             jitter_tolerance_s=float(self.cfg.get("sync.jitter_tolerance_s", 1.5)),
             poll_interval_s=float(self.cfg.get("jellyfin.poll_interval_s", 0.5)),
             stall_priors=self.cfg.get("sync.stall_estimates") or None)
@@ -119,6 +122,10 @@ def _binding_of(obs, bindings: list[dict]) -> dict | None:
     who = getattr(obs, "player", None)
     if who is None:
         return bindings[0] if bindings else None
+    if who.binding_id:
+        for b in bindings:
+            if b.get("id") == who.binding_id:
+                return b
     for b in bindings:
         if (b.get("device_id") or "") == (who.device_id or "") and \
                 (b.get("device_name_contains") or "").lower() == (who.needle or ""):

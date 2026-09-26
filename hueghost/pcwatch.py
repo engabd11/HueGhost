@@ -7,6 +7,11 @@ bound - there is no scan of every process, and no guessing about what is a
   sound      a WASAPI session belonging to that exe is above the noise floor
   fullscreen that exe owns the foreground window and it covers a whole monitor
 
+The exe ``*`` means *any app*: any sound, any window filling a display.
+``huesync.exe`` means the same for the window signal - Hue Sync's own window is
+never a fullscreen video, and binding it is how people say "this PC" (its
+loopback capture already makes its sound session mirror the whole PC).
+
 ``PcProbe.observe`` is pure, like ``SessionWatcher.observe``: it takes the two
 readings and the clock and returns what is playing. The OS calls live in
 ``audio_sessions`` / ``foreground_window`` so the tests never touch COM.
@@ -14,11 +19,25 @@ readings and the clock and returns what is playing. The OS calls live in
 from __future__ import annotations
 
 import logging
+import os
 import sys
 import time
 from dataclasses import dataclass, field
 
 log = logging.getLogger("hue-ghost.pc")
+
+ANY_APP = "*"
+# windows that fill a display without anything playing: the desktop, the
+# taskbar, the lock screen, start/search - never "a fullscreen video"
+SHELL_CLASSES = {"progman", "workerw", "shell_traywnd", "shell_secondarytraywnd"}
+SHELL_EXES = {"explorer.exe", "lockapp.exe", "searchhost.exe", "searchapp.exe",
+              "startmenuexperiencehost.exe", "shellexperiencehost.exe", "textinputhost.exe",
+              "hueghost.exe"}
+
+
+def any_app(exe: str, signal: str) -> bool:
+    """Whether a binding's exe stands for every app, for this signal."""
+    return exe == ANY_APP or (signal == "window" and exe == "huesync.exe")
 
 
 @dataclass(frozen=True)
@@ -35,6 +54,12 @@ class Foreground:
     title: str = ""
     fullscreen: bool = False
     monitor_id: str = ""     # the display it is on, as the Hue Sync app names it
+    cls: str = ""            # window class, lower case
+
+    @property
+    def shell(self) -> bool:
+        """The desktop, the taskbar, the lock screen, or Hue Ghost itself."""
+        return self.cls in SHELL_CLASSES or self.exe in SHELL_EXES or self.pid == os.getpid()
 
 
 @dataclass
@@ -66,17 +91,20 @@ class PcProbe:
             exe = (b.get("exe") or "").lower()
             detect = b.get("detect") or "audio"
             hit = self.hits.get(b["id"]) or Hit()
+            any_sound, any_window = any_app(exe, "audio"), any_app(exe, "window")
             loud = max((s.peak for s in sessions
-                        if s.exe == exe and s.pid not in self.ignore_pids), default=0.0)
+                        if (any_sound or s.exe == exe) and s.pid not in self.ignore_pids
+                        and s.pid != os.getpid()), default=0.0)
             by_audio = loud > self.peak
-            by_window = bool(fg and fg.exe == exe and fg.fullscreen
-                             and fg.pid not in self.ignore_pids)
+            fg_mine = bool(fg and fg.pid not in self.ignore_pids
+                           and (fg.exe == exe or (any_window and not fg.shell)))
+            by_window = bool(fg_mine and fg.fullscreen)
             signal = (by_audio if detect == "audio" else
                       by_window if detect == "fullscreen" else
                       (by_audio or by_window))
-            hit.running = bool(loud > 0.0 or (fg and fg.exe == exe)) or signal
+            hit.running = bool(loud > 0.0 or fg_mine) or signal
             hit.peak = loud
-            if fg and fg.exe == exe:
+            if fg_mine:
                 hit.title = fg.title or hit.title
                 hit.monitor_id = fg.monitor_id or hit.monitor_id
             if signal:
@@ -99,6 +127,8 @@ class PcProbe:
         """The same, reading the OS. Only the signals some binding asks for are
         read, so an install with no PC bindings costs nothing at all."""
         wanted = {(b.get("exe") or "").lower() for b in bindings}
+        if any(any_app(e, "audio") for e in wanted):
+            wanted = None                   # every app's sound counts
         need_audio = any((b.get("detect") or "audio") in ("audio", "either") for b in bindings)
         need_fg = any((b.get("detect") or "audio") in ("fullscreen", "either") for b in bindings)
         sessions = audio_sessions(wanted) if need_audio else []
@@ -246,6 +276,8 @@ def foreground_window() -> Foreground | None:
         return None
     title = ctypes.create_unicode_buffer(512)
     u32.GetWindowTextW(hwnd, title, 512)
+    cls = ctypes.create_unicode_buffer(128)
+    u32.GetClassNameW(hwnd, cls, 128)
     r = wintypes.RECT()
     if not u32.GetWindowRect(hwnd, ctypes.byref(r)):
         return None
@@ -260,7 +292,7 @@ def foreground_window() -> Foreground | None:
         from .winutil import list_displays
         monitor_id = next((d.monitor_id for d in list_displays() if d.name == mi.szDevice), "")
     return Foreground(pid=pid.value, exe=exe_of(pid.value), title=title.value,
-                      fullscreen=full, monitor_id=monitor_id)
+                      fullscreen=full, monitor_id=monitor_id, cls=cls.value.lower())
 
 
 def audio_sessions(wanted: set[str] | None = None) -> list[AudioHit]:

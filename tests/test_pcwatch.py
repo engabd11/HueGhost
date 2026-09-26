@@ -91,3 +91,53 @@ def test_an_unbound_app_is_ignored_entirely():
     p = probe()
     out = p.observe([VIDEO], loud("chrome.exe"), fg("chrome.exe"), 2.0)
     assert list(out) == ["ff"] and out["ff"].playing is False
+
+
+# -- "any app on this PC" (2.10.1) ------------------------------------------------------
+
+ANY_WINDOW = {"id": "any", "exe": "*", "detect": "fullscreen", "mode": "video"}
+# how people already said "this PC": Hue Sync's own exe, which never goes fullscreen itself
+THIS_PC = {"id": "hs", "exe": "huesync.exe", "detect": "fullscreen", "mode": "video"}
+
+
+def _playing_after(p, binding, fg_=None, sound=None):
+    for t in (0.0, 0.5, 1.0, 1.5):
+        hit = p.observe([binding], sound or [], fg_, t)[binding["id"]]
+    return hit
+
+
+def test_any_app_filling_a_screen_counts():
+    assert _playing_after(probe(), ANY_WINDOW, fg("chrome.exe", title="YouTube")).playing
+    assert _playing_after(probe(), ANY_WINDOW, fg("chrome.exe", fullscreen=False)).playing is False
+
+
+def test_huesync_exe_means_this_pc_for_the_window_signal():
+    """Live 2.9.0: bound as huesync.exe + fullscreen, a video filling the main
+    screen never lit anything - it looked for Hue Sync's own window."""
+    assert _playing_after(probe(), THIS_PC, fg("vlc.exe", title="film.mkv")).playing
+    assert _playing_after(probe(), THIS_PC, fg("vlc.exe", title="film.mkv")).monitor_id == MON
+
+
+def test_the_desktop_the_taskbar_and_the_lock_screen_are_not_a_film():
+    desk = Foreground(pid=300, exe="explorer.exe", fullscreen=True, monitor_id=MON, cls="workerw")
+    lock = Foreground(pid=301, exe="lockapp.exe", fullscreen=True, monitor_id=MON)
+    shell = Foreground(pid=302, exe="whatever.exe", fullscreen=True, monitor_id=MON, cls="progman")
+    for w in (desk, lock, shell):
+        assert _playing_after(probe(), ANY_WINDOW, w).playing is False, w
+
+
+def test_our_own_windows_are_not_a_film():
+    import os
+    me = Foreground(pid=os.getpid(), exe="python.exe", fullscreen=True, monitor_id=MON)
+    assert _playing_after(probe(), ANY_WINDOW, me).playing is False
+    p = probe()
+    p.ignore_pids = {555}                              # the ghost, or a screen-care cover
+    assert _playing_after(p, ANY_WINDOW, fg("mpv.exe", pid=555)).playing is False
+
+
+def test_any_app_by_sound():
+    any_sound = {"id": "snd", "exe": "*", "detect": "audio", "mode": "music"}
+    assert _playing_after(probe(), any_sound, sound=loud("spotify.exe")).playing
+    p = probe()
+    p.ignore_pids = {100}
+    assert _playing_after(p, any_sound, sound=loud("mpv.exe", pid=100)).playing is False

@@ -40,6 +40,7 @@ log = logging.getLogger("hue-ghost")
 IDLE, GHOSTING, SYNCING, STANDBY = "idle", "ghosting", "syncing", "standby"
 TICK_S = 0.25
 ENGINE_STOP_WAIT_S = 2.0
+SLOW_STEP_S = 2.0          # a loop step holding the lock longer than this is logged
 # time lock (experimental): engage once |drift| is this small ("0.0 s"), the
 # followed client has sent this many quiet reports since its last event ...
 LOCK_WINDOW_S = 0.02
@@ -288,11 +289,14 @@ class Daemon:
                 if now >= next_poll:
                     with self._lock:
                         self._poll(now)
+                    self._slow_step("poll", now)
                     next_poll = now + float(self.cfg.get("jellyfin.poll_interval_s", 0.5))
+                t0 = time.monotonic()
                 with self._lock:
                     self._tick(time.monotonic())
                     self._sync_power()
                     self._screen_care(time.monotonic())
+                self._slow_step("tick", t0)
                 wait = max(0.05, min(TICK_S, next_poll - time.monotonic()))
                 self._stop.wait(wait)
         finally:
@@ -337,6 +341,14 @@ class Daemon:
     def stop(self) -> None:
         self._stop.set()
 
+    def _slow_step(self, what: str, started: float) -> None:
+        """Everything else waits while the loop holds the lock (the control
+        API, Home Assistant, the window's saves): say so when a step is slow,
+        so a stall has a name in the log."""
+        took = time.monotonic() - started
+        if took > SLOW_STEP_S:
+            log.warning("daemon %s step held the lock for %.1f s (state %s)", what, took, self.state)
+
     def request_restart(self) -> None:
         """Stop the loop; the front end (cli/tray) re-launches the process."""
         self.restart_requested = True
@@ -376,7 +388,8 @@ class Daemon:
             return
         pc = self._pc
         if pc is not None:
-            pc.ignore_pid(self.ghost.proc.pid if (self.ghost and self.ghost.proc) else None)
+            pc.ignore_pid(self.ghost.proc.pid if (self.ghost and self.ghost.proc) else None,
+                          *self.care.cover_pids())
         act = self.sources.poll(now)
         jelly = self._jelly
         if jelly is not None:
@@ -443,6 +456,14 @@ class Daemon:
             self._paused_since = None
         if self._pause_stopped is not None and (self._pause_stopped != m.item_id or not m.paused):
             self._pause_stopped = None      # it plays again, or moved on: stop latching
+        if act.event == "new_item" and m.paused and self.ghost is None and self._pause_stopped != m.item_id:
+            # Found already paused - typically Hue Ghost starting up while a
+            # phone sits on a paused song. Nothing is playing, so nothing lights
+            # up: it used to launch, start the sync, and switch it all off again
+            # when the pause timeout ran out. Wait for it to play instead.
+            log.info("'%s' is paused on %s - the lights wait for it to play", _asc(m.name),
+                     (obs.report.device_label if obs.report else "the client"))
+            self._pause_stopped = m.item_id
         if act.event == "new_item" and obs.stale:
             log.warning("first report for '%s' is stale (>30 s old); position may be off", _asc(m.name))
         if self.ghost is not None and self.ghost.item_id != m.item_id:

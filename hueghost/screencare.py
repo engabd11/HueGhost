@@ -202,6 +202,11 @@ class ScreenCare:
     def close(self) -> None:
         self.uncover()
 
+    def cover_pids(self) -> list[int]:
+        """The black covers' processes: fullscreen windows of our own that
+        must never be mistaken for something playing on this PC."""
+        return [p.pid for p in self.covers.values() if getattr(p, "pid", None)]
+
     def status(self) -> dict:
         return {
             "pixel_shift_min": self.shift_every_s / 60.0,

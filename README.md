@@ -130,6 +130,14 @@ either. Video defaults to sound, games to fullscreen. Nothing is scanned or
 guessed - only the executables you actually add are ever looked at, and an
 install with no PC sources does no detection work at all.
 
+**Any app on this PC** (Sources > *Add "any app on this PC"*) is the one
+exception, on purpose: whatever fills a screen - a video in a browser, a
+player, a game - or, with Detect set to Sound, anything the PC plays. The
+desktop, the taskbar, the lock screen and Hue Ghost's own windows never count.
+A source bound to `huesync.exe` means the same for the window signal (Hue
+Sync's own window is never a fullscreen video, and it is how "this PC" was
+spelled before).
+
 ### Music
 
 Jellyfin music used to be invisible: the watcher dropped everything that was
@@ -397,6 +405,25 @@ automation.
 
 ## Changelog
 
+- **2.10.1** - **The window no longer freezes ("not responding").** Its
+  twice-a-second status refresh, and every Save, waited on the daemon's lock,
+  which the daemon holds across a Jellyfin request or an mpv launch - a slow
+  one froze the window until Windows closed it as not responding (Windows'
+  AppHang reports, and nothing in the log). Both now run on worker threads; with
+  the lock held for 4 s the window's longest stall measured 0.08 s. Uncaught
+  errors are logged, a native crash or a window unresponsive for 4 s writes
+  every thread's stack to `crash.log`, and a daemon step holding the lock over
+  2 s is logged by name. **A switched-off source no longer syncs.** A binding
+  with a device id matches that id only; the name is a fallback for a
+  regenerated id, never while the device itself is connected and never for a
+  device another binding owns, switched off or not ('Android S23' used to
+  follow CAMusic-linux, also called "Android", whose own binding was off).
+  **A paused client no longer lights up at start-up**: found already paused, it
+  waits for play (2.9.0 launched, started the sync, and switched it off again
+  15 s later). **Any app on this PC**: a new source for whatever fills a screen
+  or plays sound; `huesync.exe` + Fullscreen now means the same, so a video
+  full screen on the main display is picked up. Adding a duplicate by name, or
+  a list entry without a device id, is refused with a message.
 - **2.10.0** - **Time lock (experimental, off by default).** Live data from an
   Apple TV (Moonfin) showed the ghost correcting its speed on ~70 % of ticks:
   every 1 s report moved the model's timeline by 0.01-0.15 s, because Jellyfin

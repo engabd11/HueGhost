@@ -100,16 +100,21 @@ class Page(QWidget):
         pass
 
     # helpers
-    def save(self, partial: dict, ok_msg: str = "Saved") -> None:
-        try:
-            res = self.ctx.daemon.apply_config(partial)
-        except Exception as e:
-            self.ctx.toast("Could not save: %s" % e, "bad")
-            return
-        if res.get("restart_required"):
-            self.ctx.toast(ok_msg + " - restart Hue Ghost to apply the network settings", "warn")
-        else:
-            self.ctx.toast(ok_msg, "ok")
+    def save(self, partial: dict, ok_msg: str = "Saved", then: Callable | None = None) -> None:
+        """Apply settings off the GUI thread. ``apply_config`` waits for the
+        daemon's lock, which the daemon holds across a Jellyfin request or an
+        mpv launch - called from here, a slow one froze the window until
+        Windows declared it hung and closed it."""
+        def done(res: dict) -> None:
+            if res.get("restart_required"):
+                self.ctx.toast(ok_msg + " - restart Hue Ghost to apply the network settings", "warn")
+            else:
+                self.ctx.toast(ok_msg, "ok")
+            if then is not None:
+                then()
+
+        run_async(lambda: self.ctx.daemon.apply_config(partial), done,
+                  lambda e: self.ctx.toast("Could not save: %s" % e, "bad"))
 
     def footer(self, *widgets: QWidget) -> None:
         """Right-aligned action row at the bottom of a page."""
@@ -885,6 +890,12 @@ class PlayerPage(Page):
         c4.add_row(button("Refresh list", None, self._load_processes, icon_name="search"),
                    button("Add selected app", None, self._add_process, icon_name="add"),
                    label("or", "hint"), self.by_exe, button("Add by name", None, self._add_by_exe))
+        c4.add_row(button("Add “any app on this PC”", None,
+                          lambda: self._add_exe("*", "Any app on this PC", detect="fullscreen"), icon_name="add"),
+                   stretch_last=True)
+        c4.add(label("Any app on this PC: whatever fills a screen (a video in a browser, a player, a game) - or, "
+                     "with Detect set to Sound, anything this PC plays. The desktop, the taskbar and the lock "
+                     "screen do not count, and neither do Hue Ghost's own windows.", "hint", wrap=True))
         self.lay.addWidget(c4)
 
         self.footer(button("Save sources", "primary", self._save, icon_name="check"))
@@ -963,7 +974,10 @@ class PlayerPage(Page):
             self.ctx.toast("Select a player in the list first", "warn")
             return
         s = items[0].data(Qt.UserRole)
-        if any(r.player.get("device_id") == s["device_id"] for r in self.rows if s.get("device_id")):
+        if not s.get("device_id"):
+            self.ctx.toast("Jellyfin gave no device id for that one - add it by name instead", "warn")
+            return
+        if any(r.value().get("device_id") == s["device_id"] for r in self.rows):
             self.ctx.toast("That app on that device is already in the list", "warn")
             return
         # The exact device id and nothing else. Jellyfin issues one per app
@@ -978,6 +992,9 @@ class PlayerPage(Page):
     def _add_by_name(self) -> None:
         name = self.by_name.text().strip()
         if not name:
+            return
+        if any((r.value().get("device_name_contains") or "").lower() == name.lower() for r in self.rows):
+            self.ctx.toast("A player with that name is already in the list", "warn")
             return
         self._append_row({"source": "jellyfin", "device_id": "", "device_name_contains": name,
                           "user": "", "area_id": "", "area_name": ""})
@@ -1013,17 +1030,17 @@ class PlayerPage(Page):
         run_async(lambda: self.ctx.api.handle("GET", "/api/processes", {}, {}), done,
                   lambda e: self.ctx.toast("Could not list the running apps: %s" % e, "bad"))
 
-    def _add_exe(self, exe: str, name: str = "") -> None:
+    def _add_exe(self, exe: str, name: str = "", detect: str = "audio") -> None:
         exe = (exe or "").strip().lower()
         if not exe:
             return
-        if not exe.endswith(".exe") and sys.platform == "win32":
+        if exe != "*" and not exe.endswith(".exe") and sys.platform == "win32":
             exe += ".exe"
-        if any((r.player.get("exe") or "") == exe for r in self.rows):
+        if any((r.value().get("exe") or "") == exe for r in self.rows if r.value().get("source") == "pc"):
             self.ctx.toast("That app is already in the list", "warn")
             return
         self._append_row({"source": "pc", "exe": exe, "name": name or exe, "mode": "video",
-                          "detect": "audio", "area_id": "", "area_name": ""})
+                          "detect": detect, "area_id": "", "area_name": ""})
 
     def _filter_processes(self, text: str) -> None:
         """129 running processes is not a list anyone reads; a name is."""
@@ -1339,8 +1356,7 @@ class HueSyncPage(Page):
                                           "required": self.required.isChecked(),
                                           "manage_area": self.manage_area.isChecked()},
                               "httphook": {"url": self.hook_url.text().strip()}}}
-        self.save(partial, "Hue Sync settings saved")
-        self._probe()
+        self.save(partial, "Hue Sync settings saved", then=self._probe)
 
 
 # ============================================================================================
