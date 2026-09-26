@@ -190,6 +190,7 @@ STALL_MAX_S = 15.0
 RESIDUAL_WINDOW = 6
 RESIDUAL_GAIN = 0.5
 RESIDUAL_MAX_STEP = 0.25
+SHARP_NOISE_S = 0.03       # timed reports this consistent are steered by in full
 
 
 class StallEstimator:
@@ -247,6 +248,7 @@ class PlaybackModel:
     lock_residual: float | None = None     # median report-vs-locked-timeline gap
     steady_reports: int = 0                # quiet reports since the last event
     residual: float | None = None          # recent report-vs-timeline gap (before correcting)
+    noise: float = 0.0                     # spread (MAD) of recent residuals: this client's jitter
     precise: bool = False                  # reports are precisely timed (SessionWatcher.precise_timing)
 
     # -- queries ---------------------------------------------------------------------
@@ -278,9 +280,10 @@ class PlaybackModel:
 
     def settled(self, reports: int, window_s: float) -> bool:
         """Quiet for ``reports`` reports and the client's recent reports agree
-        with the timeline to within ``window_s``: the time sync is at 0."""
+        with the timeline to within ``window_s`` - or within its own jitter,
+        for a client whose reports are noisier than that: the sync is at 0."""
         return (self.stall_kind is None and not self.paused and self.steady_reports >= reports
-                and self.residual is not None and abs(self.residual) <= window_s)
+                and self.residual is not None and abs(self.residual) <= max(window_s, 3.0 * self.noise))
 
     def begin_stall(self, kind: str, pos: float, report_mono: float) -> None:
         self._anchor(pos, report_mono + self.stalls.predict(kind))
@@ -353,21 +356,27 @@ class PlaybackModel:
                 self.steady_reports += 1
                 self.residuals.append(delta)
                 med = statistics.median(self.residuals)
-                # precise reports steer harder: the last three, in full
-                recent = statistics.median(list(self.residuals)[-3:]) if self.precise else med
+                if len(self.residuals) >= 3:
+                    self.noise = statistics.median(abs(x - med) for x in self.residuals)
+                # precisely timed, consistent reports (Moonfin: ~4 ms) steer
+                # hard - the last three, in full; noisy ones (CAMusic: ~0.1 s)
+                # keep the slow median filter
+                sharp = self.precise and self.noise < SHARP_NOISE_S
+                recent = statistics.median(list(self.residuals)[-3:]) if sharp else med
                 self.residual = recent
                 if self.locked:
                     # locked: the timeline stands; the median residual is only
                     # watched, and a persistent gap (a short re-buffer, clock
                     # skew over a long film) hands back to the corrections
                     self.lock_residual = med
-                    if abs(med) <= self.lock_release_s:
+                    # a gap within the client's own jitter is not a gap
+                    if abs(med) <= max(self.lock_release_s, 3.0 * self.noise):
                         self._debug(r, pred, delta, None)
                         return None
                     self.unlock()
                     self.lock_residual = med      # what released it, for the log
                     event = "unlock"
-                if self.precise:
+                if sharp:
                     corr = max(-RESIDUAL_MAX_STEP, min(RESIDUAL_MAX_STEP, recent))
                 else:
                     corr = max(-RESIDUAL_MAX_STEP, min(RESIDUAL_MAX_STEP, med)) * RESIDUAL_GAIN

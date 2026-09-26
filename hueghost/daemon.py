@@ -852,8 +852,8 @@ class Daemon:
 
     def _lock_params(self, m) -> Params:
         """The lockstep parameters for this tick. With the time lock armed but
-        not yet engaged the deadband is closed, so the ghost converges all the
-        way to 0 instead of stopping at the deadband's edge."""
+        not yet engaged the deadband narrows inside the lock window, so the
+        ghost converges to ~0 instead of stopping at the deadband's edge."""
         if not self.params.time_lock:
             if m.locked:
                 m.unlock()
@@ -862,7 +862,7 @@ class Daemon:
         if m.locked:
             m.lock_release_s = self.params.time_lock_release_s   # a changed setting applies at once
             return self.params
-        return dataclasses.replace(self.params, deadband_s=0.0)
+        return dataclasses.replace(self.params, deadband_s=min(self.params.deadband_s, LOCK_WINDOW_S * 0.75))
 
     def _maybe_lock(self, now: float, m, g, gobs: GhostObs, target: float, target_held: bool,
                     actions: list) -> None:

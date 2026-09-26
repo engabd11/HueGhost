@@ -89,7 +89,12 @@ re-anchored the model by 0.01-0.15 s and the ghost chased each step (nudging on
    0.02 s (`PlaybackModel.settled`), the model stops re-anchoring. Timed reports
    are still measured against the locked timeline; a median gap above
    `time_lock_release_s` (0.02 s) raises `unlock` and the corrections resume.
-   Seek / pause / resume / stall events release it too.
+   Seek / pause / resume / stall events release it too. Both thresholds widen
+   to 3x the client's own jitter (`PlaybackModel.noise`, the MAD of recent
+   residuals): Moonfin's timed reports agree to ~4 ms, CAMusic's only to
+   ~0.1 s - a fixed 0.02 s made the phone lock late and release often. Timed
+   reports steer in full only when that jitter is under 30 ms; noisier
+   clients keep the slow median filter.
 
 Why the release is 0.02 s and not larger: a lock cannot tell a real
 correction from noise, and the clock-offset estimate keeps tightening for
