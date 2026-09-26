@@ -217,7 +217,7 @@ def mpv_args(cfg, title: str, audio_only: bool = False, audio_device: str = "") 
             "--input-default-bindings=no",
             "--input-conf=" + INPUT_CONF]
     if audio_only:
-        vol = max(0, min(100, int(g.get("music_volume", 100) or 100)))
+        vol = max(0, min(100, int(100 if g.get("music_volume") is None else g.get("music_volume"))))
         args += ["--mute=no", "--volume=%d" % vol, "--vid=no", "--force-window=no",
                  "--audio-client-name=hue-ghost"]
         dev = mpv_audio_device(audio_device)

@@ -374,6 +374,8 @@ class Tray(QSystemTrayIcon):
             tip += "\n%s" % f["item"]
             if st.get("drift_s") is not None:
                 tip += "\ndrift %+.2f s" % st["drift_s"]
+                if (st.get("time_lock") or {}).get("engaged"):
+                    tip += " (locked)"
         self.setToolTip(tip[:127])
         self.a_enabled.setChecked(st["enabled"])
 

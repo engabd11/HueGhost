@@ -36,10 +36,16 @@ class Sim:
     stalls (still frame, position not advancing) after seek / start / resume."""
 
     def __init__(self, server_offset=37.3, report_every=10.0, poll=0.5, seed=1, report_latency=0.03,
-                 stall_seek=4.0, stall_start=3.5, stall_resume=0.8, quantize=False):
+                 stall_seek=4.0, stall_start=3.5, stall_resume=0.8, quantize=False, rate=1.0,
+                 checkin_every=None, poll_jitter=0.08):
         self.off, self.every, self.poll, self.lat = server_offset, report_every, poll, report_latency
         self.stall_seek, self.stall_start, self.stall_resume = stall_seek, stall_start, stall_resume
         self.quantize = quantize
+        self.rate = rate     # the client's clock vs ours (1.0002 = 200 ppm fast)
+        # Jellyfin moves LastPlaybackCheckIn less often than the client reports
+        # (Moonfin: position every 1 s, check-in every ~5 s)
+        self.checkin_every = checkin_every
+        self.poll_jitter = poll_jitter
         self.rng = random.Random(seed)
         self.events: list[tuple[float, str, float]] = []   # (t, kind, value)
         self.pos0 = 600.0
@@ -53,7 +59,7 @@ class Sim:
             nonlocal pos
             a2 = max(a, frozen_until)
             if b > a2 and not paused:
-                pos += b - a2
+                pos += (b - a2) * self.rate
 
         for (et, kind, val) in self.events:
             if et > t:
@@ -68,16 +74,19 @@ class Sim:
             elif kind == "resume":
                 paused = False
                 frozen_until = et + self.stall_resume
+            elif kind == "hiccup":
+                # a short re-buffer the client does not report as an event
+                frozen_until = max(frozen_until, et + val)
         advance(last_t, t)
         return pos, paused
 
     def report_times(self, t: float) -> list[float]:
         """Client reports on a cadence plus immediately on events."""
         ts = [k * self.every + self.t_start for k in range(int(t // self.every) + 1)]
-        ts += [et + 0.05 for (et, _, _) in self.events]
+        ts += [et + 0.05 for (et, kind, _) in self.events if kind != "hiccup"]
         return sorted(x for x in ts if self.t_start <= x <= t)
 
-    def run(self, watcher: SessionWatcher, duration: float):
+    def run(self, watcher: SessionWatcher, duration: float, hook=None):
         t = 0.0
         out = []
         while t < duration:
@@ -91,12 +100,17 @@ class Sim:
             pos_r, paused_r = self.truth(rt)
             if self.quantize:
                 pos_r = math.floor(pos_r)
-            checkin = rt + self.lat + LOCAL0 + self.off
+            ct = rt
+            if self.checkin_every:
+                ct = self.t_start + math.floor((rt - self.t_start) / self.checkin_every + 1e-9) * self.checkin_every
+            checkin = ct + self.lat + LOCAL0 + self.off
             obs = watcher.observe([session(pos_r, paused_r, checkin)], server_now, t + LOCAL0, t + MONO0)
+            if hook:
+                hook(obs)
             est = obs.model.position_at(t + MONO0)
             tp, _ = self.truth(t)
             out.append((t, est - tp, obs.event))
-            t += self.poll + self.rng.uniform(0.0, 0.08)        # realistic poll jitter
+            t += self.poll + self.rng.uniform(0.0, self.poll_jitter)   # realistic poll jitter
         return out
 
 
@@ -260,3 +274,105 @@ def test_matching_by_name_can_be_narrowed_to_one_app():
     assert loose.matches(mine) and loose.matches(hers)          # the mix-up
     assert narrow.matches(hers)
     assert not narrow.matches(mine) and not narrow.matches(other_app)
+
+
+# -- time lock (experimental) -------------------------------------------------------
+
+def precise_watcher():
+    w = make_watcher()
+    w.precise_timing = True          # what sync.time_lock switches on
+    return w
+
+
+def lock_when_settled(obs, settle=3, agree=0.02, release=0.02):
+    """What the daemon does once the ghost sits on the target: lock a model
+    whose timed reports have agreed with it for a few reports."""
+    m = obs.model
+    if m is not None and not m.locked and m.settled(settle, agree):
+        m.lock(release)
+
+
+def steps(res, lo):
+    return [abs(res[i][1] - res[i - 1][1]) for i in range(1, len(res)) if res[i][0] > lo]
+
+
+def test_time_lock_holds_the_timeline_without_losing_accuracy():
+    sim = Sim(report_every=1.0, seed=4)
+    w = precise_watcher()
+    res = sim.run(w, 300.0, hook=lock_when_settled)
+    assert w.model.locked
+    assert max(errs(res, 40, 300)) < 0.05
+    # locked: the estimate runs at exactly 1.0x - nothing is re-anchored per report
+    assert max(steps(res, 40)) < 0.02
+    assert not any(ev in ("seek", "resync") for (_, _, ev) in res)
+
+
+def test_stale_checkins_do_not_steer_the_timeline():
+    """Moonfin reports its position every second but Jellyfin moves the
+    check-in only every 5 s. Aged from the stale check-in, those reports are
+    clamped to the previous poll and the model runs ahead of the TV (+0.2 s
+    measured live). With precise timing only the timed reports steer."""
+    def run(precise):
+        sim = Sim(report_every=1.0, checkin_every=5.0, stall_start=0.0, seed=5)
+        w = make_watcher()
+        w.precise_timing = precise
+        res = sim.run(w, 240.0)
+        e = [x for (t, x, _) in res if t > 60]
+        return sum(e) / len(e), max(abs(x) for x in e), sum(1 for x in steps(res, 60) if x > 0.01)
+    old_bias, _, old_steps = run(False)
+    new_bias, new_max, new_steps = run(True)
+    assert old_bias > 0.1 and old_steps > 50, (old_bias, old_steps)   # the flaw (off = unchanged)
+    assert abs(new_bias) < 0.05 and new_max < 0.1 and new_steps <= 2, (new_bias, new_max, new_steps)
+
+
+def test_phase_locked_polls_do_not_make_the_lock_flap():
+    """Found live: 1 s reports against exactly-0.5 s polls. Timing the untimed
+    reports at the middle of the poll window is right on average, but here the
+    error wanders +/-0.25 s over tens of seconds - the lock released every
+    10-20 s. Untimed reports must not steer, nor count against the lock."""
+    sim = Sim(report_every=1.0, checkin_every=5.0, stall_start=0.0, seed=9, poll_jitter=0.005)
+    w = precise_watcher()
+    res = sim.run(w, 900.0, hook=lock_when_settled)
+    assert sum(1 for (_, _, ev) in res if ev == "unlock") <= 2
+    assert w.model.locked
+    assert sum(errs(res, 120, 900)) / len(errs(res, 120, 900)) < 0.03
+
+
+def test_time_lock_releases_on_a_rebuffer_the_client_does_not_report():
+    """A half-second re-buffer is below seek detection: no event arrives, only
+    timed reports that disagree with the locked timeline."""
+    sim = Sim(report_every=1.0, seed=6)
+    sim.events.append((200.0, "hiccup", 0.5))
+    w = precise_watcher()
+    res = sim.run(w, 320.0, hook=lock_when_settled)
+    # (a release in the first seconds is the clock offset still converging)
+    unlocks = [t for (t, _, ev) in res if ev == "unlock" and t > 60]
+    assert unlocks and 200.0 < unlocks[0] < 206.0, unlocks
+    assert max(errs(res, 230, 320)) < 0.05       # corrected, then locked again
+    assert w.model.locked
+
+
+def test_time_lock_follows_clock_skew_by_releasing_and_relocking():
+    sim = Sim(report_every=5.0, rate=1.0002, seed=7)       # a 200 ppm fast client
+    w = precise_watcher()
+    res = sim.run(w, 2400.0, hook=lock_when_settled)
+    assert len([ev for (_, _, ev) in res if ev == "unlock"]) >= 2
+    assert max(errs(res, 60, 2400)) < 0.1
+
+
+def test_seek_pause_and_resume_release_the_lock():
+    sim = Sim(report_every=1.0, seed=8)
+    sim.events.append((60.0, "seek", 1500.0))
+    w = precise_watcher()
+    seen = []
+
+    def hook(obs):
+        if obs.event in ("seek", "pause", "resume"):
+            seen.append((obs.event, obs.model.locked))
+        lock_when_settled(obs)
+    sim.run(w, 59.0, hook=hook)
+    assert w.model.locked
+    sim.events += [(80.0, "pause", 0), (90.0, "resume", 0)]
+    sim.run(w, 100.0, hook=hook)
+    assert [e for (e, _) in seen] == ["seek", "pause", "resume"]
+    assert not any(locked for (_, locked) in seen), "every client event hands back to the corrections"

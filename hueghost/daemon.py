@@ -13,6 +13,7 @@ Ordering rules (avoid flashing the desktop colours into the living room):
 from __future__ import annotations
 
 import copy
+import dataclasses
 import logging
 import os
 import queue
@@ -39,6 +40,11 @@ log = logging.getLogger("hue-ghost")
 IDLE, GHOSTING, SYNCING, STANDBY = "idle", "ghosting", "syncing", "standby"
 TICK_S = 0.25
 ENGINE_STOP_WAIT_S = 2.0
+# time lock (experimental): engage once |drift| is this small ("0.0 s"), the
+# followed client has sent this many quiet reports since its last event ...
+LOCK_WINDOW_S = 0.02
+LOCK_SETTLE_REPORTS = 3
+LOCK_AGREE_S = 0.02     # ... and its recent timed reports agree with the timeline this well
 
 
 def _asc(s) -> str:
@@ -97,15 +103,18 @@ class DriftStats:
         self.samples: list[float] = []
         self.seeks = 0
         self.nudge_ticks = 0
+        self.locked_ticks = 0
         self.started = time.monotonic()
         self.current: float | None = None
         self.last_summary: dict | None = None
 
-    def add(self, drift: float, nudging: bool) -> None:
+    def add(self, drift: float, nudging: bool, locked: bool = False) -> None:
         self.current = drift
         self.samples.append(drift)
         if nudging:
             self.nudge_ticks += 1
+        if locked:
+            self.locked_ticks += 1
 
     def due(self, now: float) -> bool:
         return now - self.started >= self.period
@@ -115,6 +124,7 @@ class DriftStats:
             self.started = time.monotonic()
             self.seeks = 0
             self.nudge_ticks = 0
+            self.locked_ticks = 0
             return None
         absd = sorted(abs(d) for d in self.samples)
         p95 = absd[min(len(absd) - 1, int(round(0.95 * (len(absd) - 1))))]
@@ -126,11 +136,13 @@ class DriftStats:
             "mean": round(statistics.fmean(self.samples), 3),
             "seeks": self.seeks,
             "nudge_ticks": self.nudge_ticks,
+            "locked_ticks": self.locked_ticks,
         }
         self.last_summary = summary
         self.samples = []
         self.seeks = 0
         self.nudge_ticks = 0
+        self.locked_ticks = 0
         self.started = time.monotonic()
         return summary
 
@@ -448,6 +460,9 @@ class Daemon:
                 log.info("client resumed earlier/later than predicted -> resync to %.1fs", m.position_at(now))
         elif act.event == "stalled":
             log.info("followed client still buffering at %.1fs", m.anchor_pos)
+        elif act.event == "unlock":
+            log.info("time lock released: the client's reports sit %+.2fs off the locked timeline "
+                     "-> correcting again", m.lock_residual or 0.0)
 
     def _apply_plan(self, act) -> None:
         """Point the engine at what the *winning* binding wants: its mode,
@@ -803,7 +818,7 @@ class Daemon:
         gobs = GhostObs(pos=g.pos, paused=g.paused, buffering=(g.buffering or g.stalled),
                         speed=g.speed, last_seek_mono=g.last_seek_mono)
         force = self._pending_seek and g.has_position
-        actions = decide(target, target_held, gobs, self.params, now, force_seek=force)
+        actions = decide(target, target_held, gobs, self._lock_params(m), now, force_seek=force)
         if force:
             self._pending_seek = False
         if actions:
@@ -825,13 +840,45 @@ class Daemon:
         # second after a seek (the jump we just commanded is not "drift")
         if gobs.pos is not None and not target_held and not gobs.buffering and not gobs.paused \
                 and now - g.last_seek_mono > 1.0:
-            self.stats.add(gobs.pos - target, abs(g.speed - 1.0) > 1e-6)
+            self.stats.add(gobs.pos - target, abs(g.speed - 1.0) > 1e-6, m.locked)
+        self._maybe_lock(now, m, g, gobs, target, target_held, actions)
         if self.stats.due(now):
             s = self.stats.flush()
             if s:
                 log.info("sync quality (last %ds): mean|drift| %.3fs p95 %.3fs max %.3fs bias %+.3fs "
-                         "seeks %d nudging %d/%d ticks", int(self.stats.period), s["mean_abs"],
-                         s["p95_abs"], s["max_abs"], s["mean"], s["seeks"], s["nudge_ticks"], s["n"])
+                         "seeks %d nudging %d/%d ticks%s", int(self.stats.period), s["mean_abs"],
+                         s["p95_abs"], s["max_abs"], s["mean"], s["seeks"], s["nudge_ticks"], s["n"],
+                         " locked %d/%d" % (s["locked_ticks"], s["n"]) if self.params.time_lock else "")
+
+    def _lock_params(self, m) -> Params:
+        """The lockstep parameters for this tick. With the time lock armed but
+        not yet engaged the deadband narrows inside the lock window, so the
+        ghost converges to ~0 instead of stopping at the deadband's edge."""
+        if not self.params.time_lock:
+            if m.locked:
+                m.unlock()
+                log.info("time lock switched off -> back to per-report corrections")
+            return self.params
+        if m.locked:
+            m.lock_release_s = self.params.time_lock_release_s   # a changed setting applies at once
+            return self.params
+        return dataclasses.replace(self.params, deadband_s=min(self.params.deadband_s, LOCK_WINDOW_S * 0.75))
+
+    def _maybe_lock(self, now: float, m, g, gobs: GhostObs, target: float, target_held: bool,
+                    actions: list) -> None:
+        """Engage the time lock: the ghost sits on the target, playing at 1.0x,
+        and the client's position has been steady for a few reports."""
+        if not self.params.time_lock or m.locked or target_held:
+            return
+        if not m.settled(LOCK_SETTLE_REPORTS, LOCK_AGREE_S) or self._pending_seek or actions:
+            return
+        if gobs.pos is None or gobs.buffering or gobs.paused or now - g.last_seek_mono < 2.0:
+            return
+        drift = gobs.pos - target
+        if abs(g.speed - 1.0) > 0.005 or abs(drift) > LOCK_WINDOW_S:
+            return
+        m.lock(self.params.time_lock_release_s)
+        log.info("time lock engaged at drift %+.3fs ('%s' at %.1fs)", drift, _asc(m.name), m.position_at(now))
 
     def _stop_ghost(self, reason: str) -> None:
         g = self.ghost
@@ -977,6 +1024,15 @@ class Daemon:
                     "screen_care": self.care.status(),
                 },
                 "drift_s": round(drift, 3) if drift is not None else None,
+                # experimental: while engaged the drift above is ~0 by design, so
+                # residual_s is the honest number - how far the client's own
+                # reports sit from the locked timeline
+                "time_lock": {
+                    "enabled": self.params.time_lock,
+                    "engaged": bool(m is not None and m.locked),
+                    "residual_s": (round(m.lock_residual, 3)
+                                   if (m is not None and m.locked and m.lock_residual is not None) else None),
+                },
                 "drift_last_minute": self.stats.last_summary,
                 "engine": est.as_dict(),
                 "offset_s": self.offset,
@@ -1032,6 +1088,7 @@ class Daemon:
                 self.last_act = IDLE_ACTIVITY
                 self._plan_applied = None
             self.watcher.jitter_tol = float(self.cfg.get("sync.jitter_tolerance_s", 1.5))
+            self.watcher.precise_timing = bool(self.cfg.get("sync.time_lock", False))
             self.params = Params.from_config(self.cfg)
             if changed("engine.type", "engine.huesync.host", "engine.huesync.port",
                        "engine.huesync.launch_exe", "engine.httphook.url"):
@@ -1111,6 +1168,7 @@ class Daemon:
         self.cfg.reload()
         self.params = Params.from_config(self.cfg)
         self.watcher.jitter_tol = float(self.cfg.get("sync.jitter_tolerance_s", 1.5))
+        self.watcher.precise_timing = bool(self.cfg.get("sync.time_lock", False))
         self.watcher.poll_interval = float(self.cfg.get("jellyfin.poll_interval_s", 0.5))
         self._push_engine_prefs()
         log.info("config reloaded (offset %+.2fs, intensity %s)", self.offset,
@@ -1118,16 +1176,18 @@ class Daemon:
 
     def _push_engine_prefs(self) -> None:
         e = self.engine
-        if self.cfg.get("engine.huesync.intensity"):
-            try:
-                e.set_intensity(self.cfg.get("engine.huesync.intensity"))
-            except (ValueError, RuntimeError):
-                pass
-        if self.cfg.get("engine.huesync.mode"):
-            try:
-                e.set_mode(self.cfg.get("engine.huesync.mode"))
-            except (ValueError, RuntimeError):
-                pass
+        # While something plays, its Plan owns mode and intensity: a binding's
+        # own values, music mode for a song. Pushing the global defaults here
+        # used to flip a playing phone to video/high whenever any setting was
+        # saved - even an offset nudge. A changed default still arrives: the
+        # plan is rebuilt from the config every poll and re-applied on change.
+        if not self.last_act.playing:
+            for field, setter in (("intensity", e.set_intensity), ("mode", e.set_mode)):
+                if self.cfg.get("engine.huesync." + field):
+                    try:
+                        setter(self.cfg.get("engine.huesync." + field))
+                    except (ValueError, RuntimeError):
+                        pass
         try:
             e.set_use_audio(self.cfg.get("engine.huesync.use_audio"))
         except (ValueError, RuntimeError):
@@ -1192,6 +1252,25 @@ class Daemon:
             except OSError as e:
                 log.warning("could not persist the adopted settings: %s", e)
 
+    def _set_look(self, field: str, value: str) -> bool:
+        """Mode or intensity picked on Home, the tray, the CLI or Home Assistant.
+
+        It takes effect on the lights at once. It becomes the global default
+        only when the source playing does not carry its own value - otherwise a
+        choice made during the Apple TV film would silently become the default
+        for every other source. Returns whether the config changed."""
+        if self.last_act.playing:
+            try:
+                (self.engine.set_mode if field == "mode" else self.engine.set_intensity)(value)
+            except (ValueError, RuntimeError):
+                pass
+            if self._source_sets_its_own(field):
+                log.info("%s -> %s for this session ('%s' sets its own)", field, value,
+                         _asc((self.last_act.binding or {}).get("name") or "the source playing"))
+                return False
+        self.cfg.set("engine.huesync." + field, value)
+        return True
+
     def _source_sets_its_own(self, field: str) -> bool:
         """Whether the binding currently driving the lights carries its own
         value for ``mode`` or ``intensity``."""
@@ -1218,14 +1297,12 @@ class Daemon:
             lvl = str(p["intensity"]).lower()
             if lvl not in INTENSITIES:
                 raise ValueError("intensity must be one of " + ", ".join(INTENSITIES))
-            self.cfg.set("engine.huesync.intensity", lvl)
-            changed = True
+            changed = self._set_look("intensity", lvl) or changed
         if "mode" in p:
             mode = str(p["mode"]).lower()
             if mode not in MODES:
                 raise ValueError("mode must be one of " + ", ".join(MODES))
-            self.cfg.set("engine.huesync.mode", mode)
-            changed = True
+            changed = self._set_look("mode", mode) or changed
         if "use_audio" in p:
             self.cfg.set("engine.huesync.use_audio", _tri_state(p["use_audio"]))
             changed = True
@@ -1251,6 +1328,11 @@ class Daemon:
             if key in p:
                 self.cfg.set("ghost." + key, max(0.0, round(float(p[key]), 1)))
                 changed = True
+        if "time_lock" in p:                 # experimental
+            self.cfg.set("sync.time_lock", bool(p["time_lock"]))
+            self.params = Params.from_config(self.cfg)
+            self.watcher.precise_timing = self.params.time_lock
+            changed = True
         if "offset_s" in p:
             self.cfg.set("sync.offset_s", round(float(p["offset_s"]), 3))
             changed = True

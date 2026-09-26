@@ -43,7 +43,7 @@ re-anchoring on every poll (v1) turns that into 1-4 s corrections.
 3. **First sighting** (daemon start / new item): age = `now - report time`,
    capped at 30 s, added to the anchor so a 7 s old report does not start the
    ghost 7 s late.
-4. **Jitter vs seek**: a new report within `jitter_tolerance_s` (0.75) of the
+4. **Jitter vs seek**: a new report within `jitter_tolerance_s` (1.5) of the
    model is blended 50 %; beyond it the model re-anchors and reports a `seek`
    event, which the daemon turns into a forced ghost seek (bypassing the seek
    cooldown).
@@ -66,6 +66,45 @@ after the first ~40 s, seeks detected within one poll, no spurious seeks.
 | \|drift\| >= `seek_threshold_s` and cooldown passed, or forced (client seek) | hard seek |
 | `deadband_s` < \|drift\| | speed = 1 - clamp(drift / `converge_s`, ±`max_speed_delta`) |
 | \|drift\| <= `deadband_s` | speed 1.0 |
+
+### Time lock (experimental, `sync.time_lock`, off by default)
+
+Live Moonfin data showed the target itself wandering: every 1 s report
+re-anchored the model by 0.01-0.15 s and the ghost chased each step (nudging on
+~70 % of ticks). Two parts, both switched on by the one setting:
+
+1. **Timed reports only** (`SessionWatcher.precise_timing`): Moonfin reports
+   its position every second but Jellyfin moves `LastPlaybackCheckIn` only
+   every ~5 s. Aged from the stale check-in, 4 of 5 reports were clamped to the
+   previous poll (the model ran ~0.2 s ahead of the TV). Timing them at the
+   middle of the poll window is unbiased on average, but 1 s reports against
+   0.5 s polls are phase-locked, so that error wanders +/-0.25 s over tens of
+   seconds instead of averaging out - found live, it kept releasing the lock.
+   So a report whose check-in did not move (`timed=False`) may still raise
+   `seek`/`pause`/`resume`, but never steers; timed reports (scatter ~4 ms
+   live) steer with the median of the last three, in full.
+2. **Lock** (`PlaybackModel.lock`): while armed the deadband is closed so the
+   ghost converges to 0; once |drift| <= 0.02 s, the ghost plays at 1.0x, the
+   client has sent 3 quiet timed reports and they agree with the timeline to
+   0.02 s (`PlaybackModel.settled`), the model stops re-anchoring. Timed reports
+   are still measured against the locked timeline; a median gap above
+   `time_lock_release_s` (0.02 s) raises `unlock` and the corrections resume.
+   Seek / pause / resume / stall events release it too. Both thresholds widen
+   to 3x the client's own jitter (`PlaybackModel.noise`, the MAD of recent
+   residuals): Moonfin's timed reports agree to ~4 ms, CAMusic's only to
+   ~0.1 s - a fixed 0.02 s made the phone lock late and release often. Timed
+   reports steer in full only when that jitter is under 30 ms; noisier
+   clients keep the slow median filter.
+
+Why the release is 0.02 s and not larger: a lock cannot tell a real
+correction from noise, and the clock-offset estimate keeps tightening for
+minutes after the first lock - a 0.2 s guard held a 0.07-0.1 s bias. With the
+noise gone from the steering, 0.02 s costs nothing. Replaying 15 min of
+recorded Apple TV polls (5 seeks), scored against the line through the timed
+reports: today mean 0.20 s / p95 0.31 s / 667 timeline steps > 10 ms; time
+lock mean 0.02 s / p95 0.06 s / 6 steps, 4 release-and-relock cycles.
+`/status` carries `time_lock.{enabled,engaged,residual_s}`; the minute summary
+adds `locked N/M ticks`.
 
 A 0.2 s lead becomes speed 0.96 for ~5 s: inaudible (the ghost is muted) and
 invisible on the lights.

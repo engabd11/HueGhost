@@ -190,6 +190,7 @@ STALL_MAX_S = 15.0
 RESIDUAL_WINDOW = 6
 RESIDUAL_GAIN = 0.5
 RESIDUAL_MAX_STEP = 0.25
+SHARP_NOISE_S = 0.03       # timed reports this consistent are steered by in full
 
 
 class StallEstimator:
@@ -239,6 +240,16 @@ class PlaybackModel:
     last_debug: str = ""
     device_id: str | None = None
     media_type: str = "video"
+    # time lock (experimental, sync.time_lock): once the ghost sits on the target,
+    # the timeline stops taking per-report corrections and just runs at 1.0x;
+    # reports are still measured against it and release it when they disagree
+    locked: bool = False
+    lock_release_s: float = 0.02
+    lock_residual: float | None = None     # median report-vs-locked-timeline gap
+    steady_reports: int = 0                # quiet reports since the last event
+    residual: float | None = None          # recent report-vs-timeline gap (before correcting)
+    noise: float = 0.0                     # spread (MAD) of recent residuals: this client's jitter
+    precise: bool = False                  # reports are precisely timed (SessionWatcher.precise_timing)
 
     # -- queries ---------------------------------------------------------------------
     def position_at(self, now_mono: float) -> float:
@@ -255,15 +266,39 @@ class PlaybackModel:
         self.anchor_pos = float(pos)
         self.anchor_mono = float(mono)
 
+    def lock(self, release_s: float) -> None:
+        self.locked = True
+        self.lock_release_s = float(release_s)
+        self.lock_residual = None
+        self.residuals.clear()
+
+    def unlock(self) -> None:
+        self.locked = False
+        self.lock_residual = None
+        self.steady_reports = 0
+        self.residual = None
+
+    def settled(self, reports: int, window_s: float) -> bool:
+        """Quiet for ``reports`` reports and the client's recent reports agree
+        with the timeline to within ``window_s`` - or within its own jitter,
+        for a client whose reports are noisier than that: the sync is at 0."""
+        return (self.stall_kind is None and not self.paused and self.steady_reports >= reports
+                and self.residual is not None and abs(self.residual) <= max(window_s, 3.0 * self.noise))
+
     def begin_stall(self, kind: str, pos: float, report_mono: float) -> None:
         self._anchor(pos, report_mono + self.stalls.predict(kind))
         self.stall_kind = kind
         self.stall_pos = float(pos)
         self.stall_report_mono = report_mono
         self.residuals.clear()
+        self.unlock()
 
-    def apply(self, r: Report, report_mono: float, jitter_tol: float) -> str | None:
-        """Fold a (new) report in. Returns an event name or None."""
+    def apply(self, r: Report, report_mono: float, jitter_tol: float, timed: bool = True) -> str | None:
+        """Fold a (new) report in. Returns an event name or None.
+
+        ``timed=False``: the report's time is only known to within a poll (see
+        ``SessionWatcher._report_time``) - enough to spot a seek or a pause,
+        not to steer the timeline by."""
         if r.key == self.last_key:
             return None
         self.last_key = r.key
@@ -308,20 +343,56 @@ class PlaybackModel:
             if abs(delta) > jitter_tol:
                 self.begin_stall("seek", r.pos, report_mono)
                 event = "seek"
+            elif not timed:
+                # Phase-locked to our polls (1 s reports, 0.5 s polls) the
+                # timing error of such reports does not average out: it wanders
+                # +/-0.25 s over tens of seconds, which is what kept releasing
+                # the time lock live. Only reports Jellyfin timed steer.
+                pass
             else:
                 # steady state: the rate is exactly 1.0, only the intercept is
                 # uncertain - correct it slowly from the median residual so
                 # per-report position jitter does not reach the ghost
+                self.steady_reports += 1
                 self.residuals.append(delta)
                 med = statistics.median(self.residuals)
-                corr = max(-RESIDUAL_MAX_STEP, min(RESIDUAL_MAX_STEP, med)) * RESIDUAL_GAIN
+                if len(self.residuals) >= 3:
+                    self.noise = statistics.median(abs(x - med) for x in self.residuals)
+                # precisely timed, consistent reports (Moonfin: ~4 ms) steer
+                # hard - the last three, in full; noisy ones (CAMusic: ~0.1 s)
+                # keep the slow median filter
+                sharp = self.precise and self.noise < SHARP_NOISE_S
+                recent = statistics.median(list(self.residuals)[-3:]) if sharp else med
+                self.residual = recent
+                if self.locked:
+                    # locked: the timeline stands; the median residual is only
+                    # watched, and a persistent gap (a short re-buffer, clock
+                    # skew over a long film) hands back to the corrections
+                    self.lock_residual = med
+                    # a gap within the client's own jitter is not a gap
+                    if abs(med) <= max(self.lock_release_s, 3.0 * self.noise):
+                        self._debug(r, pred, delta, None)
+                        return None
+                    self.unlock()
+                    self.lock_residual = med      # what released it, for the log
+                    event = "unlock"
+                if sharp:
+                    corr = max(-RESIDUAL_MAX_STEP, min(RESIDUAL_MAX_STEP, recent))
+                else:
+                    corr = max(-RESIDUAL_MAX_STEP, min(RESIDUAL_MAX_STEP, med)) * RESIDUAL_GAIN
                 self._anchor(pred + corr, report_mono)
                 self.residuals = deque((x - corr for x in self.residuals), maxlen=RESIDUAL_WINDOW)
-        self.last_debug = ("report #%d pos=%.2f%s pred=%.2f delta=%+.2f%s stall=%s" % (
+        if event and event != "unlock":
+            self.unlock()
+        self._debug(r, pred, delta, event)
+        return event
+
+    def _debug(self, r: Report, pred: float, delta: float, event: str | None) -> None:
+        self.last_debug = ("report #%d pos=%.2f%s pred=%.2f delta=%+.2f%s%s stall=%s" % (
             self.reports, r.pos, " paused" if r.paused else "", pred, delta,
             (" -> " + event) if event else "",
+            " locked (median %+.2f)" % self.lock_residual if self.locked and self.lock_residual is not None else "",
             {k: round(v, 1) for k, v in self.stalls.est.items()}))
-        return event
 
 
 @dataclass
@@ -348,6 +419,10 @@ class SessionWatcher:
         self._prev_poll_mono: float | None = None
         self._playing_last_poll = False
         self.last_error: str | None = None
+        # time lock (experimental) also times reports properly: see _report_time
+        self.precise_timing = False
+        self._last_checkin: float | None = None
+        self._timed = True             # whether the last report's time is known precisely
 
     # -- pure core --------------------------------------------------------
     def observe(self, sessions: list[dict], server_epoch: float | None,
@@ -387,15 +462,28 @@ class SessionWatcher:
             self.model.last_debug = "report #1 pos=%.2f age=%.2fs%s" % (
                 r.pos, now_mono - report_mono, " (start stall %.1fs)" % self.stalls.predict("start") if just_started else "")
             return Observation(True, True, self.model, "new_item", r, stale, player=who)
-        event = self.model.apply(r, report_mono, self.jitter_tol)
+        self.model.precise = self.precise_timing
+        event = self.model.apply(r, report_mono, self.jitter_tol, timed=self._timed)
         return Observation(True, True, self.model, event, r, False, player=who)
 
     def _report_time(self, r: Report, local_epoch: float, now_mono: float,
                      prev_poll: float | None, first: bool) -> tuple[float, bool]:
         """Local monotonic time at which the client took this report."""
         fallback = now_mono if first else now_mono - self.poll_interval / 2.0
+        stale_checkin = not first and r.checkin is not None and r.checkin == self._last_checkin
+        self._last_checkin = r.checkin
+        self._timed = not (stale_checkin and self.precise_timing)
         if r.checkin is None:
             return fallback, False
+        if stale_checkin and self.precise_timing:
+            # Moonfin sends its position every second, but Jellyfin moves
+            # LastPlaybackCheckIn only every ~5 s. A new position under an old
+            # check-in was not timed by it: it arrived somewhere since the last
+            # poll, so the middle of that window is the unbiased guess. (Aging
+            # it from the stale check-in clamps it to the previous poll, which
+            # put the model ~0.2 s ahead of the TV on live data.)
+            lo = prev_poll if prev_poll is not None else now_mono - self.poll_interval
+            return now_mono - max(0.0, now_mono - lo) / 2.0, False
         if not first:
             # the report was not there at the previous poll, so it happened
             # before *now*: checkin - now is a valid lower bound of the offset

@@ -29,11 +29,13 @@ class JellyfinSource(Source):
         self._warned_no_output = None
 
     def _make_watcher(self) -> SessionWatcher:
-        return SessionWatcher(
+        w = SessionWatcher(
             PlayerSet.from_players(self._bindings),
             jitter_tolerance_s=float(self.cfg.get("sync.jitter_tolerance_s", 1.5)),
             poll_interval_s=float(self.cfg.get("jellyfin.poll_interval_s", 0.5)),
             stall_priors=self.cfg.get("sync.stall_estimates") or None)
+        w.precise_timing = bool(self.cfg.get("sync.time_lock", False))
+        return w
 
     def bindings(self) -> list[dict]:
         return list(self._bindings)

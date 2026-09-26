@@ -59,7 +59,10 @@ room the sync actually landed in.
 switch:
   - platform: rest
     name: Hue Ghost movie mode
-    resource: http://192.168.0.50:8787/status
+    # the switch posts to `resource` (/set takes {"enabled": bool}) and reads
+    # its state from `state_resource` (/status ignores a body)
+    resource: http://192.168.0.50:8787/set
+    state_resource: http://192.168.0.50:8787/status
     body_on: '{"enabled": true}'
     body_off: '{"enabled": false}'
     is_on_template: "{{ value_json.enabled }}"
@@ -67,9 +70,6 @@ switch:
       Authorization: "Bearer YOUR_TOKEN"
       Content-Type: application/json
     method: post
-    # rest switch posts to `resource`; point it at /set which accepts {"enabled": bool}
-    # (set resource to http://192.168.0.50:8787/set and state_resource to /status)
-    state_resource: http://192.168.0.50:8787/status
 
 rest_command:
   hue_ghost_offset_plus:
@@ -79,8 +79,15 @@ rest_command:
     content_type: application/json
     payload: '{"offset_delta": 0.25}'
   # /set also takes {"mode": "video"|"music"|"games"},
-  # {"intensity": "subtle".."extreme"} and
-  # {"use_audio": true|false|null}  (null = leave the Hue Sync app's own setting)
+  # {"intensity": "subtle".."extreme"},
+  # {"use_audio": true|false|null}  (null = leave the Hue Sync app's own setting),
+  # {"enabled": bool}, {"offset_s": s}, {"offset_delta": s},
+  # {"brightness": 0-100}, {"brightness_step": n},
+  # {"binding": {"key": "<id>", "enabled": bool}}, {"manage_area": bool},
+  # {"keep_awake": "off"|"playing"|"always"}, {"pause_stop_min": min},
+  # {"music_pause_stop_s": s}, {"lights_off_delay_s": s},
+  # {"pixel_shift_min": min}, {"blackout_idle_min": min} and
+  # {"time_lock": bool}  (experimental)
   hue_ghost_music_mode:
     url: http://192.168.0.50:8787/set
     method: post
