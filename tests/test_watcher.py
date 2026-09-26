@@ -37,7 +37,7 @@ class Sim:
 
     def __init__(self, server_offset=37.3, report_every=10.0, poll=0.5, seed=1, report_latency=0.03,
                  stall_seek=4.0, stall_start=3.5, stall_resume=0.8, quantize=False, rate=1.0,
-                 checkin_every=None):
+                 checkin_every=None, poll_jitter=0.08):
         self.off, self.every, self.poll, self.lat = server_offset, report_every, poll, report_latency
         self.stall_seek, self.stall_start, self.stall_resume = stall_seek, stall_start, stall_resume
         self.quantize = quantize
@@ -45,6 +45,7 @@ class Sim:
         # Jellyfin moves LastPlaybackCheckIn less often than the client reports
         # (Moonfin: position every 1 s, check-in every ~5 s)
         self.checkin_every = checkin_every
+        self.poll_jitter = poll_jitter
         self.rng = random.Random(seed)
         self.events: list[tuple[float, str, float]] = []   # (t, kind, value)
         self.pos0 = 600.0
@@ -109,7 +110,7 @@ class Sim:
             est = obs.model.position_at(t + MONO0)
             tp, _ = self.truth(t)
             out.append((t, est - tp, obs.event))
-            t += self.poll + self.rng.uniform(0.0, 0.08)        # realistic poll jitter
+            t += self.poll + self.rng.uniform(0.0, self.poll_jitter)   # realistic poll jitter
         return out
 
 
@@ -277,11 +278,17 @@ def test_matching_by_name_can_be_narrowed_to_one_app():
 
 # -- time lock (experimental) -------------------------------------------------------
 
-def lock_when_settled(obs, settle=3, release=0.2):
+def precise_watcher():
+    w = make_watcher()
+    w.precise_timing = True          # what sync.time_lock switches on
+    return w
+
+
+def lock_when_settled(obs, settle=3, agree=0.02, release=0.02):
     """What the daemon does once the ghost sits on the target: lock a model
-    that has been quiet for a few reports."""
+    whose timed reports have agreed with it for a few reports."""
     m = obs.model
-    if m is not None and not m.locked and m.stall_kind is None and not m.paused and m.steady_reports >= settle:
+    if m is not None and not m.locked and m.settled(settle, agree):
         m.lock(release)
 
 
@@ -291,60 +298,72 @@ def steps(res, lo):
 
 def test_time_lock_holds_the_timeline_without_losing_accuracy():
     sim = Sim(report_every=1.0, seed=4)
-    w = make_watcher()
+    w = precise_watcher()
     res = sim.run(w, 300.0, hook=lock_when_settled)
     assert w.model.locked
-    assert max(errs(res, 40, 300)) < 0.15
+    assert max(errs(res, 40, 300)) < 0.05
     # locked: the estimate runs at exactly 1.0x - nothing is re-anchored per report
     assert max(steps(res, 40)) < 0.02
-    assert not any(ev in ("seek", "resync", "unlock") for (_, _, ev) in res)
+    assert not any(ev in ("seek", "resync") for (_, _, ev) in res)
 
 
-def test_stale_checkins_are_timed_from_the_poll_window():
+def test_stale_checkins_do_not_steer_the_timeline():
     """Moonfin reports its position every second but Jellyfin moves the
     check-in only every 5 s. Aged from the stale check-in, those reports are
     clamped to the previous poll and the model runs ahead of the TV (+0.2 s
-    measured live). The time lock turns on the unbiased timing."""
-    def bias(precise):
+    measured live). With precise timing only the timed reports steer."""
+    def run(precise):
         sim = Sim(report_every=1.0, checkin_every=5.0, stall_start=0.0, seed=5)
         w = make_watcher()
         w.precise_timing = precise
         res = sim.run(w, 240.0)
-        e = [x for (t, x, _) in res if t > 40]
-        return sum(e) / len(e), max(abs(x) for x in e)
-    old_bias, _ = bias(False)
-    new_bias, new_max = bias(True)
-    assert old_bias > 0.1, old_bias          # the flaw this fixes (off = unchanged)
-    assert abs(new_bias) < 0.05 and new_max < 0.2, (new_bias, new_max)
+        e = [x for (t, x, _) in res if t > 60]
+        return sum(e) / len(e), max(abs(x) for x in e), sum(1 for x in steps(res, 60) if x > 0.01)
+    old_bias, _, old_steps = run(False)
+    new_bias, new_max, new_steps = run(True)
+    assert old_bias > 0.1 and old_steps > 50, (old_bias, old_steps)   # the flaw (off = unchanged)
+    assert abs(new_bias) < 0.05 and new_max < 0.1 and new_steps <= 2, (new_bias, new_max, new_steps)
+
+
+def test_phase_locked_polls_do_not_make_the_lock_flap():
+    """Found live: 1 s reports against exactly-0.5 s polls. Timing the untimed
+    reports at the middle of the poll window is right on average, but here the
+    error wanders +/-0.25 s over tens of seconds - the lock released every
+    10-20 s. Untimed reports must not steer, nor count against the lock."""
+    sim = Sim(report_every=1.0, checkin_every=5.0, stall_start=0.0, seed=9, poll_jitter=0.005)
+    w = precise_watcher()
+    res = sim.run(w, 900.0, hook=lock_when_settled)
+    assert sum(1 for (_, _, ev) in res if ev == "unlock") <= 2
+    assert w.model.locked
+    assert sum(errs(res, 120, 900)) / len(errs(res, 120, 900)) < 0.03
 
 
 def test_time_lock_releases_on_a_rebuffer_the_client_does_not_report():
     """A half-second re-buffer is below seek detection: no event arrives, only
-    reports that slowly disagree with the locked timeline."""
+    timed reports that disagree with the locked timeline."""
     sim = Sim(report_every=1.0, seed=6)
     sim.events.append((200.0, "hiccup", 0.5))
-    w = make_watcher()
+    w = precise_watcher()
     res = sim.run(w, 320.0, hook=lock_when_settled)
-    unlocks = [t for (t, _, ev) in res if ev == "unlock"]
-    assert unlocks and 200.0 < unlocks[0] < 212.0, unlocks
-    assert max(errs(res, 240, 320)) < 0.15       # corrected, then locked again
+    # (a release in the first seconds is the clock offset still converging)
+    unlocks = [t for (t, _, ev) in res if ev == "unlock" and t > 60]
+    assert unlocks and 200.0 < unlocks[0] < 206.0, unlocks
+    assert max(errs(res, 230, 320)) < 0.05       # corrected, then locked again
     assert w.model.locked
 
 
 def test_time_lock_follows_clock_skew_by_releasing_and_relocking():
     sim = Sim(report_every=5.0, rate=1.0002, seed=7)       # a 200 ppm fast client
-    w = make_watcher()
-    res = sim.run(w, 3000.0, hook=lock_when_settled)
-    # 0.2 s of skew builds up every ~1000 s: released, corrected, locked again
+    w = precise_watcher()
+    res = sim.run(w, 2400.0, hook=lock_when_settled)
     assert len([ev for (_, _, ev) in res if ev == "unlock"]) >= 2
-    assert max(errs(res, 40, 3000)) < 0.3
-    assert w.model.locked
+    assert max(errs(res, 60, 2400)) < 0.1
 
 
 def test_seek_pause_and_resume_release_the_lock():
     sim = Sim(report_every=1.0, seed=8)
     sim.events.append((60.0, "seek", 1500.0))
-    w = make_watcher()
+    w = precise_watcher()
     seen = []
 
     def hook(obs):

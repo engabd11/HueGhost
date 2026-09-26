@@ -73,23 +73,33 @@ Live Moonfin data showed the target itself wandering: every 1 s report
 re-anchored the model by 0.01-0.15 s and the ghost chased each step (nudging on
 ~70 % of ticks). Two parts, both switched on by the one setting:
 
-1. **Report timing** (`SessionWatcher.precise_timing`): Moonfin reports its
-   position every second but Jellyfin moves `LastPlaybackCheckIn` only every
-   ~5 s. A new position under an unchanged check-in is timed at the middle of
-   the poll window instead of being aged from the stale check-in (which clamped
-   it to the previous poll and put the model ~0.2 s ahead of the TV).
+1. **Timed reports only** (`SessionWatcher.precise_timing`): Moonfin reports
+   its position every second but Jellyfin moves `LastPlaybackCheckIn` only
+   every ~5 s. Aged from the stale check-in, 4 of 5 reports were clamped to the
+   previous poll (the model ran ~0.2 s ahead of the TV). Timing them at the
+   middle of the poll window is unbiased on average, but 1 s reports against
+   0.5 s polls are phase-locked, so that error wanders +/-0.25 s over tens of
+   seconds instead of averaging out - found live, it kept releasing the lock.
+   So a report whose check-in did not move (`timed=False`) may still raise
+   `seek`/`pause`/`resume`, but never steers; timed reports (scatter ~4 ms
+   live) steer with the median of the last three, in full.
 2. **Lock** (`PlaybackModel.lock`): while armed the deadband is closed so the
-   ghost converges to 0; once |drift| <= 0.02 s, the ghost plays at 1.0x and the
-   client has sent 3 quiet reports, the model stops re-anchoring. Reports are
-   still measured against the locked timeline; a median gap above
-   `time_lock_release_s` (0.2 s) raises an `unlock` event and the normal
-   corrections resume. Seek / pause / resume / stall events release it too.
+   ghost converges to 0; once |drift| <= 0.02 s, the ghost plays at 1.0x, the
+   client has sent 3 quiet timed reports and they agree with the timeline to
+   0.02 s (`PlaybackModel.settled`), the model stops re-anchoring. Timed reports
+   are still measured against the locked timeline; a median gap above
+   `time_lock_release_s` (0.02 s) raises `unlock` and the corrections resume.
+   Seek / pause / resume / stall events release it too.
 
-Replaying 15 min of recorded Apple TV polls (5 seeks) through the model, scored
-against the line through the precisely-timed reports: today mean 0.19 s / p95
-0.30 s / 338 timeline steps > 10 ms; time lock mean 0.03 s / p95 0.06 s / 10
-steps. `/status` carries `time_lock.{enabled,engaged,residual_s}`; the minute
-summary adds `locked N/M ticks`.
+Why the release is 0.02 s and not larger: a lock cannot tell a real
+correction from noise, and the clock-offset estimate keeps tightening for
+minutes after the first lock - a 0.2 s guard held a 0.07-0.1 s bias. With the
+noise gone from the steering, 0.02 s costs nothing. Replaying 15 min of
+recorded Apple TV polls (5 seeks), scored against the line through the timed
+reports: today mean 0.20 s / p95 0.31 s / 667 timeline steps > 10 ms; time
+lock mean 0.02 s / p95 0.06 s / 6 steps, 4 release-and-relock cycles.
+`/status` carries `time_lock.{enabled,engaged,residual_s}`; the minute summary
+adds `locked N/M ticks`.
 
 A 0.2 s lead becomes speed 0.96 for ~5 s: inaudible (the ghost is muted) and
 invisible on the lights.

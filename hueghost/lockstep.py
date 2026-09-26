@@ -57,7 +57,7 @@ class Params:
     max_speed_delta: float = 0.04
     seek_cooldown_s: float = 3.0
     time_lock: bool = False            # experimental: hold the timeline once drift reaches 0
-    time_lock_release_s: float = 0.2   # ... until the client's reports disagree by this much
+    time_lock_release_s: float = 0.02  # ... until the client's timed reports disagree by this much
 
     @classmethod
     def from_config(cls, cfg) -> "Params":
@@ -69,7 +69,7 @@ class Params:
             max_speed_delta=float(s.get("max_speed_delta", 0.04)),
             seek_cooldown_s=float(s.get("seek_cooldown_s", 3.0)),
             time_lock=bool(s.get("time_lock", False)),
-            time_lock_release_s=float(s.get("time_lock_release_s", 0.2)),
+            time_lock_release_s=float(s.get("time_lock_release_s", 0.02)),
         )
 
 

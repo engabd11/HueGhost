@@ -40,10 +40,11 @@ log = logging.getLogger("hue-ghost")
 IDLE, GHOSTING, SYNCING, STANDBY = "idle", "ghosting", "syncing", "standby"
 TICK_S = 0.25
 ENGINE_STOP_WAIT_S = 2.0
-# time lock (experimental): engage once |drift| is this small ("0.0 s") and the
-# followed client has sent this many quiet reports since its last event
+# time lock (experimental): engage once |drift| is this small ("0.0 s"), the
+# followed client has sent this many quiet reports since its last event ...
 LOCK_WINDOW_S = 0.02
 LOCK_SETTLE_REPORTS = 3
+LOCK_AGREE_S = 0.02     # ... and its recent timed reports agree with the timeline this well
 
 
 def _asc(s) -> str:
@@ -859,6 +860,7 @@ class Daemon:
                 log.info("time lock switched off -> back to per-report corrections")
             return self.params
         if m.locked:
+            m.lock_release_s = self.params.time_lock_release_s   # a changed setting applies at once
             return self.params
         return dataclasses.replace(self.params, deadband_s=0.0)
 
@@ -866,9 +868,9 @@ class Daemon:
                     actions: list) -> None:
         """Engage the time lock: the ghost sits on the target, playing at 1.0x,
         and the client's position has been steady for a few reports."""
-        if not self.params.time_lock or m.locked or target_held or m.stall_kind is not None:
+        if not self.params.time_lock or m.locked or target_held:
             return
-        if m.steady_reports < LOCK_SETTLE_REPORTS or self._pending_seek or actions:
+        if not m.settled(LOCK_SETTLE_REPORTS, LOCK_AGREE_S) or self._pending_seek or actions:
             return
         if gobs.pos is None or gobs.buffering or gobs.paused or now - g.last_seek_mono < 2.0:
             return

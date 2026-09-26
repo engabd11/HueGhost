@@ -56,13 +56,12 @@ DEFAULTS: dict[str, Any] = {
         "max_speed_delta": 0.04,     # +/- speed clamp for nudging
         "seek_cooldown_s": 3.0,
         "jitter_tolerance_s": 1.5,   # report vs model difference treated as jitter, not a seek
-        # Experimental. Once the ghost sits on the target (drift ~0.0 s), hold the
-        # timeline instead of re-correcting it on every client report; seeks,
-        # pauses, buffering or reports that disagree by more than
-        # time_lock_release_s hand back to the normal corrections. Also times
-        # reports whose Jellyfin check-in did not move (Moonfin) properly.
+        # Experimental. Steer the timeline only by reports Jellyfin timed (a
+        # moved check-in; Moonfin moves it every 5th report), and once the ghost
+        # sits on it (drift ~0.0 s) hold it; seeks, pauses, buffering or timed
+        # reports that disagree by more than time_lock_release_s release it.
         "time_lock": False,
-        "time_lock_release_s": 0.2,
+        "time_lock_release_s": 0.02,
         "lights_off_delay_s": 1.5,   # lights stop this long after the client stops (ghost stays on standby)
         "idle_stop_delay_s": 10.0,   # ... and the ghost mpv closes after this long
         "pause_stop_min": 0.0,       # stop syncing after the client is paused this

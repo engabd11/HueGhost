@@ -529,15 +529,16 @@ class SyncPage(Page):
         self.time_lock = ToggleSwitch()
         ex.form("Time lock", self.time_lock,
                 "Once the ghost reaches 0.0 s drift, hold the timeline instead of re-correcting it on every "
-                "report from the TV. Seeks, pauses, buffering - or reports that drift further off than the "
-                "limit below - release it, the usual corrections take over, and it locks again once settled. "
-                "Also times reports from clients that update Jellyfin's check-in only every few seconds "
-                "(Moonfin) properly, which removes a ~0.2 s lead.")
-        sp = self._spin(0.1, 1.0, 0.05, " s")
+                "report from the TV. Seeks, pauses, buffering - or the TV's precisely timed reports drifting "
+                "further off than the limit below - release it, the usual corrections take over, and it "
+                "locks again once settled. Also stops steering by reports Jellyfin did not time (Moonfin "
+                "sends one a second but times only every fifth), which removes a ~0.2 s lead.")
+        sp = self._spin(0.01, 0.5, 0.01, " s")
         self.fields["sync.time_lock_release_s"] = sp
         ex.form("Release when the TV is off by", sp,
-                "The median gap between the TV's reports and the locked timeline that hands back to the "
-                "corrections. Smaller follows the TV more closely; larger holds steadier.")
+                "The median gap between the TV's timed reports and the locked timeline that hands back to "
+                "the corrections. Those reports agree to a few ms, so 0.02 s follows the TV closely while "
+                "still holding still; larger holds a small offset for longer.")
         self.lay.addWidget(ex)
 
         adv = Card("Advanced lockstep tuning", "defaults are tuned for the 0.5 s Jellyfin poll; change with care")

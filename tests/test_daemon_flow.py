@@ -712,3 +712,14 @@ def test_mode_from_home_is_live_but_not_saved_over_a_source_that_sets_its_own(wo
     d.last_act.binding["mode"] = ""                  # this one leaves it to the default
     d.action("set", {"mode": "music"})
     assert calls[-1] == ("mode", "music") and d.cfg.get("engine.huesync.mode") == "music"
+
+
+def test_a_changed_release_applies_to_a_lock_already_held(running):
+    d = running.d
+    _time_lock(d)
+    t0 = _tv(running, 100.0, 60.0)
+    m = d.last_obs.model
+    assert m.locked and m.lock_release_s == 0.02
+    d.apply_config({"sync": {"time_lock_release_s": 0.1}})
+    _tv(running, 100.0, 1.0, t0)
+    assert m.locked and m.lock_release_s == 0.1

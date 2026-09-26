@@ -237,12 +237,13 @@ The **Sync** page exposes the advanced knobs if you want them.
 progress report from the TV nudges the ghost's timeline a little, so the
 ghost is always correcting. With *Time lock* on, once the drift reaches 0.0 s
 the timeline is held and the ghost simply plays at 1.0x; Home shows
-*drift +0.00 s · locked*. Seeking, pausing, buffering - or the TV's reports
-drifting more than *Release when the TV is off by* (0.2 s) from the locked
-timeline - releases it, the usual corrections take over, and it locks again
-once playback has settled. It also fixes the timing of clients (Moonfin on the
-Apple TV) whose Jellyfin check-in only moves every 5 s, which otherwise
-leaves the ghost ~0.2 s ahead - so re-check your offset after turning it on.
+*drift +0.00 s · locked*. Seeking, pausing, buffering - or the TV's
+precisely timed reports drifting more than *Release when the TV is off by*
+(0.02 s) from the locked timeline - releases it, the usual corrections take
+over, and it locks again once playback has settled. It also stops steering by
+reports Jellyfin did not time: Moonfin on the Apple TV sends its position
+every second but Jellyfin times only every fifth, which otherwise leaves the
+ghost ~0.2 s ahead - so re-check your offset after turning it on.
 
 **Stopping** (Sync page): the lights go off **1.5 s** after the TV stops
 (*Lights off after the TV stops*); the ghost player itself stays on standby
@@ -401,11 +402,11 @@ automation.
   every 1 s report moved the model's timeline by 0.01-0.15 s, because Jellyfin
   only moves the check-in every 5 s and those reports were timed from the stale
   check-in (~0.2 s lead). The new *Time lock* switch (Sync page, `/set
-  {"time_lock": true}`) times such reports from the poll window and, once the
+  {"time_lock": true}`) steers only by the reports Jellyfin timed and, once the
   drift reaches 0, holds the timeline instead of chasing each report; seeks,
-  pauses, buffering or a persistent gap (> 0.2 s) release it. Replaying 15 min
-  of recorded Apple TV reports with 5 seeks: mean error 0.19 -> 0.03 s, p95 0.30
-  -> 0.06 s, timeline steps 338 -> 10. `/status` gains `time_lock`, the
+  pauses, buffering or timed reports more than 0.02 s off release it.
+  Replaying 15 min of recorded Apple TV reports with 5 seeks: mean error 0.20
+  -> 0.02 s, p95 0.31 -> 0.06 s, timeline steps 667 -> 6. `/status` gains `time_lock`, the
   per-minute log line `locked N/M ticks`. Fixes: saving any setting while
   something played (even an offset nudge) pushed the global mode and intensity
   over the playing source's own - a phone playing music flipped to video; a
