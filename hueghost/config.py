@@ -56,11 +56,12 @@ DEFAULTS: dict[str, Any] = {
         "max_speed_delta": 0.04,     # +/- speed clamp for nudging
         "seek_cooldown_s": 3.0,
         "jitter_tolerance_s": 1.5,   # report vs model difference treated as jitter, not a seek
-        # Experimental. Steer the timeline only by reports Jellyfin timed (a
-        # moved check-in; Moonfin moves it every 5th report), and once the ghost
-        # sits on it (drift ~0.0 s) hold it; seeks, pauses, buffering or timed
-        # reports that disagree by more than time_lock_release_s release it.
-        "time_lock": False,
+        # Steer the timeline only by reports Jellyfin timed (a moved check-in;
+        # Moonfin moves it every 5th report), and once the ghost sits on it
+        # (drift ~0.0 s) hold it; seeks, pauses, buffering or timed reports that
+        # disagree by more than time_lock_release_s release it. On by default
+        # since 2.11 (see MIGRATIONS).
+        "time_lock": True,
         "time_lock_release_s": 0.02,
         "lights_off_delay_s": 1.5,   # lights stop this long after the client stops (ghost stays on standby)
         "idle_stop_delay_s": 10.0,   # ... and the ghost mpv closes after this long
@@ -145,16 +146,38 @@ def _binding_selector(b: dict) -> str:
     return ("%s %s" % (dev, app)).strip() if app else dev
 
 
+def normalize_exes(raw: str, add_suffix: bool | None = None) -> str:
+    """``" Chrome.exe, msedge ,chrome.exe"`` -> ``"chrome.exe,msedge.exe"``.
+
+    One or several executables, comma separated, lower case, no repeats. On
+    Windows a bare name gets ``.exe``; ``*`` (any app) and ``@games`` (any
+    game) are kept as they are."""
+    if add_suffix is None:
+        add_suffix = sys.platform == "win32"
+    out: list[str] = []
+    for e in str(raw or "").split(","):
+        e = e.strip().lower()
+        if not e:
+            continue
+        if add_suffix and e not in ("*", "@games") and not e.endswith(".exe"):
+            e += ".exe"
+        if e not in out:
+            out.append(e)
+    return ",".join(out)
+
+
 def _binding(b: dict) -> dict:
     """One binding, every key present. New fields must be defaulted here and
     nowhere else - this is the only shape the rest of the app ever sees."""
     src = b.get("source") if b.get("source") in SOURCE_KINDS else "jellyfin"
+    exe = normalize_exes(b.get("exe", ""), add_suffix=False) if src == "pc" else ""
+    games = "@games" in exe.split(",")
     mode = str(b.get("mode", "") or "").lower()
     if mode not in MODES:
         # An app on this PC has to declare what it is - nothing else can tell a
         # film from a game. A Jellyfin client knows what it is playing, so ""
         # there means "follow the media": music mode for a song, video for the rest.
-        mode = "video" if src == "pc" else ""
+        mode = ("games" if games else "video") if src == "pc" else ""
     level = str(b.get("intensity", "") or "").lower()
     if level not in INTENSITIES:
         level = ""                   # "" = whatever the global intensity is set to
@@ -179,7 +202,7 @@ def _binding(b: dict) -> dict:
         "client": str(b.get("client", "") or ""),
         "user": str(b.get("user", "") or ""),
         "kinds": kinds,
-        "exe": str(b.get("exe", "") or "").lower(),
+        "exe": exe,
         "detect": detect,
         # what Hue Sync is put into while THIS one plays, so every source can be
         # set up once and then simply played: Apple TV -> video/subtle, a phone
@@ -192,7 +215,7 @@ def _binding(b: dict) -> dict:
         "audio_device": str(b.get("audio_device", "") or ""),
     }
     if not out["name"]:
-        out["name"] = out["exe"] or out["device_name_contains"] or out["device_id"]
+        out["name"] = ("Any game" if games else out["exe"]) or out["device_name_contains"] or out["device_id"]
     return out
 
 _LEGACY_MAP = {
@@ -305,12 +328,41 @@ def migrate_legacy(raw: dict) -> dict:
     return out
 
 
+def _turn_time_lock_on(data: dict) -> None:
+    # save() writes every default out, so a config from before 2.11 carries
+    # the old "time_lock": false whether or not anyone chose it
+    data.setdefault("sync", {})["time_lock"] = True
+
+
+# One-time changes to a saved config, applied once each and remembered under
+# "_migrations" so a setting switched back afterwards stays as it was put.
+MIGRATIONS = (
+    ("time_lock_default_on", _turn_time_lock_on),
+)
+
+
+def apply_migrations(data: dict) -> bool:
+    """Run the migrations ``data`` has not had yet. True when any ran."""
+    done = list(data.get("_migrations") or [])
+    ran = False
+    for name, fn in MIGRATIONS:
+        if name not in done:
+            fn(data)
+            done.append(name)
+            ran = True
+    data["_migrations"] = done
+    return ran
+
+
 class Config:
     """Dict-backed config with dotted-path access and live reload."""
 
     def __init__(self, data: dict | None = None, path: str | None = None):
         self.path = path
         self.data = _deep_merge(DEFAULTS, data or {})
+        if not data:
+            # a new config starts on today's defaults: nothing to migrate from
+            self.data["_migrations"] = [name for name, _ in MIGRATIONS]
         self.migrated = False
 
     # -- access -----------------------------------------------------------
@@ -339,6 +391,7 @@ class Config:
             cfg.migrated = True
         else:
             cfg = cls(raw, path)
+        apply_migrations(cfg.data)
         return cfg
 
     def reload(self) -> None:

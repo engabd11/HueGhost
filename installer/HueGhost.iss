@@ -4,7 +4,7 @@
 #define AppName "Hue Ghost"
 #define AppVersion GetEnv("HUEGHOST_VERSION")
 #if AppVersion == ""
-  #define AppVersion "2.10.3"
+  #define AppVersion "2.11.0"
 #endif
 #define AppPublisher "Cyborg Automation AU"
 #define AppURL "https://github.com/engabd11/HueGhost"
@@ -58,6 +58,7 @@ Name: "desktopicon"; Description: "Create a desktop shortcut"; GroupDescription:
 [Files]
 Source: "..\dist\HueGhost\*"; DestDir: "{app}"; Flags: recursesubdirs ignoreversion; Components: app
 Source: "..\README.md"; DestDir: "{app}"; Flags: ignoreversion; Components: app
+Source: "..\CHANGELOG.md"; DestDir: "{app}"; Flags: ignoreversion; Components: app
 Source: "..\LICENSE"; DestDir: "{app}"; Flags: ignoreversion; Components: app
 Source: "..\docs\*.md"; DestDir: "{app}\docs"; Flags: ignoreversion; Components: app
 Source: "payload\mpv\*"; DestDir: "{app}\mpv"; Flags: recursesubdirs ignoreversion; Components: mpv

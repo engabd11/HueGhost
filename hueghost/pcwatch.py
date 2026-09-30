@@ -7,10 +7,17 @@ bound - there is no scan of every process, and no guessing about what is a
   sound      a WASAPI session belonging to that exe is above the noise floor
   fullscreen that exe owns the foreground window and it covers a whole monitor
 
-The exe ``*`` means *any app*: any sound, any window filling a display.
-``huesync.exe`` means the same for the window signal - Hue Sync's own window is
-never a fullscreen video, and binding it is how people say "this PC" (its
-loopback capture already makes its sound session mirror the whole PC).
+A binding's ``exe`` can list several executables, comma separated
+(``chrome.exe,msedge.exe``): one source for every browser, or a game and its
+launcher. The exe ``*`` means *any app*: any sound, any window filling a
+display. ``huesync.exe`` means the same for the window signal - Hue Sync's own
+window is never a fullscreen video, and binding it is how people say "this PC"
+(its loopback capture already makes its sound session mirror the whole PC).
+
+The exe ``@games`` means *any game*: an app installed in a game library
+(Steam, Epic, GOG, Xbox, EA, Ubisoft, Riot) or one Windows reports running
+exclusive fullscreen Direct3D. That is also what a game started by Sunshine for
+a Moonlight client looks like, so streamed games need no setup of their own.
 
 ``PcProbe.observe`` is pure, like ``SessionWatcher.observe``: it takes the two
 readings and the clock and returns what is playing. The OS calls live in
@@ -27,6 +34,14 @@ from dataclasses import dataclass, field
 log = logging.getLogger("hue-ghost.pc")
 
 ANY_APP = "*"
+GAMES = "@games"
+# where the launchers install games; the launchers themselves live elsewhere,
+# so a store front left open full screen is never "a game"
+GAME_DIRS = ("\\steamapps\\common\\", "\\epic games\\", "\\gog galaxy\\games\\",
+             "\\gog games\\", "\\xboxgames\\", "\\ea games\\", "\\origin games\\",
+             "\\ubisoft game launcher\\games\\", "\\riot games\\")
+# ... except the two launchers that install inside their own library folder
+LAUNCHER_DIRS = ("\\epic games\\launcher\\", "\\riot games\\riot client\\")
 # windows that fill a display without anything playing: the desktop, the
 # taskbar, the lock screen, start/search - never "a fullscreen video"
 SHELL_CLASSES = {"progman", "workerw", "shell_traywnd", "shell_secondarytraywnd"}
@@ -35,9 +50,22 @@ SHELL_EXES = {"explorer.exe", "lockapp.exe", "searchhost.exe", "searchapp.exe",
               "hueghost.exe"}
 
 
-def any_app(exe: str, signal: str) -> bool:
-    """Whether a binding's exe stands for every app, for this signal."""
-    return exe == ANY_APP or (signal == "window" and exe == "huesync.exe")
+def binding_exes(b_or_exe) -> set[str]:
+    """The executables one binding stands for: ``exe`` split on commas."""
+    raw = b_or_exe.get("exe") if isinstance(b_or_exe, dict) else b_or_exe
+    return {e.strip().lower() for e in str(raw or "").split(",") if e.strip()}
+
+
+def any_app(exes, signal: str) -> bool:
+    """Whether a binding's exe(s) stand for every app, for this signal."""
+    exes = binding_exes(exes) if isinstance(exes, str) else set(exes)
+    return ANY_APP in exes or (signal == "window" and "huesync.exe" in exes)
+
+
+def is_game_path(path: str) -> bool:
+    """Whether an executable lives in one of the game libraries."""
+    p = (path or "").replace("/", "\\").lower()
+    return any(d in p for d in GAME_DIRS) and not any(d in p for d in LAUNCHER_DIRS)
 
 
 @dataclass(frozen=True)
@@ -45,6 +73,7 @@ class AudioHit:
     pid: int
     exe: str                 # basename, lower case
     peak: float
+    path: str = ""           # full path; only read when an "any game" source needs it
 
 
 @dataclass(frozen=True)
@@ -55,6 +84,8 @@ class Foreground:
     fullscreen: bool = False
     monitor_id: str = ""     # the display it is on, as the Hue Sync app names it
     cls: str = ""            # window class, lower case
+    path: str = ""           # full path of the exe; only read for "any game"
+    exclusive: bool = False  # Windows reports exclusive fullscreen Direct3D
 
     @property
     def shell(self) -> bool:
@@ -88,17 +119,21 @@ class PcProbe:
         """Pure. ``bindings`` are PC bindings; returns {binding id: Hit}."""
         out: dict[str, Hit] = {}
         for b in bindings:
-            exe = (b.get("exe") or "").lower()
+            exes = binding_exes(b)
             detect = b.get("detect") or "audio"
             hit = self.hits.get(b["id"]) or Hit()
-            any_sound, any_window = any_app(exe, "audio"), any_app(exe, "window")
+            any_sound, any_window = any_app(exes, "audio"), any_app(exes, "window")
+            games = GAMES in exes
             loud = max((s.peak for s in sessions
-                        if (any_sound or s.exe == exe) and s.pid not in self.ignore_pids
+                        if (any_sound or s.exe in exes or (games and is_game_path(s.path)))
+                        and s.pid not in self.ignore_pids
                         and s.pid != os.getpid()), default=0.0)
             by_audio = loud > self.peak
+            fg_game = bool(games and fg and not fg.shell
+                           and (fg.exclusive or is_game_path(fg.path)))
             fg_mine = bool(fg and fg.pid not in self.ignore_pids
-                           and (fg.exe == exe or (any_window and not fg.shell)))
-            by_window = bool(fg_mine and fg.fullscreen)
+                           and (fg.exe in exes or (any_window and not fg.shell) or fg_game))
+            by_window = bool(fg_mine and (fg.fullscreen or (fg_game and fg.exclusive)))
             signal = (by_audio if detect == "audio" else
                       by_window if detect == "fullscreen" else
                       (by_audio or by_window))
@@ -126,13 +161,14 @@ class PcProbe:
     def poll(self, bindings: list[dict], now: float) -> dict[str, Hit]:
         """The same, reading the OS. Only the signals some binding asks for are
         read, so an install with no PC bindings costs nothing at all."""
-        wanted = {(b.get("exe") or "").lower() for b in bindings}
-        if any(any_app(e, "audio") for e in wanted):
-            wanted = None                   # every app's sound counts
+        wanted: set[str] | None = set().union(*(binding_exes(b) for b in bindings)) if bindings else set()
+        games = GAMES in wanted
+        if any_app(wanted, "audio") or games:
+            wanted = None                   # every app's sound counts (or might be a game)
         need_audio = any((b.get("detect") or "audio") in ("audio", "either") for b in bindings)
         need_fg = any((b.get("detect") or "audio") in ("fullscreen", "either") for b in bindings)
-        sessions = audio_sessions(wanted) if need_audio else []
-        fg = foreground_window() if need_fg else None
+        sessions = audio_sessions(wanted, paths=games) if need_audio else []
+        fg = foreground_window(games=games) if need_fg else None
         return self.observe(bindings, sessions, fg, now)
 
 
@@ -199,6 +235,25 @@ def exe_path_of(pid: int) -> str:
         k32.CloseHandle(h)
 
 
+_path_cache: dict[int, tuple[str, float]] = {}
+
+
+def path_of(pid: int) -> str:
+    """``exe_path_of``, cached like ``exe_of`` - the poll loop asks every second."""
+    if pid <= 0:
+        return ""
+    now = time.monotonic()
+    hit = _path_cache.get(pid)
+    if hit and now - hit[1] < _EXE_TTL_S:
+        return hit[0]
+    path = exe_path_of(pid)
+    _path_cache[pid] = (path, now)
+    if len(_path_cache) > 512:
+        for k in [k for k, v in _path_cache.items() if now - v[1] > _EXE_TTL_S]:
+            _path_cache.pop(k, None)
+    return path
+
+
 _desc_cache: dict[str, str] = {}
 
 
@@ -253,8 +308,10 @@ def app_name(exe: str, path: str = "") -> str:
     return stem[:1].upper() + stem[1:] if stem else exe
 
 
-def foreground_window() -> Foreground | None:
-    """The focused window, its process, and whether it covers a whole display."""
+def foreground_window(games: bool = False) -> Foreground | None:
+    """The focused window, its process, and whether it covers a whole display.
+    ``games`` also reads its path and the exclusive-fullscreen state, which
+    only an "any game" source needs."""
     if sys.platform != "win32":
         return None
     import ctypes
@@ -292,10 +349,30 @@ def foreground_window() -> Foreground | None:
         from .winutil import list_displays
         monitor_id = next((d.monitor_id for d in list_displays() if d.name == mi.szDevice), "")
     return Foreground(pid=pid.value, exe=exe_of(pid.value), title=title.value,
-                      fullscreen=full, monitor_id=monitor_id, cls=cls.value.lower())
+                      fullscreen=full, monitor_id=monitor_id, cls=cls.value.lower(),
+                      path=path_of(pid.value) if games else "",
+                      exclusive=exclusive_fullscreen() if games else False)
 
 
-def audio_sessions(wanted: set[str] | None = None) -> list[AudioHit]:
+QUNS_RUNNING_D3D_FULL_SCREEN = 3
+
+
+def exclusive_fullscreen() -> bool:
+    """Whether Windows says a Direct3D app holds the screen exclusively - the
+    one signal that finds a game installed outside every known library."""
+    if sys.platform != "win32":
+        return False
+    try:
+        import ctypes
+        state = ctypes.c_int(0)
+        if ctypes.windll.shell32.SHQueryUserNotificationState(ctypes.byref(state)) != 0:
+            return False
+        return state.value == QUNS_RUNNING_D3D_FULL_SCREEN
+    except Exception:
+        return False
+
+
+def audio_sessions(wanted: set[str] | None = None, paths: bool = False) -> list[AudioHit]:
     """Processes currently playing sound on the default output device.
 
     Each session hands us its pid directly, so no process enumeration is
@@ -303,10 +380,13 @@ def audio_sessions(wanted: set[str] | None = None) -> list[AudioHit]:
     if sys.platform != "win32":
         return []
     try:
-        return _audio_sessions(wanted)
+        out = _audio_sessions(wanted)
     except Exception as e:                  # a COM failure must not stop the daemon
         log.debug("audio session enumeration failed: %s", e, exc_info=True)
         return []
+    if paths:
+        out = [AudioHit(pid=a.pid, exe=a.exe, peak=a.peak, path=path_of(a.pid)) for a in out]
+    return out
 
 
 def _audio_sessions(wanted: set[str] | None) -> list[AudioHit]:

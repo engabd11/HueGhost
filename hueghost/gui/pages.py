@@ -530,14 +530,14 @@ class SyncPage(Page):
             c3.form(name, sp, tip)
         self.lay.addWidget(c3)
 
-        ex = Card("Experimental", "off by default; try it, and switch it off if anything looks wrong")
+        ex = Card("Time lock", "on by default - holds the ghost steady once it matches the TV")
         self.time_lock = ToggleSwitch()
         ex.form("Time lock", self.time_lock,
-                "Once the ghost reaches 0.0 s drift, hold the timeline instead of re-correcting it on every "
-                "report from the TV. Seeks, pauses, buffering - or the TV's precisely timed reports drifting "
-                "further off than the limit below - release it, the usual corrections take over, and it "
-                "locks again once settled. Also stops steering by reports Jellyfin did not time (Moonfin "
-                "sends one a second but times only every fifth), which removes a ~0.2 s lead.")
+                "Once the ghost matches the TV (0.0 s drift), keep it there instead of re-correcting on every "
+                "report the TV sends. A seek, a pause or buffering lets go, the normal corrections catch up, "
+                "and it locks again once playback settles. It also ignores the untimed reports some clients "
+                "send (Moonfin: one a second, but only every fifth is timed), so the ghost no longer runs "
+                "~0.2 s ahead - re-check your offset if you switch it on or off.")
         sp = self._spin(0.01, 0.5, 0.01, " s")
         self.fields["sync.time_lock_release_s"] = sp
         ex.form("Release when the TV is off by", sp,
@@ -612,7 +612,7 @@ class SyncPage(Page):
         self.intensity.set_value(cfg.get("engine.huesync.intensity"))
         self.mode.set_value(cfg.get("engine.huesync.mode"))
         self.audio.set_value(cfg.get("engine.huesync.use_audio"))
-        self.time_lock.setChecked(bool(cfg.get("sync.time_lock", False)))
+        self.time_lock.setChecked(bool(cfg.get("sync.time_lock", True)))
         self._loaded = True
 
     def refresh(self, st: dict) -> None:
@@ -688,7 +688,9 @@ class PlayerRow(QWidget):
         name = (player.get("name") or player.get("exe") or player.get("device_name_contains")
                 or player.get("device_id") or "?")
         if self.is_pc:
-            how = "on this PC, " + (player.get("exe") or "?")
+            exe = player.get("exe") or "?"
+            how = "on this PC, " + {"*": "any app", "@games": "any game"}.get(
+                exe, exe.replace(",", ", "))
             glyph = "display"
         else:
             how = "this exact device" if player.get("device_id") else (
@@ -886,16 +888,21 @@ class PlayerPage(Page):
         self.proc_list.setMinimumHeight(150)
         c4.add(self.proc_list)
         self.by_exe = QLineEdit()
-        self.by_exe.setPlaceholderText("or type the .exe ... e.g. eldenring.exe")
+        self.by_exe.setPlaceholderText("or type the .exe ... e.g. eldenring.exe (several: a.exe, b.exe)")
         c4.add_row(button("Refresh list", None, self._load_processes, icon_name="search"),
                    button("Add selected app", None, self._add_process, icon_name="add"),
                    label("or", "hint"), self.by_exe, button("Add by name", None, self._add_by_exe))
-        c4.add_row(button("Add “any app on this PC”", None,
-                          lambda: self._add_exe("*", "Any app on this PC", detect="fullscreen"), icon_name="add"),
-                   stretch_last=True)
-        c4.add(label("Any app on this PC: whatever fills a screen (a video in a browser, a player, a game) - or, "
-                     "with Detect set to Sound, anything this PC plays. The desktop, the taskbar and the lock "
-                     "screen do not count, and neither do Hue Ghost's own windows.", "hint", wrap=True))
+        from ..presets import PRESETS
+        self.preset = QComboBox()
+        for pr in PRESETS:
+            self.preset.addItem(pr["name"], pr)
+        self.preset_hint = label("", "hint", wrap=True)
+        self.preset.currentIndexChanged.connect(
+            lambda _i: self.preset_hint.setText(self.preset.currentData()["hint"]))
+        self.preset_hint.setText(PRESETS[0]["hint"])
+        c4.add_row(label("Quick add", "hint"), self.preset,
+                   button("Add", None, self._add_preset, icon_name="add"), stretch_last=True)
+        c4.add(self.preset_hint)
         self.lay.addWidget(c4)
 
         self.footer(button("Save sources", "primary", self._save, icon_name="check"))
@@ -1030,17 +1037,21 @@ class PlayerPage(Page):
         run_async(lambda: self.ctx.api.handle("GET", "/api/processes", {}, {}), done,
                   lambda e: self.ctx.toast("Could not list the running apps: %s" % e, "bad"))
 
-    def _add_exe(self, exe: str, name: str = "", detect: str = "audio") -> None:
-        exe = (exe or "").strip().lower()
+    def _add_exe(self, exe: str, name: str = "", detect: str = "audio", mode: str = "video") -> None:
+        from ..config import normalize_exes
+        exe = normalize_exes(exe)
         if not exe:
             return
-        if exe != "*" and not exe.endswith(".exe") and sys.platform == "win32":
-            exe += ".exe"
-        if any((r.value().get("exe") or "") == exe for r in self.rows if r.value().get("source") == "pc"):
+        if any(normalize_exes(r.value().get("exe") or "") == exe
+               for r in self.rows if r.value().get("source") == "pc"):
             self.ctx.toast("That app is already in the list", "warn")
             return
-        self._append_row({"source": "pc", "exe": exe, "name": name or exe, "mode": "video",
+        self._append_row({"source": "pc", "exe": exe, "name": name or exe, "mode": mode,
                           "detect": detect, "area_id": "", "area_name": ""})
+
+    def _add_preset(self) -> None:
+        pr = self.preset.currentData()
+        self._add_exe(pr["exe"], pr["name"], detect=pr["detect"], mode=pr["mode"])
 
     def _filter_processes(self, text: str) -> None:
         """129 running processes is not a list anyone reads; a name is."""
