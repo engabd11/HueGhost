@@ -443,7 +443,7 @@ def _install_diagnostics(app: QApplication) -> None:
     threading.Thread(target=watchdog, name="hue-ghost-gui-watchdog", daemon=True).start()
 
 
-def run_gui(cfg: Config, minimized: bool = False) -> int:
+def run_gui(cfg: Config, minimized: bool = False, instance=None) -> int:
     app = QApplication.instance() or QApplication(sys.argv)
     _install_diagnostics(app)
     app.setApplicationName("Hue Ghost")
@@ -469,6 +469,10 @@ def run_gui(cfg: Config, minimized: bool = False) -> int:
     def watch():
         if daemon.restart_requested or not t.is_alive():
             app.quit()
+        if instance is not None and instance.show_requested.is_set():
+            # a second launch (double-click) asked for this window
+            instance.show_requested.clear()
+            tray.show_window()
     wt = QTimer()
     wt.setInterval(500)
     wt.timeout.connect(watch)
@@ -477,6 +481,8 @@ def run_gui(cfg: Config, minimized: bool = False) -> int:
     rc = app.exec()
     daemon.stop()
     t.join(timeout=5)
+    if instance is not None:
+        instance.release()
     if daemon.restart_requested:
         from ..winutil import tray_command
         cmd = tray_command()

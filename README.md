@@ -405,6 +405,15 @@ automation.
 
 ## Changelog
 
+- **2.10.2** - **Only one Hue Ghost runs at a time.** Double-clicking the app
+  while autostart already had it in the tray started a SECOND copy: Home
+  Assistant talked to one (it owned port 8787), the window you saw belonged to
+  the other, so HA said off/idle while the app said on/syncing - and each
+  copy's shutdown closed the other's ghost, which it read as "closed by user"
+  and switched sync off by itself. A second launch now brings the running
+  copy's window up and exits; the control port is bound exclusively, so two
+  daemons can no longer both claim it (`HUEGHOST_INSTANCE` names a separate
+  lock for a deliberate dev instance). Pairs with Hue Synco 1.61.0.
 - **2.10.1** - **The window no longer freezes ("not responding").** Its
   twice-a-second status refresh, and every Save, waited on the daemon's lock,
   which the daemon holds across a Jellyfin request or an mpv launch - a slow

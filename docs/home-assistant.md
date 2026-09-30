@@ -16,7 +16,7 @@ Settings > Devices & services > Hue Synco > **Configure** > fill in
 | entity | |
 |---|---|
 | `light.hue_ghost_global_sync` | the master control: on/off is movie mode, brightness is the level Hue Sync runs the area at |
-| `sensor.hue_ghost_sync_status` | `offline` / `idle` / `ghosting` / `syncing`, attributes: now playing, position, drift, engine state |
+| `sensor.hue_ghost_sync_status` | `offline` / `disabled` (Global sync off) / `idle` / `ghosting` / `syncing`, attributes: now playing, position, drift, engine state |
 | `sensor.hue_ghost_sync_area` | the entertainment area the sync plays in |
 | `sensor.hue_ghost_active_source` | which followed source is driving the lights now |
 | `sensor.hue_ghost_now_playing` | the Jellyfin item, or what the PC source reported |
