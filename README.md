@@ -1,620 +1,224 @@
 # Hue Ghost
 
-**A software Hue Sync Box for Jellyfin.** Sync your Philips Hue entertainment
-area to whatever your TV is playing from Jellyfin - Apple TV, Android TV,
-phone, any client - without buying a Hue Sync Box or Sync Camera.
+**Philips Hue light sync for Jellyfin, PC apps and games - no Sync Box needed.**
 
-Built by **Cyborg Automation AU**. MIT licensed. See [Credits](#credits).
+Press play on your TV, and the Hue lights in the room follow the picture. It
+works with any Jellyfin client (Apple TV, Android TV, a phone, ...), with apps
+and games on your PC, and with games you stream through Sunshine and Moonlight.
+The TV keeps playing exactly as before: no cables, no HDMI passthrough, no
+limits on 4K, HDR or Dolby Vision.
+
+Built by **Cyborg Automation AU**. Free and open source (MIT).
 
 ```
-   TV (Jellyfin client)  --plays-->  Jellyfin server  <--follows session--  Hue Ghost (PC)
-                                                                                |
-        living-room lights  <-- Hue Bridge <-- Hue Sync app <-- captures -- ghost display
-                                                (official, free)           (muted mpv, in lockstep)
+   TV (Jellyfin client)  --plays-->  Jellyfin server  <--follows-- Hue Ghost (PC)
+                                                                        |
+   living-room lights <-- Hue Bridge <-- Hue Sync app <-- watches -- ghost copy
+                                        (official, free)     (silent, in step with the TV)
 ```
 
-How it works: the PC keeps a muted **ghost** copy of the same video in
-lockstep with the TV, on a display the official **Hue Sync** desktop app is
-pointed at. Hue Sync does what it already does well - turn a screen into
-light - and Hue Ghost automates the two things you would otherwise do by hand:
-*keep the ghost exactly where the TV is* and *start/stop Hue Sync at the right
-moments*.
+## How it works
 
-Press play on the TV, the lights follow. Press stop, they stop. No cables to
-the TV, no HDMI passthrough, no HDR / 4K / Dolby Vision limitations - the TV
-keeps playing exactly as before.
+Philips makes a free **Hue Sync** desktop app that turns whatever is on a PC
+screen into light. It cannot see your TV. Hue Ghost fills that gap:
 
-## Install (Windows)
+1. **A film on the TV (Jellyfin).** Hue Ghost plays a silent, hidden copy of
+   the same film on the PC - the **ghost** - and keeps it on the same frame as
+   the TV. Hue Sync watches the ghost, so the lights match the TV.
+2. **An app or game on this PC.** The picture is already on a screen Hue Sync
+   can see, so no ghost is needed. Hue Ghost notices that it is playing and
+   switches the sync on, in the right room and mode.
+3. **Music.** Hue Ghost plays the track into an audio output you cannot hear,
+   and Hue Sync's music mode listens to that.
+
+When playback stops, the lights stop. You set things up once; after that you
+just press play.
+
+## What you need
+
+| | |
+|---|---|
+| **PC** | Windows 10 or 11 (64-bit), left on while you watch (it must not go to sleep) |
+| **Lights** | A Hue Bridge (v2) with an **entertainment area** set up in the Hue app |
+| **Hue Sync** | The free [Hue Sync desktop app](https://www.philips-hue.com/en-us/explore-hue/propositions/entertainment/sync-with-pc), paired with your bridge |
+| **For TV sync** | A Jellyfin server (10.9 or newer) on your network, and a Jellyfin API key |
+| **For TV sync** | A spare display for the ghost. The installer adds a **virtual display** for you, or you can use an HDMI dummy plug |
+| **For Jellyfin music** *(optional)* | A spare audio output nobody listens to: an unused HDMI/optical port, or a virtual audio cable |
+
+Only syncing apps and games on the PC? Then you need just the PC, the bridge
+and Hue Sync. No Jellyfin, no virtual display.
+
+The graphics card should be able to decode your films (4K HEVC/AV1 needs a
+reasonably recent GPU), because the ghost plays the original file.
+
+## Install
 
 1. Download **`HueGhost-Setup-<version>.exe`** from
-   [Releases](https://github.com/engabd11/HueGhost/releases) and run it. The
-   wizard installs:
-   - the Hue Ghost app (desktop control panel + tray icon + command line),
-   - **mpv** (bundled - plays the ghost),
-   - a **virtual display** for the ghost (optional, recommended - a signed
-     driver by [VirtualDrivers](https://github.com/VirtualDrivers/Virtual-Display-Driver);
-     keeps your real screen free while a movie plays),
-   - and can start Hue Ghost at sign-in, minimised to the tray.
-2. Install the official
-   [Hue Sync desktop app](https://www.philips-hue.com/en-us/explore-hue/propositions/entertainment/sync-with-pc)
-   if you don't have it, pair it with your bridge and select the
-   **entertainment area** of the room where the TV is.
+   [Releases](https://github.com/engabd11/HueGhost/releases) and run it. It
+   installs the app, the **mpv** player that plays the ghost, and (optional,
+   recommended) the **virtual display**. It can also start Hue Ghost when you
+   sign in.
+2. Install **Hue Sync** if you do not have it, pair it with your bridge and
+   pick the entertainment area of the room.
 
-Requirements: Windows 10/11 (64-bit), Jellyfin 10.9+ on the LAN, a Hue Bridge
-(v2) with an entertainment area, and a PC that stays on while you watch.
-macOS/Linux: the daemon and the app run from source
-(`pip install "hue-ghost[gui] @ git+https://github.com/engabd11/HueGhost"`;
-Hue Sync for macOS is untested; Linux has no Hue Sync app - see *Limitations*).
+## Set up (about 5 minutes)
 
-## Set up (5 minutes, all in the app)
+Open **Hue Ghost** from the Start menu. The first run opens on **Sources**.
 
-Launch **Hue Ghost** (Start menu). The first run opens on the **Sources** page:
+1. **Sources** - add what the lights should follow:
+   - *A TV or phone:* enter your Jellyfin URL and API key (Jellyfin Dashboard >
+     API Keys > +), click *Test connection*, play something on the TV, select
+     it and click *Add selected player*.
+   - *An app or game on this PC:* use **Quick add** (for example *Any game* or
+     *Web browsers*), pick it from the list of running apps, or type its `.exe`.
+   - Give each one its **mode** (Video / Music / Games), **intensity** and
+     **room** (entertainment area), then **Save sources**.
+2. **Display** - pick the ghost display (the virtual display) and click *Show
+   test pattern* to check it is the right one. (TV sync only.)
+3. **Hue Sync** - in the Hue Sync app, once: *Settings > Allow public control*
+   **on**, *Start syncing when Hue Sync launches* **off**. The page checks
+   this for you.
+4. **Home** - press play on the TV and watch the state go *idle -> ghost
+   playing -> syncing*.
 
-1. **Sources** - enter your Jellyfin URL and an API key (Jellyfin Dashboard >
-   API Keys > +). Click *Test connection and list players*, play something on
-   the TV, select it, *Add selected player*, *Save sources*. Add every device
-   you want followed, and any app on this PC you want to light up too (top of
-   the list wins if several play at once).
-2. **Display** - pick the ghost display (the virtual display, or a dummy plug)
-   and click *Show test pattern* to be sure it's the right one. mpv is detected
-   automatically.
-3. **Hue Sync** - the page checks the app for you. In Hue Sync, once:
-   *Settings > Allow public control* **ON**, *Display* = the ghost display,
-   your entertainment area selected, *Start syncing when Hue Sync launches*
-   **OFF**.
-4. Back on **Home**: press play on the TV and watch the state go
-   *idle -> ghost playing -> syncing*.
+That's it. Closing the window leaves Hue Ghost running in the tray. The tray
+icon shows the state: grey idle, blue ghost playing, green syncing, red if Hue
+Sync cannot be reached.
 
-That's it. Close the window - Hue Ghost keeps running in the tray (the ghost
-icon changes colour with the state: grey idle, blue ghost playing, green
-syncing, red = Hue Sync unreachable).
+## What you can sync
 
-## What the lights can follow
+| Source | How to add it | Ghost? |
+|---|---|---|
+| Jellyfin on a TV, Apple TV, Android TV, phone | *Sources > Jellyfin* | yes |
+| Jellyfin music | same, plus a silent output (*Display > Ghost audio output*) | yes, sound only |
+| A browser (YouTube, Netflix, Disney+ ...) | *Quick add > Web browsers* | no |
+| VLC, MPC-HC, PotPlayer, Kodi, Plex, Jellyfin Media Player | *Quick add > Video players* | no |
+| Spotify | *Quick add > Spotify* | no |
+| **Any PC game** (Steam, Epic, GOG, Xbox, EA, Ubisoft, Riot) | *Quick add > Any game* | no |
+| **Games streamed with Sunshine -> Moonlight** | *Quick add > Any game* on the Sunshine PC | no |
+| Games streamed *to* this PC (Moonlight, GeForce NOW, Parsec, Steam Link) | *Quick add > Games streamed to this PC* | no |
+| One specific app or game | pick it from the running apps, or type its `.exe` | no |
+| Anything that fills the screen | *Quick add > Any app on this PC* | no |
 
-The **Sources** page is one ordered list. Two kinds of thing go in it:
+A few things worth knowing:
 
-- **A Jellyfin client** - a TV, an Apple TV, a phone. The picture is somewhere
-  Hue Sync cannot see, so Hue Ghost mirrors it with the ghost, as always.
-- **An app on this PC** - a browser playing YouTube, VLC, Plex's desktop app, a
-  game. The picture is *already* on a screen Hue Sync can capture, so there is
-  no ghost at all: Hue Ghost simply points the app at your real monitor and
-  starts the sync. Pick the app from the list of what is running (what is in
-  front and what is making sound come first), or type its `.exe` for a game you
-  have not launched yet. Apps are listed by the name they are actually known
-  by - *Google Chrome*, not `chrome.exe` - with a search box, because a PC runs
-  a hundred processes and about four of them are things you would ever sync.
+- **One row, several apps.** Type `chrome.exe, msedge.exe` to make one source
+  that covers both.
+- **Priority.** Only one thing syncs at a time. If several are playing, the one
+  **highest in the list** wins, so drag rows to reorder. Each row has an
+  on/off switch.
+- **Each source brings its own look.** When a source starts, Hue Sync switches
+  to its mode, intensity and room, so the Apple TV can be *Video / Subtle* in
+  the living room and a game *Games / Extreme* in the office.
+- **Game streaming.** With Sunshine, the game really runs on this PC, so Hue
+  Sync can see it. *Any game* picks it up with no per-game setup, including
+  when Sunshine streams from a virtual display.
 
-### Phones, and why one device can appear twice
+More detail - phones, music, several rooms, how *Any game* decides - is in
+[docs/sources.md](docs/sources.md).
 
-Jellyfin reports most phones under a generic device name: two different
-handsets both arrive as plain **"Android"**, which is no use when you have to
-pick one. Each entry therefore shows the **app** and the **signed-in user** too,
-and a fragment of the device id when even those are identical - so
-*Android - CAMusic (2)* and *Android - CAMusic (1)* are finally two
-different things. Every source also has a **name you can edit**: call it
-*S23 music* and be done with it.
+## Features at a glance
 
-Jellyfin issues a **separate device id per app**, which is what lets one phone
-hold *two* configurations - its music app lighting the bedroom, its video app
-lighting the living room - with no switching back and forth. Adding a player
-from the list pins that exact id and nothing else; the older behaviour also
-stored the device *name*, which is precisely how one phone ended up answering
-for another. Matching by name is still there for a TV that gets a new id when
-its app is reinstalled, but it follows **every** device that matches, so it is
-the wrong tool for a phone.
+- **Automatic on/off.** Lights start when playback starts and stop about 1.5 s
+  after it stops. Pauses and next episodes are handled for you.
+- **Frame-accurate TV sync.** The ghost follows the TV to within about
+  0.1-0.2 s, and follows seeks within about a second.
+- **Time lock** (on by default). Once the ghost matches the TV, Hue Ghost holds
+  it steady instead of correcting on every report, which makes the lights
+  noticeably smoother. It lets go on a seek, pause or buffering, and locks
+  again straight after.
+- **Offset tuning from the couch.** If the lights change *late* on a hard cut,
+  press **+0.25** on Home; if *early*, **-0.25**. Typical values are
+  1.0-2.0 s.
+- **Several rooms.** Each source can light its own entertainment area.
+- **Keep displays awake.** A display that falls asleep gives Hue Sync nothing
+  to watch, so Hue Ghost holds it awake while something plays.
+- **OLED care.** The ghost picture shifts a few pixels now and then, and other
+  screens can go black while you are not using the PC.
+- **Home Assistant.** Via [Hue Synco](https://github.com/engabd11/syncoV2) or
+  plain REST ([docs/home-assistant.md](docs/home-assistant.md)).
+- **Tray icon and command line** (`hue-ghost status`, `on`, `off`, `set`,
+  `doctor`, ...).
 
-Each one gets an **on/off switch** - ignore a player for a while without
-deleting it - and its own **mode**, **intensity** and **entertainment area**.
-That is the whole point of the list: set a source up once and then just play
-something. The Apple TV can be *Video / Subtle* in the living room while the
-phone running your music app is *Music / High* in the office, and each of them
-puts Hue Sync into its own settings the moment it starts. Leave a row on
-*Automatic*, *Default* or *Current area* and Hue Ghost does not touch that
-choice at all.
+Every setting is explained in [docs/settings.md](docs/settings.md).
 
-Only one thing syncs at a time (Hue Sync has a single area, mode and capture
-display), so when several are playing, **the one highest in the list wins**;
-drag a row to change that. When the winner changes - an app on this PC starting
-while a film is still open on a phone, say - the new source's settings are
-applied at once, and the ghost the old source left behind is parked and closed
-10 seconds later. Parked, not killed: a source that has the lights for a moment
-must not cost a relaunch and a re-sync, so a client that gets them straight back
-picks its own ghost up where it left it.
+## FAQ
 
-*Automatic* mode, which only a Jellyfin client can have, means "follow the
-media": music mode for a song, video for anything else. A PC app has to say
-what it is, because nothing else can tell a film from a game. For a PC app you
-also choose how Hue Ghost can tell it is playing: **Sound** (it is making
-some), **Fullscreen** (it is the window you are looking at, full screen) or
-either. Video defaults to sound, games to fullscreen. Nothing is scanned or
-guessed - only the executables you actually add are ever looked at, and an
-install with no PC sources does no detection work at all.
+- **The lights change a little late or early.** Adjust the offset on Home (see
+  above). If you switch time lock on or off, check the offset again.
+- **The lights sit on one dim colour after the PC was idle.** The display went
+  to sleep. Keep *Display > Keep displays awake* on *While the ghost plays*,
+  and make sure the PC's **sleep** timeout is off.
+- **A game is not detected.** *Any game* covers games from the big stores and
+  games in exclusive fullscreen. For a borderless game installed somewhere
+  else, add its `.exe` as its own source.
+- **Hue Sync will not start.** Only one thing can stream to an entertainment
+  area at a time. Stop any other sync (the Hue app, a Sync Box, Hue Synco music
+  sync) first.
+- **Does the ghost show up in Jellyfin's "Continue watching"?** No. It reads
+  the file directly and never reports playback.
+- **Does it need the internet?** No. See *Privacy* below.
+- **Mac or Linux?** The app runs from source on macOS (untested), but Hue Sync
+  has no Linux version, so Windows is the supported platform.
+- **Why not Jellyfin SyncPlay?** Most TV clients do not support it, and a
+  buffering member pauses the whole group. Hue Ghost never touches the TV.
 
-**Any app on this PC** (Sources > *Add "any app on this PC"*) is the one
-exception, on purpose: whatever fills a screen - a video in a browser, a
-player, a game - or, with Detect set to Sound, anything the PC plays. The
-desktop, the taskbar, the lock screen and Hue Ghost's own windows never count.
-A source bound to `huesync.exe` means the same for the window signal (Hue
-Sync's own window is never a fullscreen video, and it is how "this PC" was
-spelled before).
+## Privacy
 
-### Music
-
-Jellyfin music used to be invisible: the watcher dropped everything that was
-not video, so an album playing on the TV never even reached *Now Playing*. It
-is followed like a film now, and it can drive the lights too - but the ghost
-has to do the opposite of its usual job. It plays the track's **sound** (no
-window at all) into an output **you cannot hear**, and Hue Sync runs in music
-mode against that same output. Choose it under *Display > Ghost audio output*:
-a spare HDMI or optical port with nothing plugged in, or a virtual audio cable.
-Leave it empty and music is shown but not synced — the alternative would be
-playing your TV's music out of the PC's speakers.
-
-Music playing **on the PC itself** needs none of that: the sound is already
-here, so Hue Sync just listens to its own output.
-
-Music also **stops differently**. A film is paused to be come back to, so the
-lights wait minutes for it and the ghost waits with them, parked on standby.
-A phone that stops a track usually just leaves the session open in the
-background instead of closing it, and waiting for that to disappear means the
-lights stay on long after the music ended - so music has its own, much shorter
-limit: **15 seconds paused and the sync stops outright**. Not standby: the
-lights go off, the ghost is closed and the source stops looking busy, because
-nothing is coming back to a paused song. The next track starts it again from
-scratch. Both limits are on the *Sync* page.
-
-## One PC, several rooms
-
-When the Apple TV in the living room plays, Hue Sync targets the living-room
-area; when the office TV plays, the office lights; when a game starts, your
-gaming area - fully automatic. The Hue Sync app has no API for any of this, so
-Hue Ghost switches it the only way possible: it stops its sync, restarts the
-app silently with the new selection (~3 s) and resumes. The entertainment area,
-the capture display, the music input and the audio switch are all applied in
-that **one** restart, once per viewing session.
-
-**The app stays yours.** That restart only ever happens while Hue Ghost is
-actually starting a sync, and only once per viewing session. Change the area
-in the Hue Sync app yourself - while nothing is playing, or in the middle of a
-movie - and Hue Ghost adopts it instead of putting its own choice back; it
-re-asserts the player's area at the next sync. Players left on "Hue Sync's
-current area" never touch the selection at all, and *Hue Sync > Select the
-entertainment area for me* turns the whole thing off.
-
-## Mode, intensity and audio
-
-Hue Ghost sets **what Hue Sync does** with the ghost picture on every sync it
-starts, so it no longer depends on what the app was last left on:
-
-- **Mode** - Video (reacts to the picture), Music (to the sound) or Games.
-- **Intensity** - Subtle / Moderate / High / Extreme.
-- **Use audio for effects** - the app's own switch for video and games mode:
-  the lights react to the soundtrack as well as the picture. Leave it on
-  *App's own* and Hue Ghost never touches it.
-
-Mode and intensity go over the Public Control socket and apply live,
-mid-movie: switching from Video to Music or Games costs one message and never
-restarts the app or drops the sync. The audio switch is the one setting the app
-only reads at start-up, so choosing On or Off restarts Hue Sync (~3 s) - applied
-in the same restart as an area change, never twice, and written for Video *and*
-Games together so that switching between them afterwards stays free.
-
-**The controls follow the Hue Sync app, always.** Mode and intensity on Home,
-in the tray, over the API and in Home Assistant show what the app is really
-doing - not what is saved here. Change either one in Hue Sync itself and the
-buttons move with it; Hue Ghost stops asserting its own choice for the rest of
-that session. They keep following it across the restart Hue Ghost performs to
-apply an entertainment area, too: while the socket is down the last thing the
-app said stands, and the first update after it is back wins. Hue Sync keeps an
-intensity per mode, so the one Hue Ghost is set to is re-applied when the mode
-changes - only an intensity *you* pick is taken as a new setting.
-
-What gets **saved** is narrower. The settings below are the default for sources
-that have not chosen a mode or an intensity of their own, so a change made
-while a source that *has* chosen one is playing is kept for the session and no
-further: saving it would quietly hand one film's choice to every other source.
-
-All three are on **Home** and on the **Sync** page, and are exposed to Home
-Assistant and the CLI. They are the **defaults**: a source with a mode or an
-intensity of its own overrides them while it is the one playing, and hands them
-back when it stops.
-
-The chosen settings are re-applied whenever the **source** changes, not only
-when a new item starts. That matters because the two are not the same thing: an
-app on this PC can take the lights over from a phone that is still connected,
-and no source ever reports anything "new" at that moment.
-
-## Tuning the timing (from the couch)
-
-Both players must be on the same frame or the lights are wrong. Hue Ghost
-measures it: the **Home** page shows the live drift between the ghost and the
-TV (green zone = within 0.15 s) and a per-minute quality summary.
-
-The one thing that is yours to tune is the **offset** - how far ahead of the
-TV the ghost runs, to cancel the capture -> bridge -> lamp latency and your
-TV's own display lag. On **Home** or **Sync**: watch a hard cut; if the lights
-change *late*, press **+0.25**; if *early*, **-0.25**; then refine in 0.05 s
-steps. It applies instantly and is saved. Typical values: 1.0-2.0 s.
-
-Everything else is automatic: Hue Ghost anchors on the TV's progress reports,
-learns how long your TV buffers after a seek (shown under *Sync > Learned TV
-buffering*), and nudges the ghost's speed by a few percent instead of jumping.
-The **Sync** page exposes the advanced knobs if you want them.
-
-**Time lock (experimental, Sync page, off by default).** Normally every
-progress report from the TV nudges the ghost's timeline a little, so the
-ghost is always correcting. With *Time lock* on, once the drift reaches 0.0 s
-the timeline is held and the ghost simply plays at 1.0x; Home shows
-*drift +0.00 s · locked*. Seeking, pausing, buffering - or the TV's
-precisely timed reports drifting more than *Release when the TV is off by*
-(0.02 s) from the locked timeline - releases it, the usual corrections take
-over, and it locks again once playback has settled. It also stops steering by
-reports Jellyfin did not time: Moonfin on the Apple TV sends its position
-every second but Jellyfin times only every fifth, which otherwise leaves the
-ghost ~0.2 s ahead - so re-check your offset after turning it on.
-
-**Stopping** (Sync page): the lights go off **1.5 s** after the TV stops
-(*Lights off after the TV stops*); the ghost player itself stays on standby
-for 10 s (*Close the ghost after*) so a TV that comes straight back - next
-episode, a seek that restarts playback - does not need a fresh launch. *Lights
-off when paused for* N minutes (0 = never) covers long pauses.
-
-**Displays that fall asleep** (Display page > *Keep displays awake*): Windows
-switches every display off after its idle timeout, the virtual ghost display
-included, and Hue Sync then captures nothing - the lights sit on one dim
-colour until someone touches the mouse. The default, *While the ghost plays*,
-wakes the displays the moment playback starts and holds them awake until it
-stops; the PC itself must not be set to sleep (Hue Ghost cannot wake a
-sleeping PC). A locked PC cannot be captured either: Hue Ghost says so on the
-Home page.
-
-**OLED screens** (Display page > *Screen care*): holding the displays awake
-for a whole film means hours of one unchanging picture - the desktop on the
-screens nobody is looking at, the frame the ghost is paused on - and an OLED
-burns that in. Two remedies, both live, both only while the ghost plays:
-
-- *Shift the ghost picture every* N minutes (default **3**, 0 = off) moves the
-  ghost's picture a few pixels round a slow orbit. Invisible, and the lights
-  cannot tell - Hue Sync averages much larger areas of the screen.
-- *Black out the other displays after* N minutes (default **off**) covers
-  every display Hue Sync is *not* capturing in black once nobody has touched
-  the mouse or keyboard for that long - a black OLED pixel is switched off.
-  Any input brings them straight back. The ghost display, and whichever one
-  Hue Sync reports capturing, is never covered, so the lights carry on.
-
-## Home Assistant
-
-**Home Assistant** page: switch *Allow control from the LAN* on, generate a
-token, save, restart. Then either:
-
-- **[Hue Synco](https://github.com/engabd11/syncoV2)** (HACS): *Configure >
-  Hue Ghost host / port / token* gives you a **Hue Ghost** device - a
-  **Global sync** light that is the master control (on/off *and* the area's
-  level), **sync status / area / active source / now playing** sensors,
-  **mode** and **intensity** selects, a **switch per source** named for the
-  source itself, a **use audio for effects** switch and the sync-offset number
-  - plus a **Hue Ghost card** in this app's own colours that wires itself up.
-  Turning movie mode on hands the entertainment area over from music sync
-  automatically.
-- Plain REST (see [docs/home-assistant.md](docs/home-assistant.md)):
-  `POST /on`, `/off`, `/set {"offset_delta": 0.25}`, `GET /status`, all with
-  `Authorization: Bearer <token>`. `/set` also takes `{"brightness": 0-100}`
-  and `{"binding": {"key": "<id>", "enabled": false}}`; `/status` lists every
-  source under `bindings`.
-
-## Command line
-
-The installer also puts `hue-ghost.exe` next to the app (add
-`C:\Program Files\Hue Ghost` to PATH, or run it from there):
-
-```
-hue-ghost gui [--minimized]    the desktop app (what the Start menu shortcut runs)
-hue-ghost run                  headless daemon, logs to the console
-hue-ghost doctor               checks Jellyfin, mpv, displays, Hue Sync, the control API
-hue-ghost status [--json]      what the running app sees
-hue-ghost on | off | toggle    master switch
-hue-ghost set --offset-delta 0.25 | --mode music | --intensity high
-               --use-audio on|off|app | --brightness 60 | --brightness-step -10
-               --enable-source <id> | --disable-source <id>
-hue-ghost setup                text-mode setup wizard (headless machines)
-hue-ghost install-autostart    start at sign-in (the installer's checkbox does the same)
-```
-
-Configuration lives in `%APPDATA%\hue-ghost\config.json` (Settings > *Open
-config folder*); every field is editable from the app.
-
-## How the sync works (short version)
-
-- The TV client reports its position to Jellyfin only every few seconds.
-  Hue Ghost anchors **only on new reports**, maps the report's server timestamp
-  to local time with a clock-offset estimator, and tells jitter from real
-  seeks - so a stale report never causes a correction, and a real seek is
-  followed within one poll (0.5 s).
-- After a seek, start or resume, TV clients sit on a still frame while they
-  buffer (3-5 s on an Apple TV). Hue Ghost holds the ghost for a **learned
-  stall** per event kind, then resumes exactly on target.
-- The ghost's position is **read back from mpv** (not estimated), and a
-  proportional speed controller (+/-4 %) removes small drift invisibly; hard
-  seeks only happen for real seeks or > 1 s drift.
-- Start/stop order avoids flashing your desktop into the living room: the
-  ghost renders first, then Hue Sync starts; Hue Sync stops before the ghost
-  window closes.
-
-Details: [docs/architecture.md](docs/architecture.md). The Hue Sync app is
-driven over its local "Public Control" WebSocket, documented in
+Hue Ghost is fully local: no cloud and no telemetry. It talks only to your
+Jellyfin server, the Hue Sync app on the same PC (through the "public control"
+setting you switch on), and its own local control API. It never talks to the
+Hue Bridge directly, and your bridge credentials stay inside Hue Sync. Two
+Hue Sync settings with no remote control (the entertainment area and "use
+audio for effects") are applied by editing Hue Sync's own settings file while
+it is closed. This is described in
 [docs/hue-sync-public-control.md](docs/hue-sync-public-control.md).
 
-## Limitations / FAQ
+Hue Ghost is an independent project, not affiliated with or endorsed by
+Signify / Philips Hue or Jellyfin.
 
-- **Windows** (installer) / **macOS** (from source, untested) - that's where
-  the Hue Sync app runs. A self-contained engine (own colour extraction + DTLS
-  entertainment stream, Linux/headless, no display tricks) is the planned
-  "Route B" behind the same engine interface.
-- **One streamer per entertainment area.** If something else (Hue app scene
-  sync, Hue Synco music sync, a Sync Box) is streaming to the area, Hue Sync
-  can't start. The Hue Synco integration handles the hand-over.
-- **Long pauses?** Optional: the lights go off after the TV is paused for X
-  minutes (Sync page > *Lights off when paused for*, 0 = never) and come back
-  when you press play.
-- **Lights stay on one dim colour after the PC sat idle?** The displays went
-  to sleep. Display page > *Keep displays awake* = *While the ghost plays*
-  (default) wakes them when a movie starts. Make sure the PC's *sleep* timeout
-  is off; the *display* timeout can stay.
-- **OLED burn-in while a film plays?** Display page > *Screen care*: set
-  *Black out the other displays after* to a few minutes. The desktop you are
-  not looking at goes black, the ghost keeps the lights going, and the mouse
-  brings it all back.
-- **Accuracy**: about +/-0.1-0.2 s in steady state; a seek on the TV is
-  followed within ~1 s plus the TV's own buffering. A Sync Box is ~0.1 s.
-  Bias/mood lighting: indistinguishable; frame-critical flashes: close.
-- **Continue-watching pollution?** No. The ghost reads the file over
-  `/Videos/{id}/stream?static=true` and never reports playback, so Jellyfin
-  never sees a second session.
-- **Transcoding?** The ghost plays the original file (hardware-decoded); the
-  TV can transcode independently. 4K HEVC/AV1 needs a GPU that decodes it.
-- **Jellyfin SyncPlay?** Deliberately not used: TV clients rarely support it,
-  it needs a group per session, and a buffering peer pauses the whole group -
-  Hue Ghost must never be able to stall your TV.
-- **Virtual display quirks**: some apps open on the last-used display; Win+P
-  and per-app display memory apply as with any second monitor. The installer's
-  uninstaller removes the virtual display again.
+## More documentation
+
+- [docs/sources.md](docs/sources.md) - every kind of source, priority, music, rooms, games and streaming
+- [docs/settings.md](docs/settings.md) - mode, intensity, timing, time lock, displays, OLED care, CLI
+- [docs/home-assistant.md](docs/home-assistant.md) - Home Assistant and the REST API
+- [docs/virtual-display.md](docs/virtual-display.md) - the ghost display
+- [docs/architecture.md](docs/architecture.md) - how the sync works inside
+- [docs/hue-sync-public-control.md](docs/hue-sync-public-control.md) - how Hue Sync is driven
+- [CHANGELOG.md](CHANGELOG.md) - what changed in each version
 
 ## Credits
 
 Hue Ghost stands on these projects:
 
-- **[mpv](https://mpv.io)** - plays the ghost: the muted player driven in
-  lockstep over its JSON IPC (GPLv2+; bundled by the Windows installer).
-- **Philips Hue Sync** - the official desktop app (Signify) that turns the
-  ghost display into light. Hue Ghost is not affiliated with or endorsed by
-  Signify / Philips Hue.
-- **[Jellyfin](https://jellyfin.org)** - the media server whose sessions tell
-  Hue Ghost what the TV is watching (GPLv2).
+- **[mpv](https://mpv.io)** plays the ghost (GPLv2+; bundled by the installer).
+- **Philips Hue Sync** (Signify) turns the screen into light.
+- **[Jellyfin](https://jellyfin.org)** tells Hue Ghost what the TV is playing (GPLv2).
 - **[Virtual Display Driver](https://github.com/VirtualDrivers/Virtual-Display-Driver)**
-  - the signed virtual display the ghost plays on (MIT; bundled).
-- **[Qt](https://www.qt.io) / [PySide6](https://doc.qt.io/qtforpython-6/)** -
-  the desktop app (LGPLv3).
-- **[PyInstaller](https://pyinstaller.org)** and **[Inno Setup](https://jrsoftware.org/isinfo.php)**
-  - the Windows build and the installer wizard.
-- **[Home Assistant](https://www.home-assistant.io)** and the
-  **[Hue Synco](https://github.com/engabd11/syncoV2)** integration - movie
-  mode from your smart home, with hand-over from music sync.
+  provides the ghost display (MIT; bundled).
+- **[Qt](https://www.qt.io) / [PySide6](https://doc.qt.io/qtforpython-6/)** power the desktop app (LGPLv3).
+- **[PyInstaller](https://pyinstaller.org)** and **[Inno Setup](https://jrsoftware.org/isinfo.php)** build the installer.
+- **[Home Assistant](https://www.home-assistant.io)** and
+  **[Hue Synco](https://github.com/engabd11/syncoV2)** add smart-home control.
 
-Built by **Cyborg Automation AU** - Melbourne, private and local smart-home
-automation.
+Hue Ghost is MIT licensed. The installer bundles mpv (GPLv2+, provenance in
+`mpv\SOURCE.txt`) and the Virtual Display Driver (MIT). Source for the GPL
+components is available from their repositories.
 
-## Changelog
-
-- **2.10.3** - **A player left paused no longer keeps everyone else dark.** The
-  first player in your list that had anything loaded won, paused or not - so
-  an Apple TV paused on an episode kept the lights (switched off for the
-  pause) while the S23 played a film further down the list, and nothing
-  synced. A paused player now keeps its place for the same time its lights
-  stay on while paused (`sync.pause_stop_min`, `sync.music_pause_stop_s`),
-  then gives way to one that is really playing; it takes the lights straight
-  back when it plays again. Pause limit 0 = it never gives way.
-- **2.10.2** - **Only one Hue Ghost runs at a time.** Double-clicking the app
-  while autostart already had it in the tray started a SECOND copy: Home
-  Assistant talked to one (it owned port 8787), the window you saw belonged to
-  the other, so HA said off/idle while the app said on/syncing - and each
-  copy's shutdown closed the other's ghost, which it read as "closed by user"
-  and switched sync off by itself. A second launch now brings the running
-  copy's window up and exits; the control port is bound exclusively, so two
-  daemons can no longer both claim it (`HUEGHOST_INSTANCE` names a separate
-  lock for a deliberate dev instance). Pairs with Hue Synco 1.61.0.
-- **2.10.1** - **The window no longer freezes ("not responding").** Its
-  twice-a-second status refresh, and every Save, waited on the daemon's lock,
-  which the daemon holds across a Jellyfin request or an mpv launch - a slow
-  one froze the window until Windows closed it as not responding (Windows'
-  AppHang reports, and nothing in the log). Both now run on worker threads; with
-  the lock held for 4 s the window's longest stall measured 0.08 s. Uncaught
-  errors are logged, a native crash or a window unresponsive for 4 s writes
-  every thread's stack to `crash.log`, and a daemon step holding the lock over
-  2 s is logged by name. **A switched-off source no longer syncs.** A binding
-  with a device id matches that id only; the name is a fallback for a
-  regenerated id, never while the device itself is connected and never for a
-  device another binding owns, switched off or not ('Android S23' used to
-  follow CAMusic-linux, also called "Android", whose own binding was off).
-  **A paused client no longer lights up at start-up**: found already paused, it
-  waits for play (2.9.0 launched, started the sync, and switched it off again
-  15 s later). **Any app on this PC**: a new source for whatever fills a screen
-  or plays sound; `huesync.exe` + Fullscreen now means the same, so a video
-  full screen on the main display is picked up. Adding a duplicate by name, or
-  a list entry without a device id, is refused with a message.
-- **2.10.0** - **Time lock (experimental, off by default).** Live data from an
-  Apple TV (Moonfin) showed the ghost correcting its speed on ~70 % of ticks:
-  every 1 s report moved the model's timeline by 0.01-0.15 s, because Jellyfin
-  only moves the check-in every 5 s and those reports were timed from the stale
-  check-in (~0.2 s lead). The new *Time lock* switch (Sync page, `/set
-  {"time_lock": true}`) steers only by the reports Jellyfin timed and, once the
-  drift reaches 0, holds the timeline instead of chasing each report; seeks,
-  pauses, buffering or timed reports more than 0.02 s off release it.
-  Replaying 15 min of recorded Apple TV reports with 5 seeks: mean error 0.20
-  -> 0.02 s, p95 0.31 -> 0.06 s, timeline steps 667 -> 6. `/status` gains `time_lock`, the
-  per-minute log line `locked N/M ticks`. Fixes: saving any setting while
-  something played (even an offset nudge) pushed the global mode and intensity
-  over the playing source's own - a phone playing music flipped to video; a
-  mode or intensity picked on Home / `/set` while a source with its own value
-  played became the global default (now: live for the session only); a music
-  ghost volume of 0 % played at 100 %; the Home Assistant REST switch example
-  posted to `/status`. Home shows the ghost's *parked* / *closes in N s* /
-  *paused* state, the Sync page the Jellyfin clock offset and report count.
-- **2.9.0** - **Music that changes track no longer blinks the lights.** Skipping
-  a song on a music source used to tear the whole session down - stop the
-  sync, kill the ghost, launch a new one, start the sync again - so the lights
-  went dark for a second between songs. The music ghost is invisible and the
-  lights ride on the audio endpoint, not on a picture, so a track change now
-  swaps the file the live ghost plays (`loadfile`) and the sync simply
-  continues; the ghost lands on the new track's anchor with a forced seek. The
-  same for the moment the ghost itself reaches the end of a track: the engine
-  stays on until the client reports the next one (or the idle path stops the
-  lights, when nothing follows). Also fixed: two ways a music session could
-  take 10+ seconds to start. A client that finished a song sits at its last
-  position, and launching a ghost there sent mpv past the end of the file,
-  where it died rc=2 in a loop - launches now refuse positions at/after the
-  end of the track and clamp the start inside it. And when the configured
-  ghost audio output is missing (it rides on its display; asleep, it is gone),
-  mpv died the same way - the daemon now checks the endpoint first, wakes the
-  display to bring it back, and launches only once it is there. A ghost that
-  ran for 30 s or more no longer counts against the launch rate guard, so one
-  rough patch of deaths cannot block the next track for minutes.
-- **2.8.1** - **The Home controls follow the Hue Sync app.** With a mode and an
-  intensity per source, the saved settings became a *default* - but Home, the
-  tray, the CLI and Home Assistant still read them, so the buttons sat on the
-  previous session's choice while the app reported something else entirely
-  (`mode video · intensity subtle` next to **Music** and **High** lit up). They
-  report what the engine is really set to now, falling back to the saved
-  default only for a mode Hue Ghost has no button for (Hue Sync's "scenes") or
-  before the app has said anything at all - so they also hold steady through
-  the restart that applies an entertainment area. `/status` gains
-  `mode_default` and `intensity_default`. Related: a mode or intensity picked
-  in the Hue Sync app is no longer saved over the global default while a source
-  that sets its own is playing - that is how a config ends up defaulting to
-  something nobody chose.
-- **2.8.0** - **Every source brings its own settings, and hand-overs work.**
-  Each row on the Sources page now carries a **mode** and an **intensity** as
-  well as an area, applied the moment it starts playing: *Apple TV -> Video,
-  Subtle*, *phone running a music app -> Music, High*. They were only ever
-  applied when a source reported a **new item**, which is not the same thing as
-  a source **winning**: an app on this PC taking the lights over from a client
-  that was still connected left Hue Sync in the previous source's mode and
-  area for the whole session. Two things fell out of the same gap: the losing
-  client's **ghost was never closed** (only the idle timer closed one, and it
-  does not run while something else plays), so an mpv could be left playing to
-  nobody for hours - it is now parked and closed like any other idle ghost; and
-  **paused music waited on standby** instead of stopping,
-  so a phone that stopped a track kept the source busy until it was switched
-  off by hand. Music now stops outright after its 15 seconds - lights off,
-  ghost closed - and starts again on the next track.
-- **2.7.0** - **Screen care for OLEDs.** Keeping the displays awake so Hue
-  Sync can capture the ghost also meant hours of one static desktop on your
-  real monitor. The ghost's picture now shifts a few pixels every 3 minutes
-  (invisible, and the lights cannot tell), and *Black out the other displays
-  after* N idle minutes covers every display Hue Sync does not capture in black
-  until the mouse or keyboard is touched. Both are on the Display page, apply
-  live, show under `system.screen_care` in `/status`, and can be set over
-  `/set` (`pixel_shift_min`, `blackout_idle_min`).
-- **2.6.0** - **Phones stop being a guessing game.** Jellyfin calls most of
-  them "Android", so two handsets looked identical in the list and one could
-  quietly answer for the other. Entries now show the app and the user (and a
-  piece of the device id when even that repeats), every source has a **name you
-  can edit**, and adding one pins its exact device id instead of its name. Since
-  Jellyfin issues an id per app, **one phone can hold a separate configuration
-  per app** - music lighting one room, films another. The discovery list gets a
-  **Refresh** button, shows what is playing or when a device was last seen, and
-  no longer lists the same app twice. Apps on this PC are listed by their real
-  names (*Google Chrome*, not chrome.exe) with a search box. **Music now stops
-  properly:** a track paused for 15 seconds turns the lights off instead of
-  waiting on a background session that may never close. And the app explains
-  itself - what the ghost is and why it exists, what each setting does, and
-  which single one restarts Hue Sync.
-- **2.5.0** - **Hue Sync stops restarting mid-movie.** Changing the mode from
-  Video to Music or Games while the lights are running no longer restarts the
-  Hue Sync app: the mode has always had a live command, and Hue Ghost was
-  needlessly re-deriving the app's start-up-only settings every time it changed.
-  Everything those settings need is now applied once, before sync starts - and
-  the audio switch is written for Video *and* Games together, so moving between
-  them later costs nothing. **Fixed:** "let the app choose" for the capture
-  display or the music input could never be satisfied, so it restarted Hue Sync
-  on *every* mode change, forever. **Hue Ghost now mirrors the app:** change the
-  mode or intensity in Hue Sync itself and Hue Ghost adopts and saves it instead
-  of putting its own back two seconds later - window, tray, API and Home
-  Assistant included.
-- **2.4.0** - **The lights follow more than a TV.** Add an app on this PC - a
-  browser playing YouTube, a player, a game - and it lights its own
-  entertainment area with no ghost involved, because Hue Sync can capture your
-  real screen directly. **Jellyfin music** is followed and synced (the ghost
-  plays the track into an output you cannot hear, which is what Hue Sync's
-  music mode then listens to); music playing on the PC itself needs nothing but
-  a binding. Every source has an **on/off switch**, so one can be ignored
-  without being deleted. **Home Assistant** gets an area-brightness light and a
-  switch per source. The window opens big enough for its own content and
-  remembers its size. Brightness is a real slider, and setting it while Hue
-  Sync is closed no longer fails.
-- **2.3.0** - Hue Sync's **mode** (Video / Music / Games) and its **use audio
-  for effects** switch are Hue Ghost settings now, next to the intensity - on
-  Home, on Sync, over the API and in Home Assistant. **Fixed:** changing the
-  entertainment area in the Hue Sync app while Hue Ghost was idle made Hue
-  Ghost restart the app to put its own area back, which looked like Hue Sync
-  crashing; the area (and the audio switch) are now only applied while Hue
-  Ghost is starting a sync, once per session, and a change you make in the app
-  stands.
-- **2.2.0** - Lights go off ~2 s after the TV stops (two-stage stop: the ghost
-  stays on standby for 10 s and re-lights instantly if the TV comes back).
-  Wakes and holds the displays awake while the ghost plays, so a PC that sat
-  idle no longer streams one dim colour until the mouse is touched; warns when
-  the PC is locked. New look: warm Cyborg Automation AU theme with Fluent
-  icons, artwork on Home, aligned settings, colour-coded log, credits. Hue Sync
-  is launched `-silent`; drift stats ignore the second after a seek.
-- **2.1.2** - Light engine watchdog (a crashed worker is rebuilt, sync and
-  intensity re-asserted); pause timeout option.
-- **2.1.0** - Players bound to entertainment areas; Hue Ghost only stops syncs
-  it started.
-- **2.0.0** - Desktop app, settings API, Windows installer with mpv and the
-  virtual display.
-
-## Compliance & privacy
-
-- **No cloud, no telemetry.** Hue Ghost talks to exactly three things: your
-  Jellyfin server, the Hue Sync desktop app on the same machine (its local
-  Public Control WebSocket, which *you* enable in the app), and its own local
-  API on `127.0.0.1`. Nothing else. Bridge credentials never pass through
-  Hue Ghost — they stay inside the Hue Sync app.
-- **Philips Hue API.** Hue Ghost never talks to the Hue Bridge directly:
-  pairing, the entertainment session and the DTLS stream are handled by the
-  official Hue Sync app — the certified path. The Public Control WebSocket is
-  an undocumented but user-opt-in interface of that app. Two settings it does
-  not cover - the entertainment area and "use audio for light effects" - are
-  applied by writing the app's own `bridge.json` / `config.json` (one value
-  each, digest kept in step) while it is closed. Both are documented in
-  [docs/hue-sync-public-control.md](docs/hue-sync-public-control.md) and may
-  change across Hue Sync versions.
-- **Trademark.** Hue Ghost is an independent project — not affiliated with,
-  endorsed by, or certified by Signify / Philips Hue or Jellyfin.
-- **Licenses.** Hue Ghost is MIT. The Windows installer bundles
-  [mpv](https://github.com/mpv-player/mpv) (GPLv2+; the exact build's
-  provenance ships as `mpv\SOURCE.txt` inside the installer) and the
-  [Virtual Display Driver](https://github.com/VirtualDrivers/Virtual-Display-Driver)
-  (MIT). Corresponding source for the GPL components is available from those
-  repositories.
+Built by **Cyborg Automation AU**, Melbourne: private, local smart-home automation.
 
 ## Development
 
 ```powershell
 pip install -e ".[dev,gui]"
-python -m pytest -q                       # unit tests + mock Hue Sync WebSocket + API tests
+python -m pytest -q                       # unit tests + mock Hue Sync + API tests
 python -m hueghost gui                    # the app from source
 python -m hueghost doctor
 powershell -File scripts\build_installer.ps1   # dist\installer\HueGhost-Setup-<ver>.exe
 ```
 
-Layout: `hueghost/gui/` (PySide6 app), `daemon.py` (orchestration),
-`sources/` (where "something is playing" comes from: Jellyfin, this PC),
-`watcher.py` (position model), `pcwatch.py` (PC playback detection),
-`lockstep.py` (pure policy), `ghost.py` (mpv + IPC readback),
-`screencare.py` (OLED pixel shift and black-out),
-`engines/huesync.py` (Hue Sync Public Control), `control.py` + `webapi.py`
-(HTTP API), `cli.py`, `installer/` (PyInstaller spec + Inno Setup).
-
-MIT licensed — see [Compliance & privacy](#compliance--privacy) for bundling,
-trademark and privacy notes.
+Layout: `hueghost/gui/` (desktop app), `daemon.py` (orchestration), `sources/`
+(Jellyfin and this PC), `pcwatch.py` (PC playback detection), `presets.py`
+(Quick add), `watcher.py` (position model), `lockstep.py` (sync policy),
+`ghost.py` (mpv), `screencare.py` (OLED care), `engines/huesync.py` (Hue Sync),
+`control.py` + `webapi.py` (HTTP API), `cli.py`, `installer/`.
