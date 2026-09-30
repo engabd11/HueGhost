@@ -53,6 +53,54 @@ def test_first_playing_player_wins_in_priority_order():
     assert ps.pick([sess("zzz", "Kitchen")]) == (None, None)
 
 
+def paused(device_id, name):
+    s = sess(device_id, name)
+    s["PlayState"]["IsPaused"] = True
+    return s
+
+
+def test_a_player_left_paused_gives_way_to_one_that_plays():
+    """Live 2026-09-30: the Apple TV (first in the list) sat paused on an
+    episode while the S23 played a film - the TV kept the lights, which it
+    had switched off for the pause, so nothing synced at all."""
+    ps = PlayerSet.from_players(PLAYERS)
+    ps.pause_yield_s = (60.0, 15.0)
+    tv, phone = paused("atv", "Apple TV"), sess("phone", "S23")
+    assert ps.pick([tv, phone], 0.0)[0] is tv          # just paused: keeps its place
+    assert ps.pick([tv, phone], 59.0)[0] is tv
+    assert ps.pick([tv, phone], 60.0)[0] is phone      # its lights would be off now
+    assert ps.pick([tv, phone], 300.0)[0] is phone
+    # the TV plays again: first in the list, it takes the lights straight back
+    assert ps.pick([sess("atv", "Apple TV"), phone], 301.0)[0]["DeviceId"] == "atv"
+    # and a new pause starts a new count
+    assert ps.pick([paused("atv", "Apple TV"), phone], 302.0)[0]["DeviceId"] == "atv"
+
+
+def test_a_paused_player_keeps_its_place_when_nothing_else_plays():
+    ps = PlayerSet.from_players(PLAYERS)
+    ps.pause_yield_s = (60.0, 15.0)
+    tv = paused("atv", "Apple TV")
+    ps.pick([tv], 0.0)
+    assert ps.pick([tv], 600.0)[0] is tv               # resumes where it was
+    # everyone is paused past the limit: the list order still decides
+    other = paused("phone", "S23")
+    ps.pick([tv, other], 601.0)
+    assert ps.pick([tv, other], 700.0)[0] is tv
+
+
+def test_pause_limit_zero_means_a_paused_player_never_gives_way():
+    ps = PlayerSet.from_players(PLAYERS)          # pause_yield_s defaults to (0, 0)
+    tv, phone = paused("atv", "Apple TV"), sess("phone", "S23")
+    ps.pick([tv, phone], 0.0)
+    assert ps.pick([tv, phone], 10_000.0)[0] is tv
+
+
+def test_the_yield_follows_the_daemons_pause_settings():
+    from hueghost.sources.jellyfin import pause_yield_limits
+    cfg = Config({"sync": {"pause_stop_min": 1.0, "music_pause_stop_s": 15.0}})
+    assert pause_yield_limits(cfg) == (60.0, 15.0)
+
+
 def test_watcher_switches_model_when_the_playing_device_changes():
     w = SessionWatcher(PlayerSet.from_players(PLAYERS))
     obs = w.observe([sess("atv", "Apple TV", pos=100.0)], LOCAL0 + 1, LOCAL0 + 1, MONO0 + 1)
