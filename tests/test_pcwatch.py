@@ -141,3 +141,97 @@ def test_any_app_by_sound():
     p = probe()
     p.ignore_pids = {100}
     assert _playing_after(p, any_sound, sound=loud("mpv.exe", pid=100)).playing is False
+
+
+# -- several apps in one source, and "any game" -----------------------------------
+
+BROWSERS = {"id": "br", "exe": "chrome.exe,msedge.exe", "detect": "either", "mode": "video"}
+ANY_GAME = {"id": "g", "exe": "@games", "detect": "fullscreen", "mode": "games"}
+STEAM = r"D:\SteamLibrary\steamapps\common\ELDEN RING\Game\eldenring.exe"
+
+
+def game_fg(exe="eldenring.exe", path=STEAM, fullscreen=True, exclusive=False, pid=300, cls=""):
+    return Foreground(pid=pid, exe=exe, title="", fullscreen=fullscreen, monitor_id=MON,
+                      cls=cls, path=path, exclusive=exclusive)
+
+
+def test_one_source_can_stand_for_several_apps():
+    for exe in ("chrome.exe", "msedge.exe"):
+        p = probe()
+        p.observe([BROWSERS], loud(exe), None, 0.0)
+        assert p.observe([BROWSERS], loud(exe), None, 1.5)["br"].playing is True
+        p = probe()
+        p.observe([BROWSERS], [], fg(exe), 0.0)
+        assert p.observe([BROWSERS], [], fg(exe), 1.5)["br"].playing is True
+    p = probe()
+    p.observe([BROWSERS], loud("firefox.exe"), fg("firefox.exe"), 0.0)
+    assert p.observe([BROWSERS], loud("firefox.exe"), fg("firefox.exe"), 1.5)["br"].playing is False
+
+
+def test_binding_exes_splits_and_tidies():
+    from hueghost.pcwatch import binding_exes
+    assert binding_exes({"exe": " Chrome.exe, msedge.exe ,,"}) == {"chrome.exe", "msedge.exe"}
+    assert binding_exes("") == set()
+
+
+def test_any_game_follows_a_game_from_a_library():
+    p = probe()
+    p.observe([ANY_GAME], [], game_fg(), 0.0)
+    hit = p.observe([ANY_GAME], [], game_fg(), 1.5)["g"]
+    assert hit.playing is True and hit.monitor_id == MON
+
+
+def test_any_game_is_not_any_fullscreen_window():
+    p = probe()
+    browser = game_fg(exe="chrome.exe", path=r"C:\Program Files\Google\Chrome\Application\chrome.exe")
+    p.observe([ANY_GAME], [], browser, 0.0)
+    assert p.observe([ANY_GAME], [], browser, 1.5)["g"].playing is False
+
+
+def test_any_game_trusts_exclusive_fullscreen_from_anywhere():
+    p = probe()
+    bnet = game_fg(exe="wow.exe", path=r"C:\Program Files (x86)\World of Warcraft\_retail_\Wow.exe",
+                   fullscreen=False, exclusive=True)
+    p.observe([ANY_GAME], [], bnet, 0.0)
+    assert p.observe([ANY_GAME], [], bnet, 1.5)["g"].playing is True
+
+
+def test_any_game_needs_the_game_full_screen():
+    p = probe()
+    p.observe([ANY_GAME], [], game_fg(fullscreen=False), 0.0)
+    assert p.observe([ANY_GAME], [], game_fg(fullscreen=False), 1.5)["g"].playing is False
+
+
+def test_any_game_ignores_the_shell_and_our_own_windows():
+    p = probe()
+    desk = game_fg(exe="explorer.exe", exclusive=True, cls="progman")
+    p.observe([ANY_GAME], [], desk, 0.0)
+    assert p.observe([ANY_GAME], [], desk, 1.5)["g"].playing is False
+    p = probe()
+    p.ignore_pids = {300}
+    p.observe([ANY_GAME], [], game_fg(), 0.0)
+    assert p.observe([ANY_GAME], [], game_fg(), 1.5)["g"].playing is False
+
+
+def test_any_game_by_sound_counts_only_games():
+    b = dict(ANY_GAME, detect="audio")
+    p = probe()
+    game = [AudioHit(pid=1, exe="eldenring.exe", peak=0.5, path=STEAM)]
+    p.observe([b], game, None, 0.0)
+    assert p.observe([b], game, None, 1.5)["g"].playing is True
+    p = probe()
+    music = [AudioHit(pid=2, exe="spotify.exe", peak=0.5, path=r"C:\Users\me\AppData\Roaming\Spotify\Spotify.exe")]
+    p.observe([b], music, None, 0.0)
+    assert p.observe([b], music, None, 1.5)["g"].playing is False
+
+
+def test_game_library_paths():
+    from hueghost.pcwatch import is_game_path
+    assert is_game_path(STEAM)
+    assert is_game_path(r"C:\Program Files\Epic Games\Fortnite\FortniteClient-Win64-Shipping.exe")
+    assert is_game_path(r"C:\XboxGames\Forza Horizon 5\Content\ForzaHorizon5.exe")
+    assert is_game_path("C:/GOG Games/Witcher 3/bin/x64/witcher3.exe")
+    assert not is_game_path(r"C:\Program Files (x86)\Steam\steam.exe")
+    assert not is_game_path(r"C:\Program Files (x86)\Epic Games\Launcher\Portal\Binaries\Win64\EpicGamesLauncher.exe")
+    assert not is_game_path(r"C:\Riot Games\Riot Client\RiotClientServices.exe")
+    assert not is_game_path("")

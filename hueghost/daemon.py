@@ -42,7 +42,7 @@ IDLE, GHOSTING, SYNCING, STANDBY = "idle", "ghosting", "syncing", "standby"
 TICK_S = 0.25
 ENGINE_STOP_WAIT_S = 2.0
 SLOW_STEP_S = 2.0          # a loop step holding the lock longer than this is logged
-# time lock (experimental): engage once |drift| is this small ("0.0 s"), the
+# time lock: engage once |drift| is this small ("0.0 s"), the
 # followed client has sent this many quiet reports since its last event ...
 LOCK_WINDOW_S = 0.02
 LOCK_SETTLE_REPORTS = 3
@@ -1047,7 +1047,7 @@ class Daemon:
                     "screen_care": self.care.status(),
                 },
                 "drift_s": round(drift, 3) if drift is not None else None,
-                # experimental: while engaged the drift above is ~0 by design, so
+                # while engaged the drift above is ~0 by design, so
                 # residual_s is the honest number - how far the client's own
                 # reports sit from the locked timeline
                 "time_lock": {
@@ -1111,7 +1111,7 @@ class Daemon:
                 self.last_act = IDLE_ACTIVITY
                 self._plan_applied = None
             self.watcher.jitter_tol = float(self.cfg.get("sync.jitter_tolerance_s", 1.5))
-            self.watcher.precise_timing = bool(self.cfg.get("sync.time_lock", False))
+            self.watcher.precise_timing = bool(self.cfg.get("sync.time_lock", True))
             self.watcher.players.pause_yield_s = pause_yield_limits(self.cfg)
             self.params = Params.from_config(self.cfg)
             if changed("engine.type", "engine.huesync.host", "engine.huesync.port",
@@ -1192,7 +1192,7 @@ class Daemon:
         self.cfg.reload()
         self.params = Params.from_config(self.cfg)
         self.watcher.jitter_tol = float(self.cfg.get("sync.jitter_tolerance_s", 1.5))
-        self.watcher.precise_timing = bool(self.cfg.get("sync.time_lock", False))
+        self.watcher.precise_timing = bool(self.cfg.get("sync.time_lock", True))
         self.watcher.players.pause_yield_s = pause_yield_limits(self.cfg)
         self.watcher.poll_interval = float(self.cfg.get("jellyfin.poll_interval_s", 0.5))
         self._push_engine_prefs()
@@ -1353,7 +1353,7 @@ class Daemon:
             if key in p:
                 self.cfg.set("ghost." + key, max(0.0, round(float(p[key]), 1)))
                 changed = True
-        if "time_lock" in p:                 # experimental
+        if "time_lock" in p:
             self.cfg.set("sync.time_lock", bool(p["time_lock"]))
             self.params = Params.from_config(self.cfg)
             self.watcher.precise_timing = self.params.time_lock

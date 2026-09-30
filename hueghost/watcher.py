@@ -297,7 +297,7 @@ class PlaybackModel:
     last_debug: str = ""
     device_id: str | None = None
     media_type: str = "video"
-    # time lock (experimental, sync.time_lock): once the ghost sits on the target,
+    # time lock (sync.time_lock, on by default): once the ghost sits on the target,
     # the timeline stops taking per-report corrections and just runs at 1.0x;
     # reports are still measured against it and release it when they disagree
     locked: bool = False
@@ -476,7 +476,7 @@ class SessionWatcher:
         self._prev_poll_mono: float | None = None
         self._playing_last_poll = False
         self.last_error: str | None = None
-        # time lock (experimental) also times reports properly: see _report_time
+        # time lock also times reports properly: see _report_time
         self.precise_timing = False
         self._last_checkin: float | None = None
         self._timed = True             # whether the last report's time is known precisely

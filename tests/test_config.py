@@ -154,3 +154,41 @@ def test_a_binding_keeps_the_app_it_was_added_for():
     assert [b["name"] for b in got] == ["S23 music", "S23 films"]
     # two entries for one phone must not collapse into one id
     assert got[0]["id"] != got[1]["id"]
+
+
+def test_a_source_can_list_several_apps():
+    from hueghost.config import normalize_exes
+    assert normalize_exes(" Chrome.exe, msedge ,chrome.exe,", add_suffix=True) == "chrome.exe,msedge.exe"
+    assert normalize_exes("*", add_suffix=True) == "*"
+    assert normalize_exes("@Games", add_suffix=True) == "@games"
+    cfg = Config({"sources": [{"source": "pc", "exe": "Chrome.exe, MSEdge.exe", "mode": "video"}]})
+    assert cfg.bindings()[0]["exe"] == "chrome.exe,msedge.exe"
+
+
+def test_any_game_defaults_to_games_mode_and_fullscreen():
+    b = Config({"sources": [{"source": "pc", "exe": "@games"}]}).bindings()[0]
+    assert (b["mode"], b["detect"], b["name"]) == ("games", "fullscreen", "Any game")
+    assert Config({"sources": [b]}).problems() == []
+
+
+def test_time_lock_is_on_for_a_new_config():
+    assert Config({}).get("sync.time_lock") is True
+
+
+def test_time_lock_is_switched_on_once_for_an_older_config(tmp_path):
+    path = tmp_path / "config.json"
+    path.write_text('{"sync": {"time_lock": false}, "sources": []}')
+    cfg = Config.load(str(path))
+    assert cfg.get("sync.time_lock") is True
+    # switched back off by hand and saved: it stays off
+    cfg.set("sync.time_lock", False)
+    cfg.save()
+    assert Config.load(str(path)).get("sync.time_lock") is False
+
+
+def test_a_new_config_saved_with_time_lock_off_keeps_it_off(tmp_path):
+    path = str(tmp_path / "config.json")
+    cfg = Config.load(path)                  # no file yet
+    cfg.set("sync.time_lock", False)
+    cfg.save()
+    assert Config.load(path).get("sync.time_lock") is False

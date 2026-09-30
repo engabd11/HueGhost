@@ -626,8 +626,14 @@ def _time_lock(d, on=True):
     d.apply_config({"sync": {"time_lock": on}})
 
 
-def test_time_lock_is_off_by_default_and_changes_nothing(running):
+def test_time_lock_is_on_by_default(running):
     d = running.d
+    assert d.params.time_lock is True and d.watcher.precise_timing is True
+
+
+def test_time_lock_switched_off_changes_nothing(running):
+    d = running.d
+    _time_lock(d, False)
     assert d.params.time_lock is False and d.watcher.precise_timing is False
     _tv(running, 100.0, 60.0)
     st = d.status()

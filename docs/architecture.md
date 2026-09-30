@@ -67,7 +67,7 @@ after the first ~40 s, seeks detected within one poll, no spurious seeks.
 | `deadband_s` < \|drift\| | speed = 1 - clamp(drift / `converge_s`, ±`max_speed_delta`) |
 | \|drift\| <= `deadband_s` | speed 1.0 |
 
-### Time lock (experimental, `sync.time_lock`, off by default)
+### Time lock (`sync.time_lock`, on by default since 2.11)
 
 Live Moonfin data showed the target itself wandering: every 1 s report
 re-anchored the model by 0.01-0.15 s and the ghost chased each step (nudging on
@@ -143,6 +143,27 @@ with `SelectedGroup` from `bridge.json` and, if different, stops its own sync,
 kills the app, patches the file and relaunches `HueSync.exe -silent`; the
 normal reconnect + reconcile then starts the sync on the new area. The engine
 only stops syncs it started itself.
+
+## Apps and games on this PC (sources/pc.py, pcwatch.py, presets.py)
+
+A PC source needs no ghost: the picture is already on a screen Hue Sync can
+capture. `PcProbe.observe` (pure) turns two readings into "playing": a WASAPI
+session of a bound exe above `pc.audio_peak`, and/or the foreground window of a
+bound exe covering its monitor. Only the bound executables are ever looked at.
+
+- `exe` may list several executables, comma separated (`binding_exes`), so one
+  row covers every browser, or a game and its launcher.
+- `*` is any app (anything full screen, or any sound); `huesync.exe` means the
+  same for the window signal.
+- `@games` is any game: a foreground window whose executable sits under a known
+  game library (`GAME_DIRS`: `steamapps\common`, `Epic Games`, `XboxGames`,
+  GOG, EA, Ubisoft, Riot - launchers excluded), or any window while Windows
+  reports exclusive fullscreen Direct3D (`SHQueryUserNotificationState` =
+  `QUNS_RUNNING_D3D_FULL_SCREEN`). Paths and that state are only read when an
+  `@games` binding exists. A game Sunshine launches for a Moonlight client is
+  an ordinary process on this PC, so it is matched the same way.
+- `presets.py` holds the Sources page's *Quick add* rows (pure data, checked
+  by `tests/test_presets.py`).
 
 ## Engine ordering (daemon.py)
 
