@@ -95,9 +95,24 @@ def _probe_ws(host: str, port: int, timeout: float = 2.0) -> tuple[bool, dict | 
 
 
 # -- commands ------------------------------------------------------------------------
+def _claim_instance(show: bool = False):
+    """The single-instance lock, or None after telling the running copy (see
+    instance.py for why two copies are never allowed)."""
+    from . import instance
+    inst = instance.acquire()
+    if inst is None:
+        asked = show and instance.ask_running_to_show()
+        log.warning("Hue Ghost is already running%s - not starting a second copy",
+                    " (brought its window up)" if asked else "")
+    return inst
+
+
 def cmd_run(args) -> int:
     cfg = Config.load(args.config)
     setup_logging(cfg.get("log_level", "INFO"))
+    inst = _claim_instance()
+    if inst is None:
+        return 1
     if cfg.migrated:
         log.info("loaded v1 config from %s (migrated in memory; run 'hue-ghost setup' to rewrite)", cfg.path)
     probs = cfg.problems()
@@ -112,6 +127,7 @@ def cmd_run(args) -> int:
     except KeyboardInterrupt:
         d.stop()
         log.info("stopped by user")
+    inst.release()
     _relaunch_if_requested(d)
     return 0
 
@@ -124,6 +140,9 @@ def cmd_tray(args) -> int:
     except ImportError as e:
         log.error("tray needs the optional dependencies: pip install \"hue-ghost[tray]\" (%s)", e)
         return 2
+    inst = _claim_instance()
+    if inst is None:
+        return 1
     return run_tray(cfg)
 
 
@@ -486,7 +505,13 @@ def cmd_gui(args) -> int:
     except ImportError as e:
         log.error("the desktop app needs PySide6: pip install \"hue-ghost[gui]\" (%s)", e)
         return 2
-    return run_gui(cfg, minimized=bool(getattr(args, "minimized", False)))
+    minimized = bool(getattr(args, "minimized", False))
+    # autostart (--minimized) finding a copy running has nothing to show;
+    # a double-click does: bring the running copy's window up instead
+    inst = _claim_instance(show=not minimized)
+    if inst is None:
+        return 0
+    return run_gui(cfg, minimized=minimized, instance=inst)
 
 
 def cmd_install_autostart(args) -> int:

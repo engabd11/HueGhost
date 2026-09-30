@@ -16,6 +16,8 @@ from __future__ import annotations
 import json
 import logging
 import os
+import socket
+import sys
 import threading
 import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -36,6 +38,21 @@ def _coerce(v: str):
         return float(v) if ("." in v or "e" in lv) else int(v)
     except ValueError:
         return v
+
+
+class _ExclusiveServer(ThreadingHTTPServer):
+    """HTTPServer turns SO_REUSEADDR on, which on Windows lets a SECOND
+    process bind the same port - both copies then log "control API on :8787"
+    and requests land on either. Exclusive there, so the second bind fails."""
+
+    if sys.platform == "win32":
+        allow_reuse_address = False
+
+        def server_bind(self):
+            excl = getattr(socket, "SO_EXCLUSIVEADDRUSE", None)
+            if excl is not None:
+                self.socket.setsockopt(socket.SOL_SOCKET, excl, 1)
+            super().server_bind()
 
 
 class ControlServer:
@@ -132,7 +149,7 @@ class ControlServer:
             def log_message(self, fmt, *args):
                 pass
 
-        self._srv = ThreadingHTTPServer((self.bind, self.port), Handler)
+        self._srv = _ExclusiveServer((self.bind, self.port), Handler)
         self._srv.daemon_threads = True
         threading.Thread(target=self._srv.serve_forever, name="control-http", daemon=True).start()
         log.info("control API on http://%s:%d (%s)", self.bind, self.port,

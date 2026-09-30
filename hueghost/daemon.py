@@ -269,7 +269,8 @@ class Daemon:
             self.control.start()
             self.restart_required = []
         except OSError as e:
-            log.warning("control API unavailable on port %s: %s", port, e)
+            log.error("control API unavailable on port %s (another Hue Ghost, or another app, "
+                      "holds it - Home Assistant cannot reach this copy): %s", port, e)
             self.control = None
 
     # -- main loop --------------------------------------------------------------
