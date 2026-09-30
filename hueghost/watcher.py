@@ -151,22 +151,65 @@ class PlayerSet:
 
     def __init__(self, matchers: list[SessionMatcher]):
         self.matchers = matchers
+        # (video, music) seconds a paused player keeps its place before a lower
+        # one that is really playing takes over; 0 = it never gives way. The
+        # same limits after which the daemon turns a paused player's lights off:
+        # a TV left paused on an episode must not keep a phone's film dark.
+        self.pause_yield_s: tuple[float, float] = (0.0, 0.0)
+        # when each session (device, item) was first seen paused - per session,
+        # not per list entry, so two entries for one device share the count
+        self._paused_since: dict[tuple[str, str], float] = {}
+
+    @staticmethod
+    def _key(s: dict) -> tuple[str, str]:
+        return (s.get("DeviceId") or "", ((s.get("NowPlayingItem") or {}).get("Id") or ""))
+
+    def _time_pauses(self, sessions: list[dict], now: float) -> None:
+        paused = {self._key(s) for s in sessions
+                  if s.get("NowPlayingItem") and (s.get("PlayState") or {}).get("IsPaused")}
+        for k in list(self._paused_since):
+            if k not in paused:
+                del self._paused_since[k]
+        for k in paused:
+            self._paused_since.setdefault(k, now)
+
+    def _yielding(self, s: dict, r: "Report", now: float | None) -> bool:
+        """Whether this session, paused, has sat long enough to give way."""
+        since = self._paused_since.get(self._key(s)) if now is not None and r.paused else None
+        if since is None:
+            return False
+        limit = self.pause_yield_s[1] if r.media_type == "music" else self.pause_yield_s[0]
+        return limit > 0 and now - since >= limit
 
     @classmethod
     def from_players(cls, players: list[dict], claimed: Iterable[str] | None = None) -> "PlayerSet":
         claimed = set(claimed if claimed is not None else (p.get("device_id") for p in players))
         return cls([SessionMatcher.from_player(p, claimed) for p in players])
 
-    def pick(self, sessions: Iterable[dict]) -> tuple[dict | None, SessionMatcher | None]:
+    def pick(self, sessions: Iterable[dict], now: float | None = None
+             ) -> tuple[dict | None, SessionMatcher | None]:
+        """The first player in list order that plays something it follows -
+        skipping one that has sat paused past its limit while a later one
+        plays. ``now`` (monotonic) is what times the pauses; without it the
+        order alone decides."""
         sessions = list(sessions or [])
+        if now is not None:
+            self._time_pauses(sessions, now)
         first_seen: tuple[dict, SessionMatcher] | None = None
+        first_parked: tuple[dict, SessionMatcher] | None = None
         for m in self.matchers:
             s = m.pick(sessions)
             if s is None:
                 continue
-            if m.wants(report_from_session(s)):
+            r = report_from_session(s)
+            if m.wants(r):
+                if self._yielding(s, r, now):
+                    first_parked = first_parked or (s, m)
+                    continue
                 return s, m
             first_seen = first_seen or (s, m)
+        if first_parked:
+            return first_parked
         return first_seen if first_seen else (None, None)
 
 
@@ -442,7 +485,7 @@ class SessionWatcher:
     def observe(self, sessions: list[dict], server_epoch: float | None,
                 local_epoch: float, now_mono: float) -> Observation:
         self.clock.add(server_epoch, local_epoch)
-        s, who = self.players.pick(sessions)
+        s, who = self.players.pick(sessions, now_mono)
         prev_poll = self._prev_poll_mono
         self._prev_poll_mono = now_mono
         was_playing = self._playing_last_poll

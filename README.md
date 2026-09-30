@@ -405,6 +405,14 @@ automation.
 
 ## Changelog
 
+- **2.10.3** - **A player left paused no longer keeps everyone else dark.** The
+  first player in your list that had anything loaded won, paused or not - so
+  an Apple TV paused on an episode kept the lights (switched off for the
+  pause) while the S23 played a film further down the list, and nothing
+  synced. A paused player now keeps its place for the same time its lights
+  stay on while paused (`sync.pause_stop_min`, `sync.music_pause_stop_s`),
+  then gives way to one that is really playing; it takes the lights straight
+  back when it plays again. Pause limit 0 = it never gives way.
 - **2.10.2** - **Only one Hue Ghost runs at a time.** Double-clicking the app
   while autostart already had it in the tray started a SECOND copy: Home
   Assistant talked to one (it owned port 8787), the window you saw belonged to

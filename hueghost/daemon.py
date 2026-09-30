@@ -32,6 +32,7 @@ from .jellyfin import JellyfinClient, JellyfinError
 from .lockstep import GhostObs, Params, Pause, Resume, Seek, decide
 from .screencare import ScreenCare
 from .sources import IDLE as IDLE_ACTIVITY, build_sources
+from .sources.jellyfin import pause_yield_limits
 from .watcher import Observation, PlayerSet, SessionWatcher
 from .winutil import desktop_locked, keep_awake, wake_display
 
@@ -1111,6 +1112,7 @@ class Daemon:
                 self._plan_applied = None
             self.watcher.jitter_tol = float(self.cfg.get("sync.jitter_tolerance_s", 1.5))
             self.watcher.precise_timing = bool(self.cfg.get("sync.time_lock", False))
+            self.watcher.players.pause_yield_s = pause_yield_limits(self.cfg)
             self.params = Params.from_config(self.cfg)
             if changed("engine.type", "engine.huesync.host", "engine.huesync.port",
                        "engine.huesync.launch_exe", "engine.httphook.url"):
@@ -1191,6 +1193,7 @@ class Daemon:
         self.params = Params.from_config(self.cfg)
         self.watcher.jitter_tol = float(self.cfg.get("sync.jitter_tolerance_s", 1.5))
         self.watcher.precise_timing = bool(self.cfg.get("sync.time_lock", False))
+        self.watcher.players.pause_yield_s = pause_yield_limits(self.cfg)
         self.watcher.poll_interval = float(self.cfg.get("jellyfin.poll_interval_s", 0.5))
         self._push_engine_prefs()
         log.info("config reloaded (offset %+.2fs, intensity %s)", self.offset,

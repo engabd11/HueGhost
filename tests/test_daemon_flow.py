@@ -735,3 +735,33 @@ def test_a_client_found_paused_does_not_light_up_until_it_plays(world):
     assert world.ghost is None and not world.engine_on
     world.step(1.0, playing(100.0, world.t))
     assert world.ghost is not None and world.engine_on
+
+
+def test_a_tv_left_paused_hands_the_lights_to_a_phone_that_plays(world):
+    """Live 2026-09-30: Apple TV (first in the list) paused on Dexter, the S23
+    playing Solarmax - nothing synced, because the paused TV kept first place
+    after its own pause timeout had switched the lights off."""
+    d = world.d
+    d.cfg.set("sync.pause_stop_min", 1.0)
+    tv = lambda paused: session(2955.0, paused, LOCAL0 + world.t)
+    tv_id = tv(False)["DeviceId"]
+    d.cfg.set("jellyfin.players", [
+        {"device_id": tv_id, "device_name_contains": "", "area_id": "", "area_name": ""},
+        {"device_id": "s23", "device_name_contains": "", "area_id": "", "area_name": ""},
+    ])
+    d._rebuild_sources()
+    d.jf.stream_url = lambda item_id, msid=None, **kw: "http://jf/stream/" + item_id
+    d.jf.auth_header_for_mpv = lambda: "Authorization: x"
+
+    def phone():
+        s = session(2049.0 + world.t, False, LOCAL0 + world.t, item="solarmax")
+        s["DeviceId"], s["DeviceName"], s["Client"] = "s23", "Abdullah's S23", "Jellyfin for Android"
+        return s
+
+    world.step(1.0, [tv(True), phone()])
+    assert d.last_obs.report.device_id == tv_id           # paused, but first: holds its place
+    for _ in range(70):                                    # past the 1 min pause limit
+        world.step(1.0, [tv(True), phone()])
+    assert d.last_obs.report.device_id == "s23"
+    assert world.ghost is not None and world.ghost.item_id == "solarmax"
+    assert world.engine_on
