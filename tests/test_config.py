@@ -192,3 +192,13 @@ def test_a_new_config_saved_with_time_lock_off_keeps_it_off(tmp_path):
     cfg.set("sync.time_lock", False)
     cfg.save()
     assert Config.load(path).get("sync.time_lock") is False
+
+
+def test_a_binding_react_to_audio_is_on_off_or_unset():
+    from hueghost.config import Config
+    cfg = Config({"sources": [
+        {"source": "pc", "exe": "a.exe"},
+        {"source": "pc", "exe": "b.exe", "use_audio": True},
+        {"source": "pc", "exe": "c.exe", "use_audio": "off"},
+        {"source": "pc", "exe": "d.exe", "use_audio": "default"}]})
+    assert [b["use_audio"] for b in cfg.bindings()] == [None, True, False, None]

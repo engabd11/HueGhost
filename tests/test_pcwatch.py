@@ -235,3 +235,97 @@ def test_game_library_paths():
     assert not is_game_path(r"C:\Program Files (x86)\Epic Games\Launcher\Portal\Binaries\Win64\EpicGamesLauncher.exe")
     assert not is_game_path(r"C:\Riot Games\Riot Client\RiotClientServices.exe")
     assert not is_game_path("")
+
+
+# -- launchers, and games installed anywhere ---------------------------------------
+
+STEAM_SRC = {"id": "st", "exe": "steam.exe", "detect": "either", "mode": "games"}
+GOG_CP = "D:/GOG/Cyberpunk 2077/bin/x64/Cyberpunk2077.exe"
+
+
+def test_a_launcher_source_follows_the_games_it_starts():
+    # the game sits outside every library, but Steam started it
+    odd = game_fg(exe="mygame.exe", path="E:/Games/MyGame/mygame.exe")
+    odd = Foreground(**dict(odd.__dict__, launcher="steam.exe"))
+    p = probe()
+    p.observe([STEAM_SRC], [], odd, 0.0)
+    assert p.observe([STEAM_SRC], [], odd, 1.5)["st"].playing is True
+
+
+def test_a_launcher_source_follows_its_library_by_sound():
+    b = dict(STEAM_SRC, detect="audio")
+    p = probe()
+    s = [AudioHit(pid=1, exe="eldenring.exe", peak=0.5, path=STEAM)]
+    p.observe([b], s, None, 0.0)
+    assert p.observe([b], s, None, 1.5)["st"].playing is True
+
+
+def test_the_launcher_itself_is_not_a_game():
+    p = probe()
+    # Steam's own window, its sound, and its overlay
+    ui = Foreground(pid=5, exe="steamwebhelper.exe", fullscreen=True, monitor_id=MON,
+                    path="C:/Program Files (x86)/Steam/bin/cef/cef.win64/steamwebhelper.exe", launcher="steam.exe")
+    snd = [AudioHit(pid=6, exe="steam.exe", peak=0.5, path="C:/Program Files (x86)/Steam/steam.exe")]
+    p.observe([STEAM_SRC], snd, ui, 0.0)
+    assert p.observe([STEAM_SRC], snd, ui, 1.5)["st"].playing is False
+
+
+def test_a_launcher_source_ignores_other_launchers_games():
+    p = probe()
+    epic = game_fg(exe="fortnite.exe", path="C:/Program Files/Epic Games/Fortnite/fortnite.exe")
+    p.observe([STEAM_SRC], [], epic, 0.0)
+    assert p.observe([STEAM_SRC], [], epic, 1.5)["st"].playing is False
+
+
+def test_a_browser_a_launcher_opened_is_not_a_game():
+    p = probe()
+    br = Foreground(pid=7, exe="chrome.exe", fullscreen=True, monitor_id=MON,
+                    path="C:/Program Files/Google/Chrome/Application/chrome.exe", launcher="steam.exe")
+    p.observe([ANY_GAME, STEAM_SRC], [], br, 0.0)
+    hits = p.observe([ANY_GAME, STEAM_SRC], [], br, 1.5)
+    assert hits["g"].playing is False and hits["st"].playing is False
+
+
+def test_any_game_follows_a_game_a_launcher_started():
+    p = probe()
+    g = Foreground(pid=8, exe="gta5.exe", fullscreen=True, monitor_id=MON,
+                   path="D:/Rockstar/Grand Theft Auto V/GTA5.exe", launcher="epicgameslauncher.exe")
+    p.observe([ANY_GAME], [], g, 0.0)
+    assert p.observe([ANY_GAME], [], g, 1.5)["g"].playing is True
+
+
+def test_any_game_follows_what_windows_lists_as_a_game(monkeypatch):
+    from hueghost import pcwatch
+    monkeypatch.setattr(pcwatch.CATALOG, "games", {pcwatch._norm(GOG_CP)})
+    p = probe()
+    cp = game_fg(exe="cyberpunk2077.exe", path=GOG_CP)
+    p.observe([ANY_GAME], [], cp, 0.0)
+    assert p.observe([ANY_GAME], [], cp, 1.5)["g"].playing is True
+
+
+def test_a_steam_library_on_another_drive(monkeypatch):
+    from hueghost import pcwatch
+    monkeypatch.setattr(pcwatch.CATALOG, "roots", {"steam.exe": {"x:/library/".replace("/", "\\")}})
+    assert pcwatch.is_game_path("X:/Library/Some Game/game.exe", {"steam.exe"})
+    assert pcwatch.is_game_path("X:/Library/Some Game/game.exe")
+    assert not pcwatch.is_game_path("X:/Library/Some Game/game.exe", {"galaxyclient.exe"})
+
+
+def test_launcher_ancestry():
+    from hueghost.pcwatch import launcher_in
+    procs = {1: (0, "explorer.exe"), 2: (1, "steam.exe"), 3: (2, "gamelauncher.exe"), 4: (3, "game.exe"),
+             9: (99, "orphan.exe"), 10: (10, "loop.exe")}
+    assert launcher_in(4, procs) == "steam.exe"
+    assert launcher_in(3, procs) == "steam.exe"
+    assert launcher_in(2, procs) == ""          # Steam itself was started by explorer
+    assert launcher_in(9, procs) == ""          # parent gone
+    assert launcher_in(10, procs) == ""         # a cycle does not hang
+
+
+def test_a_protected_process_still_has_a_name(monkeypatch):
+    from hueghost import pcwatch
+    monkeypatch.setattr(pcwatch, "_query_exe", lambda pid: "")
+    monkeypatch.setattr(pcwatch, "_snapshot", lambda: {4242: (1, "protectedgame.exe")})
+    pcwatch._exe_cache.pop(4242, None)
+    assert pcwatch.exe_of(4242) == "protectedgame.exe"
+    pcwatch._exe_cache.pop(4242, None)

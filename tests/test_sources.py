@@ -178,3 +178,26 @@ def test_a_music_only_binding_with_nowhere_silent_to_play_is_refused():
     assert build_sources(cfg).sources == []          # skipped, with a logged reason
     cfg.set("ghost.audio_device", "{0.0.0.00000000}.{cable}")
     assert len(build_sources(cfg).sources) == 1
+
+
+def test_a_binding_can_turn_react_to_audio_on_or_off_for_itself():
+    cfg = cfg_with([{"source": "jellyfin", "device_id": "atv", "use_audio": True},
+                    {"source": "jellyfin", "device_id": "s23", "use_audio": "off"},
+                    {"source": "jellyfin", "device_id": "tab"}],
+                   engine={"type": "none", "huesync": {"use_audio": None}})
+    jf = build_sources(cfg).sources[0]
+    atv, s23, tab = jf.bindings()
+    assert jf._plan(atv, "video").use_audio is True
+    assert jf._plan(s23, "video").use_audio is False
+    assert jf._plan(tab, "video").use_audio is None        # the app's own, as before
+
+
+def test_a_binding_without_its_own_react_to_audio_follows_the_global_one():
+    cfg = cfg_with([{"source": "pc", "exe": "eldenring.exe", "mode": "games"},
+                    {"source": "pc", "exe": "vlc.exe", "mode": "video", "use_audio": False}],
+                   engine={"type": "none", "huesync": {"use_audio": True}})
+    pc = build_sources(cfg).sources[0]
+    game, vlc = pc.bindings()
+    hit = pc.probe.observe(pc.bindings(), [], None, 0.0)
+    assert pc._plan(game, hit[game["id"]]).use_audio is True
+    assert pc._plan(vlc, hit[vlc["id"]]).use_audio is False

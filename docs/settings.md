@@ -13,7 +13,8 @@ starts, so it no longer depends on what the app was last left on:
 - **Intensity** - Subtle / Moderate / High / Extreme.
 - **Use audio for effects** - the app's own switch for video and games mode:
   the lights react to the soundtrack as well as the picture. Leave it on
-  *App's own* and Hue Ghost never touches it.
+  *App's own* and Hue Ghost never touches it. This is the default: each source
+  can override it with its own **Audio** setting on the Sources page.
 
 Mode and intensity go over the Public Control socket and apply live,
 mid-movie: switching from Video to Music or Games costs one message and never

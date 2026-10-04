@@ -946,6 +946,7 @@ class Daemon:
                 "area_name": b["area_name"] or None,
                 "mode": b["mode"] or None,
                 "intensity": b["intensity"] or None,
+                "use_audio": b.get("use_audio"),
                 "exe": b["exe"] or None,
                 "device": b["device_id"] or b["device_name_contains"] or None,
                 "problems": probs,
@@ -1214,7 +1215,11 @@ class Daemon:
                     except (ValueError, RuntimeError):
                         pass
         try:
-            e.set_use_audio(self.cfg.get("engine.huesync.use_audio"))
+            # the playing source's own "react to audio" outranks the default
+            # (looked up afresh: the activity holds the binding as it was before the save)
+            live = (self.last_act.binding or {}).get("id") if self.last_act.playing else None
+            e.set_use_audio(self.cfg.binding_use_audio(
+                next((b for b in self.cfg.bindings() if live and b["id"] == live), None)))
         except (ValueError, RuntimeError):
             pass
         for attr, key in (("set_manage_area", "manage_area"),

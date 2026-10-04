@@ -166,6 +166,15 @@ def normalize_exes(raw: str, add_suffix: bool | None = None) -> str:
     return ",".join(out)
 
 
+def _on_off(v) -> bool | None:
+    """None / "" / "default" = not set here; otherwise on or off."""
+    if v is None or (isinstance(v, str) and v.strip().lower() in ("", "default", "auto", "app", "none")):
+        return None
+    if isinstance(v, str):
+        return v.strip().lower() in ("1", "true", "yes", "on")
+    return bool(v)
+
+
 def _binding(b: dict) -> dict:
     """One binding, every key present. New fields must be defaulted here and
     nowhere else - this is the only shape the rest of the app ever sees."""
@@ -213,6 +222,9 @@ def _binding(b: dict) -> dict:
         "area_name": str(b.get("area_name", "") or ""),
         "monitor": str(b.get("monitor", "") or ""),
         "audio_device": str(b.get("audio_device", "") or ""),
+        # Hue Sync's "use audio for light effects" while THIS one plays (video
+        # and games modes): None = the global setting, True/False = this source's own
+        "use_audio": _on_off(b.get("use_audio")),
     }
     if not out["name"]:
         out["name"] = ("Any game" if games else out["exe"]) or out["device_name_contains"] or out["device_id"]
@@ -486,6 +498,11 @@ class Config:
         return str((binding or {}).get("audio_device") or self.get("ghost.audio_device", "") or "")
 
     # -- validation -------------------------------------------------------
+    def binding_use_audio(self, b: dict | None) -> bool | None:
+        """The source's own "react to audio", else the global one."""
+        own = (b or {}).get("use_audio")
+        return own if own is not None else self.get("engine.huesync.use_audio")
+
     def binding_problems(self, b: dict) -> list[str]:
         """What stops one binding working. Non-fatal: the daemon skips it and
         says so, rather than refusing to run at all."""

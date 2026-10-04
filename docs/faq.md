@@ -12,7 +12,7 @@ The display went to sleep and Hue Sync lost its picture. Keep **Display > Keep d
 
 ## A game is missed
 
-*Any game* covers games from the big stores and games in exclusive fullscreen. For a borderless game installed somewhere else, add its `.exe` as its own source (*Sources*, then type the `.exe` or pick it from the running apps).
+*Any game* covers games from the big stores (in any folder), games a launcher started, games Windows lists in its Game Bar, and games in exclusive fullscreen. A source bound to a launcher such as `steam.exe` means the games that launcher starts, not the launcher's own window. For a game none of that recognises, add its `.exe` as its own source (*Sources*, then type the `.exe` or pick it from the running apps).
 
 ## Hue Sync stays off
 

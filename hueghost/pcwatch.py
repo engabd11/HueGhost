@@ -18,6 +18,13 @@ The exe ``@games`` means *any game*: an app installed in a game library
 (Steam, Epic, GOG, Xbox, EA, Ubisoft, Riot) or one Windows reports running
 exclusive fullscreen Direct3D. That is also what a game started by Sunshine for
 a Moonlight client looks like, so streamed games need no setup of their own.
+A game is also anything Windows itself lists as one (the Game Bar's own list,
+wherever the game is installed), and anything a game launcher started.
+
+A launcher's exe (``steam.exe``, ``galaxyclient.exe``, ...) stands for the games
+it starts, not for the launcher: the Steam client's window and sound belong to
+steamwebhelper.exe, and a Steam game is a process of its own, so ``steam.exe``
+taken literally never plays anything.
 
 ``PcProbe.observe`` is pure, like ``SessionWatcher.observe``: it takes the two
 readings and the clock and returns what is playing. The OS calls live in
@@ -45,6 +52,32 @@ LAUNCHER_DIRS = ("\\epic games\\launcher\\", "\\riot games\\riot client\\")
 # windows that fill a display without anything playing: the desktop, the
 # taskbar, the lock screen, start/search - never "a fullscreen video"
 SHELL_CLASSES = {"progman", "workerw", "shell_traywnd", "shell_secondarytraywnd"}
+# a launcher's exe -> where it installs its games. Its games are also the
+# processes it starts, so a game installed anywhere still counts.
+LAUNCHERS: dict[str, tuple[str, ...]] = {
+    "steam.exe": ("\\steamapps\\common\\",),
+    "epicgameslauncher.exe": ("\\epic games\\",),
+    "galaxyclient.exe": ("\\gog galaxy\\games\\", "\\gog games\\"),
+    "eadesktop.exe": ("\\ea games\\",),
+    "origin.exe": ("\\origin games\\",),
+    "upc.exe": ("\\ubisoft game launcher\\games\\",),
+    "ubisoftconnect.exe": ("\\ubisoft game launcher\\games\\",),
+    "riotclientservices.exe": ("\\riot games\\",),
+    "battle.net.exe": (),
+    "xboxpcapp.exe": ("\\xboxgames\\",),
+    "gamelaunchhelper.exe": ("\\xboxgames\\",),
+}
+# what a launcher runs that is not a game: its own UI, overlay, crash
+# reporters - and the apps a link in it opens
+NOT_GAMES = {"steamwebhelper.exe", "gameoverlayui.exe", "gameoverlayui64.exe", "steamerrorreporter.exe",
+             "steamerrorreporter64.exe", "steamservice.exe", "steam_monitor.exe", "epicwebhelper.exe",
+             "epiconlineservicesuserhelper.exe", "unrealcefsubprocess.exe", "crashreportclient.exe",
+             "galaxyclient helper.exe", "galaxycommunication.exe", "gogcrashreporter.exe",
+             "eabackgroundservice.exe", "eaconnect_microsoft.exe", "uplaywebcore.exe", "upc_service.exe",
+             "riotclientux.exe", "riotclientuxrender.exe", "riotclientcrashhandler.exe",
+             "agent.exe", "battle.net helper.exe", "blizzarderror.exe",
+             "chrome.exe", "msedge.exe", "firefox.exe", "brave.exe", "opera.exe", "vivaldi.exe",
+             "msedgewebview2.exe", "cmd.exe", "conhost.exe", "powershell.exe", "werfault.exe"}
 SHELL_EXES = {"explorer.exe", "lockapp.exe", "searchhost.exe", "searchapp.exe",
               "startmenuexperiencehost.exe", "shellexperiencehost.exe", "textinputhost.exe",
               "hueghost.exe"}
@@ -62,10 +95,73 @@ def any_app(exes, signal: str) -> bool:
     return ANY_APP in exes or (signal == "window" and "huesync.exe" in exes)
 
 
-def is_game_path(path: str) -> bool:
-    """Whether an executable lives in one of the game libraries."""
-    p = (path or "").replace("/", "\\").lower()
-    return any(d in p for d in GAME_DIRS) and not any(d in p for d in LAUNCHER_DIRS)
+def _norm(path: str) -> str:
+    return (path or "").replace("/", "\\").lower()
+
+
+def is_game_path(path: str, launchers: set[str] | None = None) -> bool:
+    """Whether an executable is a game: it lives in a game library, or Windows
+    lists it as a game. ``launchers`` narrows that to those launchers' own
+    libraries (a "Steam" source is Steam's games, not every game)."""
+    p = _norm(path)
+    if not p or any(d in p for d in LAUNCHER_DIRS):
+        return False
+    if launchers is None:
+        return (any(d in p for d in GAME_DIRS) or p in CATALOG.games
+                or any(p.startswith(r) for roots in CATALOG.roots.values() for r in roots))
+    return any(any(d in p for d in LAUNCHERS.get(l, ())) or any(p.startswith(r) for r in CATALOG.roots.get(l, ()))
+               for l in launchers)
+
+
+def is_game(exe: str, path: str, launcher: str = "", launchers: set[str] | None = None) -> bool:
+    """Whether a process is a game - of any launcher (``launchers`` None) or
+    of the given ones. A launcher's own processes, and the apps a link in it
+    opens, never are."""
+    exe = (exe or "").lower()
+    if exe in NOT_GAMES or exe in LAUNCHERS:
+        return False
+    if launchers is None:
+        return bool(launcher) or is_game_path(path)
+    return launcher in launchers or is_game_path(path, launchers)
+
+
+class GameCatalog:
+    """Where this PC's games are, from Windows and the launchers themselves.
+
+    ``games``: full paths Windows' Game Bar knows as games
+    (``HKCU\\System\\GameConfigStore\\Children``) - it notices a game the
+    first time one runs, wherever it is installed. ``roots``: install folders
+    the launchers record, per launcher exe (Steam's libraries on other drives,
+    Epic and GOG games in folders of the user's choosing).
+
+    Read lazily and rarely: ``refresh`` re-reads at most every ``every_s``,
+    and the registry list only when its key actually changed."""
+
+    def __init__(self, every_s: float = 30.0):
+        self.every_s = float(every_s)
+        self.games: set[str] = set()
+        self.roots: dict[str, set[str]] = {}
+        self._next = 0.0
+        self._stamp = None
+
+    def refresh(self, now: float | None = None) -> None:
+        if sys.platform != "win32":
+            return
+        now = time.monotonic() if now is None else now
+        if now < self._next:
+            return
+        self._next = now + self.every_s
+        try:
+            stamp = _gcs_stamp()
+            if stamp != self._stamp:
+                self._stamp = stamp
+                self.games = _gcs_games()
+            self.roots = _launcher_roots()
+        except Exception:                   # a catalog is a nicety; never stop the poll
+            log.debug("game catalog refresh failed", exc_info=True)
+
+
+CATALOG = GameCatalog()
 
 
 @dataclass(frozen=True)
@@ -74,6 +170,7 @@ class AudioHit:
     exe: str                 # basename, lower case
     peak: float
     path: str = ""           # full path; only read when an "any game" source needs it
+    launcher: str = ""       # the game launcher that started it, if any (same)
 
 
 @dataclass(frozen=True)
@@ -86,6 +183,7 @@ class Foreground:
     cls: str = ""            # window class, lower case
     path: str = ""           # full path of the exe; only read for "any game"
     exclusive: bool = False  # Windows reports exclusive fullscreen Direct3D
+    launcher: str = ""       # the game launcher that started it, if any
 
     @property
     def shell(self) -> bool:
@@ -124,15 +222,23 @@ class PcProbe:
             hit = self.hits.get(b["id"]) or Hit()
             any_sound, any_window = any_app(exes, "audio"), any_app(exes, "window")
             games = GAMES in exes
+            # a launcher stands for its games; the launcher itself never plays
+            launchers = exes & LAUNCHERS.keys()
+
+            def game(x) -> bool:
+                return bool((games and is_game(x.exe, x.path, x.launcher))
+                            or (launchers and is_game(x.exe, x.path, x.launcher, launchers)))
+
             loud = max((s.peak for s in sessions
-                        if (any_sound or s.exe in exes or (games and is_game_path(s.path)))
+                        if (any_sound or (s.exe in exes and s.exe not in launchers) or game(s))
                         and s.pid not in self.ignore_pids
                         and s.pid != os.getpid()), default=0.0)
             by_audio = loud > self.peak
-            fg_game = bool(games and fg and not fg.shell
-                           and (fg.exclusive or is_game_path(fg.path)))
+            fg_game = bool(fg and not fg.shell
+                           and ((games and fg.exclusive) or game(fg)))
             fg_mine = bool(fg and fg.pid not in self.ignore_pids
-                           and (fg.exe in exes or (any_window and not fg.shell) or fg_game))
+                           and ((fg.exe in exes and fg.exe not in launchers)
+                                or (any_window and not fg.shell) or fg_game))
             by_window = bool(fg_mine and (fg.fullscreen or (fg_game and fg.exclusive)))
             signal = (by_audio if detect == "audio" else
                       by_window if detect == "fullscreen" else
@@ -162,9 +268,12 @@ class PcProbe:
         """The same, reading the OS. Only the signals some binding asks for are
         read, so an install with no PC bindings costs nothing at all."""
         wanted: set[str] | None = set().union(*(binding_exes(b) for b in bindings)) if bindings else set()
-        games = GAMES in wanted
+        # "any game" and a launcher's games both need to know what a game is
+        games = GAMES in wanted or bool(wanted & LAUNCHERS.keys())
         if any_app(wanted, "audio") or games:
             wanted = None                   # every app's sound counts (or might be a game)
+        if games:
+            CATALOG.refresh()               # cheap: re-reads at most every 30 s
         need_audio = any((b.get("detect") or "audio") in ("audio", "either") for b in bindings)
         need_fg = any((b.get("detect") or "audio") in ("fullscreen", "either") for b in bindings)
         sessions = audio_sessions(wanted, paths=games) if need_audio else []
@@ -185,7 +294,9 @@ def exe_of(pid: int) -> str:
     hit = _exe_cache.get(pid)
     if hit and now - hit[1] < _EXE_TTL_S:
         return hit[0]
-    name = _query_exe(pid)
+    # a protected process (some anti-cheat games) refuses OpenProcess; the
+    # process list still has its name
+    name = _query_exe(pid) or _snapshot().get(pid, (0, ""))[1]
     _exe_cache[pid] = (name, now)
     if len(_exe_cache) > 512:
         for k in [k for k, v in _exe_cache.items() if now - v[1] > _EXE_TTL_S]:
@@ -254,6 +365,182 @@ def path_of(pid: int) -> str:
     return path
 
 
+_snap: tuple[float, dict[int, tuple[int, str]]] = (-1e9, {})
+_SNAP_TTL_S = 2.0
+_launcher_cache: dict[int, tuple[str, float]] = {}
+_MAX_DEPTH = 8
+
+
+def _snapshot() -> dict[int, tuple[int, str]]:
+    """{pid: (parent pid, exe)} for every process, from one Toolhelp snapshot.
+    Only taken when a pid not seen in the last minute needs looking up, and
+    shared by every lookup within two seconds of it."""
+    global _snap
+    now = time.monotonic()
+    if now - _snap[0] < _SNAP_TTL_S:
+        return _snap[1]
+    procs = _read_snapshot()
+    _snap = (now, procs)
+    return procs
+
+
+def _read_snapshot() -> dict[int, tuple[int, str]]:
+    if sys.platform != "win32":
+        return {}
+    import ctypes
+    from ctypes import wintypes
+
+    k32 = ctypes.windll.kernel32
+    k32.CreateToolhelp32Snapshot.restype = wintypes.HANDLE
+
+    class PROCESSENTRY32W(ctypes.Structure):
+        _fields_ = [("dwSize", wintypes.DWORD), ("cntUsage", wintypes.DWORD),
+                    ("th32ProcessID", wintypes.DWORD), ("th32DefaultHeapID", ctypes.POINTER(ctypes.c_ulong)),
+                    ("th32ModuleID", wintypes.DWORD), ("cntThreads", wintypes.DWORD),
+                    ("th32ParentProcessID", wintypes.DWORD), ("pcPriClassBase", ctypes.c_long),
+                    ("dwFlags", wintypes.DWORD), ("szExeFile", wintypes.WCHAR * 260)]
+
+    snap = k32.CreateToolhelp32Snapshot(0x2, 0)     # TH32CS_SNAPPROCESS
+    if not snap or snap == wintypes.HANDLE(-1).value:
+        return {}
+    out: dict[int, tuple[int, str]] = {}
+    try:
+        e = PROCESSENTRY32W()
+        e.dwSize = ctypes.sizeof(e)
+        ok = k32.Process32FirstW(snap, ctypes.byref(e))
+        while ok:
+            out[int(e.th32ProcessID)] = (int(e.th32ParentProcessID), e.szExeFile.lower())
+            ok = k32.Process32NextW(snap, ctypes.byref(e))
+    finally:
+        k32.CloseHandle(snap)
+    return out
+
+
+def launcher_in(pid: int, procs: dict[int, tuple[int, str]]) -> str:
+    """Pure: the game launcher ``pid`` descends from, or "". Steam starts a game
+    directly or through the game's own launcher, so a few levels are walked."""
+    seen = {pid}
+    cur = procs.get(pid, (0, ""))[0]
+    for _ in range(_MAX_DEPTH):
+        if cur <= 0 or cur in seen or cur not in procs:
+            return ""
+        seen.add(cur)
+        parent, exe = procs[cur]
+        if exe in LAUNCHERS:
+            return exe
+        cur = parent
+    return ""
+
+
+def launcher_of(pid: int) -> str:
+    """``launcher_in`` against the live process list, cached per pid."""
+    if pid <= 0:
+        return ""
+    now = time.monotonic()
+    hit = _launcher_cache.get(pid)
+    if hit and now - hit[1] < _EXE_TTL_S:
+        return hit[0]
+    name = launcher_in(pid, _snapshot())
+    _launcher_cache[pid] = (name, now)
+    if len(_launcher_cache) > 512:
+        for k in [k for k, v in _launcher_cache.items() if now - v[1] > _EXE_TTL_S]:
+            _launcher_cache.pop(k, None)
+    return name
+
+
+# -- where the games are ---------------------------------------------------------
+_GCS_KEY = r"System\GameConfigStore\Children"
+
+
+def _gcs_stamp():
+    """Last-write time of Windows' game list: re-read it only when it moved."""
+    import winreg
+    try:
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, _GCS_KEY) as k:
+            return winreg.QueryInfoKey(k)[2]
+    except OSError:
+        return None
+
+
+def _gcs_games() -> set[str]:
+    """Every executable Windows' Game Bar has recognised as a game."""
+    import winreg
+    out: set[str] = set()
+    try:
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, _GCS_KEY) as k:
+            for i in range(winreg.QueryInfoKey(k)[0]):
+                try:
+                    with winreg.OpenKey(k, winreg.EnumKey(k, i)) as c:
+                        path = winreg.QueryValueEx(c, "MatchedExeFullPath")[0]
+                except OSError:
+                    continue
+                if path:
+                    out.add(_norm(str(path)))
+    except OSError:
+        pass
+    return out
+
+
+def _dir(path: str) -> str:
+    p = _norm(path).rstrip("\\")
+    return p + "\\" if p else ""
+
+
+def _launcher_roots() -> dict[str, set[str]]:
+    """Install folders each launcher recorded, for libraries outside the usual
+    places: a Steam library on another drive, an Epic or GOG game wherever the
+    user put it."""
+    import glob
+    import json
+    import re
+    import winreg
+
+    out: dict[str, set[str]] = {}
+
+    def reg(hive, key, value):
+        try:
+            with winreg.OpenKey(hive, key) as k:
+                return str(winreg.QueryValueEx(k, value)[0] or "")
+        except OSError:
+            return ""
+
+    steam = reg(winreg.HKEY_CURRENT_USER, r"Software\Valve\Steam", "SteamPath")
+    if steam:
+        roots = {_dir(steam) + "steamapps\\common\\"}
+        try:
+            with open(steam.replace("/", "\\") + r"\steamapps\libraryfolders.vdf", encoding="utf-8",
+                      errors="replace") as f:
+                for m in re.finditer(r'"path"\s+"([^"]+)"', f.read()):
+                    roots.add(_dir(m.group(1).replace("\\\\", "\\")) + "steamapps\\common\\")
+        except OSError:
+            pass
+        out["steam.exe"] = roots
+    epic = set()
+    for item in glob.glob(r"C:\ProgramData\Epic\EpicGamesLauncher\Data\Manifests\*.item"):
+        try:
+            with open(item, encoding="utf-8", errors="replace") as f:
+                loc = json.load(f).get("InstallLocation") or ""
+        except (OSError, ValueError):
+            continue
+        if loc:
+            epic.add(_dir(loc))
+    if epic:
+        out["epicgameslauncher.exe"] = epic
+    gog = set()
+    for base in (r"SOFTWARE\WOW6432Node\GOG.com\Games", r"SOFTWARE\GOG.com\Games"):
+        try:
+            with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, base) as k:
+                for i in range(winreg.QueryInfoKey(k)[0]):
+                    p = reg(winreg.HKEY_LOCAL_MACHINE, base + "\\" + winreg.EnumKey(k, i), "path")
+                    if p:
+                        gog.add(_dir(p))
+        except OSError:
+            continue
+    if gog:
+        out["galaxyclient.exe"] = gog
+    return out
+
+
 _desc_cache: dict[str, str] = {}
 
 
@@ -310,8 +597,8 @@ def app_name(exe: str, path: str = "") -> str:
 
 def foreground_window(games: bool = False) -> Foreground | None:
     """The focused window, its process, and whether it covers a whole display.
-    ``games`` also reads its path and the exclusive-fullscreen state, which
-    only an "any game" source needs."""
+    ``games`` also reads its path, the launcher that started it and the
+    exclusive-fullscreen state, which only "any game" and launcher sources need."""
     if sys.platform != "win32":
         return None
     import ctypes
@@ -351,7 +638,8 @@ def foreground_window(games: bool = False) -> Foreground | None:
     return Foreground(pid=pid.value, exe=exe_of(pid.value), title=title.value,
                       fullscreen=full, monitor_id=monitor_id, cls=cls.value.lower(),
                       path=path_of(pid.value) if games else "",
-                      exclusive=exclusive_fullscreen() if games else False)
+                      exclusive=exclusive_fullscreen() if games else False,
+                      launcher=launcher_of(pid.value) if games else "")
 
 
 QUNS_RUNNING_D3D_FULL_SCREEN = 3
@@ -385,7 +673,9 @@ def audio_sessions(wanted: set[str] | None = None, paths: bool = False) -> list[
         log.debug("audio session enumeration failed: %s", e, exc_info=True)
         return []
     if paths:
-        out = [AudioHit(pid=a.pid, exe=a.exe, peak=a.peak, path=path_of(a.pid)) for a in out]
+        # a silent session is never a game playing: only look up the loud ones
+        out = [AudioHit(pid=a.pid, exe=a.exe, peak=a.peak, path=path_of(a.pid), launcher=launcher_of(a.pid))
+               if a.peak > 0.0 else a for a in out]
     return out
 
 
