@@ -2,6 +2,24 @@
 
 All notable changes to Hue Ghost. The newest release is first.
 
+- **2.11.1** - **Steam and more games light up; each source chooses its own
+  audio; the window fits any size.** A source bound to a game launcher
+  (`steam.exe`, the Epic launcher, GOG Galaxy, the EA app, Ubisoft Connect,
+  Riot, Battle.net) now means *the games it starts*: before, a "Steam" source
+  never played, because Steam's window belongs to `steamwebhelper.exe` and
+  every game is a process of its own. **Any game** now also recognises games
+  Windows lists in its Game Bar, games a launcher started, and Steam, Epic and
+  GOG games installed in folders of your choosing (a game in `D:\GOG` or
+  `D:\Rockstar` was only caught in exclusive fullscreen), and a game whose
+  process Windows will not let Hue Ghost read (some anti-cheat) still has a
+  name. New **Steam games** and **Epic, GOG and EA games** Quick add presets.
+  Each source has its own **Audio** switch (Default / On / Off) for Hue Sync's
+  *use audio for light effects*. The Sources page no longer grows sideways:
+  each source is laid out over two lines that wrap further in a narrow window,
+  long names and areas no longer widen the page, the Home page stacks its cards
+  in one column when two do not fit, and the window can be made smaller
+  (780 x 560). Detection stays cheap: the game list and launcher folders are
+  read at most every 30 s, and a process is looked up once, not every second.
 - **2.11.0** - **More apps and games, less setup.** A new **Any game** source
   follows every game installed through Steam, Epic, GOG, Xbox / Game Pass, EA,
   Ubisoft or Riot - and anything Windows reports as exclusive fullscreen - with

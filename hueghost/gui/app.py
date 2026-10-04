@@ -115,7 +115,7 @@ class MainWindow(QMainWindow):
         self.daemon = daemon
         self.api = WebApi(daemon)
         self.setWindowTitle("Hue Ghost")
-        self.setMinimumSize(960, 660)
+        self.setMinimumSize(780, 560)      # every page wraps to fit; see gui/widgets.FlowLayout
         self.setWindowIcon(ghost_icon(None))
         self._restore_geometry()
         self.last_status: dict = {}

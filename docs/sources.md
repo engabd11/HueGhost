@@ -45,6 +45,13 @@ puts Hue Sync into its own settings the moment it starts. Leave a row on
 *Automatic*, *Default* or *Current area* and Hue Ghost does not touch that
 choice at all.
 
+Each row also has **Audio**: Hue Sync's *use audio for light effects* switch
+while that source plays (video and games mode; music mode always listens).
+*Default* uses the switch on the Home page, *On* or *Off* is that source's own -
+for example a game on *On* so explosions flash, a film on *Off*. Hue Sync only
+reads that switch when it starts, so a source that changes it restarts the app
+silently (~3 s) when it takes the lights, as a change of area does.
+
 Only one thing syncs at a time (Hue Sync has a single area, mode and capture
 display), so when several are playing, **the one highest in the list wins**;
 drag a row to change that. When the winner changes - an app on this PC starting
@@ -78,6 +85,19 @@ The `.exe` box takes a comma-separated list, so one row can stand for a group:
 launcher. The row behaves exactly like a single app - one mode, one intensity,
 one area - and plays when any of its apps does.
 
+## A launcher means its games
+
+A game launcher's `.exe` stands for the games it starts, not for the launcher:
+a source bound to `steam.exe` plays when a game started from Steam is in front
+full screen (or making sound, with Detect on Sound or Either), wherever that
+game is installed, and in every Steam library. The Steam window itself, its
+overlay and its sounds never count - Steam's window belongs to
+`steamwebhelper.exe` and every game is a process of its own, so `steam.exe`
+taken literally would never play anything. The same goes for the Epic Games
+Launcher (`epicgameslauncher.exe`), GOG Galaxy (`galaxyclient.exe`), the EA
+app (`eadesktop.exe`), Ubisoft Connect (`upc.exe`), the Riot client and
+Battle.net.
+
 ## Quick add presets
 
 *Sources > Add an app on this PC > Quick add* adds a ready-made row with the
@@ -85,7 +105,9 @@ right mode and detection already chosen:
 
 | Preset | Covers | Mode | Detect |
 |---|---|---|---|
-| Any game | every game in a game library, or exclusive fullscreen | Games | Fullscreen |
+| Any game | every game a launcher installed or started, every game Windows lists, or exclusive fullscreen | Games | Fullscreen |
+| Steam games | any game started from Steam | Games | Either |
+| Epic, GOG and EA games | any game started from those launchers | Games | Either |
 | Web browsers | Chrome, Edge, Firefox, Brave, Opera, Vivaldi | Video | Fullscreen |
 | Video players | VLC, MPC-HC/BE, PotPlayer, Kodi, Plex, Jellyfin Media Player | Video | Either |
 | Spotify | Spotify | Music | Sound |
@@ -103,15 +125,24 @@ use a browser or *Any app on this PC* for them.
 The **Any game** source (`@games`) plays when the window in front, filling its
 screen, is:
 
-- a program installed in a game library: Steam (`steamapps\common`), Epic
-  Games, GOG, Xbox / Game Pass (`XboxGames`), EA, Ubisoft, Riot. The launchers
-  themselves (Steam, the Epic launcher, the Riot client) never count; or
-- any program while Windows reports **exclusive fullscreen** Direct3D - which
-  catches games installed anywhere else (Battle.net, a custom folder).
+- a program installed in a game library: Steam (`steamapps\common`, every
+  library on every drive), Epic Games, GOG, Xbox / Game Pass (`XboxGames`), EA,
+  Ubisoft, Riot - including the folders Steam, Epic and GOG Galaxy record for
+  games installed somewhere of your choosing; or
+- a program **Windows itself lists as a game** (the Game Bar's own list,
+  `HKCU\System\GameConfigStore`), wherever it is installed - a game in
+  `D:\GOG` or `D:\Rockstar`, say; or
+- a program a **game launcher started** (Steam, Epic, GOG Galaxy, EA, Ubisoft,
+  Riot, Battle.net, Xbox); or
+- any program while Windows reports **exclusive fullscreen** Direct3D.
 
-Borderless-windowed games outside a known library are not detected by Any game;
-add their `.exe` as its own source. Nothing is scanned: the path of the window
-in front is the only thing looked at, and only while an Any game source exists.
+The launchers themselves, their overlays and helpers, and a browser a link in a
+launcher opened never count. A game that is none of the above (a borderless
+game copied to a folder and started from a desktop shortcut, before Windows has
+noticed it) can still be added by its `.exe`. Nothing is scanned: only the
+window in front, and the apps making sound, are looked at; the game list and
+the launchers' folders are read at most every 30 seconds, and only while an Any
+game or launcher source exists.
 
 ## Game streaming (Sunshine / Moonlight)
 

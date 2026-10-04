@@ -80,7 +80,7 @@ class PcSource(Source):
             # the PC's own output is what music mode should listen to here, and
             # it has to be able to undo an endpoint a Jellyfin-music session pinned
             audio_device=(b.get("audio_device") or AUTO) if mode == "music" else None,
-            use_audio=self.cfg.get("engine.huesync.use_audio"),
+            use_audio=self.cfg.binding_use_audio(b),
             # the binding's own level, else the global one
             intensity=(b.get("intensity")
                        or self.cfg.get("engine.huesync.intensity") or None))

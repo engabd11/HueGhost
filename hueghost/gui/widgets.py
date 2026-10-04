@@ -6,12 +6,13 @@ from __future__ import annotations
 from collections import deque
 from typing import Callable
 
-from PySide6.QtCore import (Property, QEasingCurve, QObject, QPropertyAnimation, QRectF, QRunnable, QTimer,
-                            Qt, QThreadPool, Signal, Slot)
+from PySide6.QtCore import (Property, QEasingCurve, QObject, QPoint, QPropertyAnimation, QRect, QRectF,
+                            QRunnable, QSize, QTimer, Qt, QThreadPool, Signal, Slot)
 from PySide6.QtGui import (QColor, QFont, QFontDatabase, QLinearGradient, QPainter, QPainterPath, QPen,
                            QPixmap)
-from PySide6.QtWidgets import (QAbstractButton, QButtonGroup, QFrame, QHBoxLayout, QLabel, QPushButton,
-                               QSizePolicy, QVBoxLayout, QWidget)
+from PySide6.QtWidgets import (QAbstractButton, QButtonGroup, QComboBox, QFrame, QGridLayout, QHBoxLayout, QLabel,
+                               QLayout,
+                               QPushButton, QSizePolicy, QVBoxLayout, QWidget)
 
 from . import theme
 
@@ -268,6 +269,168 @@ class AudioTriToggle(Segmented):
 
 
 # -- layout helpers ------------------------------------------------------------------------
+WRAP_MIN_W = 120               # narrowest a wrapped paragraph may get
+_GROWS = (QSizePolicy.Expanding, QSizePolicy.MinimumExpanding)
+
+
+class FlowLayout(QLayout):
+    """Left to right, wrapping onto the next line when the width runs out -
+    so a row of controls asks for the width of its widest control, not for
+    the sum of them all. Items with a horizontal stretch policy (a line edit)
+    take the rest of their line."""
+
+    def __init__(self, parent=None, spacing: int = 8, vspacing: int | None = None):
+        super().__init__(parent)
+        self._items: list = []
+        self._h = spacing
+        self._v = spacing if vspacing is None else vspacing
+        self.setContentsMargins(0, 0, 0, 0)
+
+    def addItem(self, item) -> None:            # noqa: N802 (Qt API)
+        self._items.append(item)
+
+    def count(self) -> int:
+        return len(self._items)
+
+    def itemAt(self, i):                        # noqa: N802
+        return self._items[i] if 0 <= i < len(self._items) else None
+
+    def takeAt(self, i):                        # noqa: N802
+        return self._items.pop(i) if 0 <= i < len(self._items) else None
+
+    def expandingDirections(self):              # noqa: N802
+        return Qt.Orientation(0)
+
+    def hasHeightForWidth(self) -> bool:        # noqa: N802
+        return True
+
+    def heightForWidth(self, w: int) -> int:    # noqa: N802
+        return self._do_layout(QRect(0, 0, w, 0), apply=False)
+
+    def setGeometry(self, rect) -> None:        # noqa: N802
+        super().setGeometry(rect)
+        self._do_layout(rect, apply=True)
+
+    def sizeHint(self):                         # noqa: N802
+        w = h = 0
+        for it in self._visible():
+            s = it.sizeHint()
+            w += s.width() + (self._h if w else 0)
+            h = max(h, s.height())
+        m = self.contentsMargins()
+        return QSize(w + m.left() + m.right(), h + m.top() + m.bottom())
+
+    def minimumSize(self):                      # noqa: N802
+        size = QSize()
+        for it in self._visible():
+            size = size.expandedTo(it.minimumSize())
+        m = self.contentsMargins()
+        return size + QSize(m.left() + m.right(), m.top() + m.bottom())
+
+    def _visible(self) -> list:
+        return [it for it in self._items if not (it.widget() and it.widget().isHidden())]
+
+    def _do_layout(self, rect, apply: bool) -> int:
+        m = self.contentsMargins()
+        r = rect.adjusted(m.left(), m.top(), -m.right(), -m.bottom())
+        lines: list[list] = [[]]
+        x = 0
+        for it in self._visible():
+            w = it.sizeHint().width()
+            if lines[-1] and x + w > r.width():
+                lines.append([])
+                x = 0
+            lines[-1].append(it)
+            x += w + self._h
+        y = r.y()
+        for line in lines:
+            if not line:
+                continue
+            hints = [min(it.sizeHint().width(), r.width()) for it in line]
+            spare = r.width() - sum(hints) - self._h * (len(line) - 1)
+            grow = [i for i, it in enumerate(line)
+                    if it.widget() and it.widget().sizePolicy().horizontalPolicy() in _GROWS]
+            if spare > 0 and grow:
+                for i in grow:
+                    hints[i] += spare // len(grow)
+            lh = max(it.sizeHint().height() for it in line)
+            x = r.x()
+            if apply:
+                for it, w in zip(line, hints):
+                    h = it.sizeHint().height()
+                    it.setGeometry(QRect(QPoint(x, y + (lh - h) // 2), QSize(w, h)))
+                    x += w + self._h
+            y += lh + self._v
+        return max(0, y - self._v - r.y()) + m.top() + m.bottom()
+
+
+class CardGrid(QWidget):
+    """Cards in two columns when the window is wide enough for both, one
+    column when it is not. Asks only for the width of its widest card, so a
+    narrow window stacks the cards instead of being pushed wider."""
+
+    def __init__(self, columns: int = 2, spacing: int = 16, parent=None):
+        super().__init__(parent)
+        self._grid = QGridLayout(self)
+        self._grid.setContentsMargins(0, 0, 0, 0)
+        self._grid.setSpacing(spacing)
+        self._grid.setSizeConstraint(QLayout.SetNoConstraint)
+        self._max = max(1, int(columns))
+        self._cards: list[QWidget] = []
+        self._cols = 0
+        self._place(self._max)
+
+    def add(self, card: QWidget) -> QWidget:
+        self._cards.append(card)
+        self._place(self._cols or self._max, force=True)
+        return card
+
+    def _fits(self, width: int) -> int:
+        need = max((c.minimumSizeHint().width() for c in self._cards), default=0)
+        sp = self._grid.horizontalSpacing()
+        for n in range(self._max, 1, -1):
+            if width >= n * need + (n - 1) * sp:
+                return n
+        return 1
+
+    def _place(self, n: int, force: bool = False) -> None:
+        if n == self._cols and not force:
+            return
+        self._cols = n
+        for c in self._cards:
+            self._grid.removeWidget(c)
+        for i, c in enumerate(self._cards):
+            self._grid.addWidget(c, i // n, i % n)
+        for col in range(self._max):
+            self._grid.setColumnStretch(col, 1 if col < n else 0)
+        self.updateGeometry()
+
+    def resizeEvent(self, e) -> None:           # noqa: N802 (Qt API)
+        self._place(self._fits(e.size().width()))
+        super().resizeEvent(e)
+
+    def minimumSizeHint(self) -> QSize:         # noqa: N802
+        w = max((c.minimumSizeHint().width() for c in self._cards), default=0)
+        return QSize(w, self._grid.minimumSize().height())
+
+
+class CompactCombo(QComboBox):
+    """A combo box sized for a short name, not its longest item, so a long
+    area or device name never widens the page. The list it drops down is
+    still as wide as its longest item."""
+
+    def __init__(self, chars: int = 10, parent=None):
+        super().__init__(parent)
+        self.setSizeAdjustPolicy(QComboBox.AdjustToMinimumContentsLengthWithIcon)
+        self.setMinimumContentsLength(chars)
+
+    def showPopup(self) -> None:                # noqa: N802 (Qt API)
+        v = self.view()
+        v.setTextElideMode(Qt.ElideNone)
+        v.setMinimumWidth(max(self.width(), v.sizeHintForColumn(0) + 28))
+        super().showPopup()
+
+
 class Card(QFrame):
     def __init__(self, title: str = "", subtitle: str = "", action: QWidget | None = None, parent=None):
         super().__init__(parent)
@@ -283,11 +446,13 @@ class Card(QFrame):
             if title:
                 t = QLabel(title.upper())
                 t.setObjectName("cardTitle")
+                t.setWordWrap(True)
                 tcol.addWidget(t)
             if subtitle:
                 s = QLabel(subtitle)
                 s.setObjectName("cardSub")
                 s.setWordWrap(True)
+                s.setMinimumWidth(WRAP_MIN_W)
                 tcol.addWidget(s)
             head.addLayout(tcol, 1)
             if action is not None:
@@ -298,14 +463,15 @@ class Card(QFrame):
         self.body.addWidget(w)
         return w
 
-    def add_row(self, *widgets: QWidget, stretch_last: bool = False) -> QHBoxLayout:
-        row = QHBoxLayout()
-        row.setSpacing(8)
+    def add_row(self, *widgets: QWidget, stretch_last: bool = False) -> FlowLayout:
+        """Controls side by side, wrapping onto a second line in a narrow
+        window. A flow is left-aligned already, so ``stretch_last`` (keep the
+        row to the left) needs nothing more."""
+        holder = QWidget()
+        row = FlowLayout(holder)
         for w in widgets:
             row.addWidget(w)
-        if stretch_last:
-            row.addStretch(1)
-        self.body.addLayout(row)
+        self.body.addWidget(holder)
         return row
 
     def form(self, label_text: str, widget: QWidget, hint: str = "", trailing: QWidget | None = None) -> QWidget:
@@ -344,6 +510,7 @@ class FormRow(QWidget):
             hl = QLabel(hint)
             hl.setObjectName("hint")
             hl.setWordWrap(True)
+            hl.setMinimumWidth(self.LABEL_W + 10 + WRAP_MIN_W)
             hl.setContentsMargins(self.LABEL_W + 10, 0, 0, 2)
             v.addWidget(hl)
         self.label = lb
@@ -361,6 +528,10 @@ def label(text: str = "", name: str | None = None, wrap: bool = False) -> QLabel
     if name:
         lb.setObjectName(name)
     lb.setWordWrap(wrap)
+    if wrap:
+        # a wrapped paragraph can be as narrow as the window needs; left to
+        # itself Qt asks for a comfortable reading width and widens the page
+        lb.setMinimumWidth(WRAP_MIN_W)
     return lb
 
 

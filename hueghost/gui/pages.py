@@ -9,15 +9,15 @@ from typing import Callable
 
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QColor, QTextCharFormat, QTextCursor
-from PySide6.QtWidgets import (QCheckBox, QComboBox, QDoubleSpinBox, QFileDialog, QGridLayout, QHBoxLayout,
+from PySide6.QtWidgets import (QCheckBox, QComboBox, QDoubleSpinBox, QFileDialog, QFrame, QGridLayout, QHBoxLayout,
                                QLabel, QLineEdit, QListWidget, QListWidgetItem, QPlainTextEdit, QProgressBar,
                                QScrollArea, QSlider, QSpinBox, QVBoxLayout, QWidget)
 
 from .. import __author__, __url__
 from ..config import INTENSITIES, KEEP_AWAKE_MODES, MODES
 from . import theme
-from .widgets import (GLYPHS, AudioTriToggle, Banner, Card, Divider, DriftBar, Poster, Segmented, Sparkline,
-                      ToggleSwitch, button, chip, icon, icon_button, icon_family, label, pill, run_async,
+from .widgets import (GLYPHS, AudioTriToggle, Banner, Card, Divider, DriftBar, FlowLayout, Poster, Segmented,
+                      Sparkline, ToggleSwitch, button, CardGrid, CompactCombo, chip, icon, icon_button, icon_family, label, pill, run_async,
                       set_pill)
 
 INTENSITY_OPTIONS = [(i, i.capitalize()) for i in INTENSITIES]
@@ -85,6 +85,8 @@ class Page(QWidget):
         outer.setContentsMargins(0, 0, 0, 0)
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
+        # the page wraps to the window rather than growing past it
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         inner = QWidget()
         inner.setObjectName("root")
         self.lay = QVBoxLayout(inner)
@@ -156,9 +158,9 @@ class HomePage(Page):
         hero.body.addLayout(hrow)
         self.lay.addWidget(hero)
 
-        grid = QGridLayout()
-        grid.setSpacing(16)
-        self.lay.addLayout(grid)
+        # two columns of cards in a wide window, one in a narrow one
+        grid = CardGrid(2, 16)
+        self.lay.addWidget(grid)
 
         # now playing
         np_card = Card("Now playing on the TV")
@@ -191,7 +193,7 @@ class HomePage(Page):
         ncol.addWidget(self.np_time)
         nrow.addLayout(ncol, 1)
         np_card.body.addLayout(nrow)
-        grid.addWidget(np_card, 0, 0)
+        grid.add(np_card)
 
         # ghost & drift
         g_card = Card("Ghost lockstep", "how far the ghost is from where the TV really is")
@@ -213,7 +215,7 @@ class HomePage(Page):
         self.spark = Sparkline()
         g_card.add(self.drift)
         g_card.add(self.spark)
-        grid.addWidget(g_card, 0, 1)
+        grid.add(g_card)
 
         # hue sync
         h_card = Card("Hue Sync app")
@@ -252,7 +254,7 @@ class HomePage(Page):
         bri.addWidget(button("-10", "small", lambda: self._bri(-10)))
         bri.addWidget(button("+10", "small", lambda: self._bri(10)))
         h_card.body.addLayout(bri)
-        grid.addWidget(h_card, 1, 0)
+        grid.add(h_card)
 
         # offset + quality
         o_card = Card("Timing", "the ghost runs this far ahead of the TV to cancel the lamp latency")
@@ -267,9 +269,7 @@ class HomePage(Page):
         o_card.add(Divider())
         self.quality = label("Sync quality: measuring...", "muted", wrap=True)
         o_card.add(self.quality)
-        grid.addWidget(o_card, 1, 1)
-        grid.setColumnStretch(0, 1)
-        grid.setColumnStretch(1, 1)
+        grid.add(o_card)
         self.lay.addStretch(1)
         self._poster_for: str | None = None
         self._hero_key: tuple | None = None
@@ -566,10 +566,9 @@ class SyncPage(Page):
             sp = self._spin(lo, hi, step, suffix)
             sp.setToolTip(tip)
             self.fields[key] = sp
-            g.addWidget(lb, i // 2, (i % 2) * 2)
-            g.addWidget(sp, i // 2, (i % 2) * 2 + 1)
-        g.setColumnStretch(1, 1)
-        g.setColumnStretch(3, 1)
+            g.addWidget(lb, i, 0)
+            g.addWidget(sp, i, 1)
+        g.setColumnStretch(2, 1)
         adv.body.addLayout(g)
         self.lay.addWidget(adv)
 
@@ -664,33 +663,68 @@ BINDING_INTENSITY_LABELS = [("", "Default")] + [(i, i.capitalize()) for i in INT
 DETECT_LABELS = [("audio", "Sound"), ("fullscreen", "Fullscreen"), ("either", "Either")]
 
 
-class PlayerRow(QWidget):
+AUDIO_LABELS = [("", "Default"), ("on", "On"), ("off", "Off")]
+# a launcher's exe stands for its games (see pcwatch.LAUNCHERS)
+LAUNCHER_NAMES = {"steam.exe": "Steam games", "epicgameslauncher.exe": "Epic games",
+                  "galaxyclient.exe": "GOG games", "eadesktop.exe": "EA games", "origin.exe": "EA games",
+                  "upc.exe": "Ubisoft games", "ubisoftconnect.exe": "Ubisoft games",
+                  "riotclientservices.exe": "Riot games", "battle.net.exe": "Battle.net games",
+                  "xboxpcapp.exe": "Xbox games", "gamelaunchhelper.exe": "Xbox games"}
+
+
+def _pc_how(exe: str) -> str:
+    names = []
+    for e in (exe or "?").split(","):
+        e = e.strip()
+        n = {"*": "any app", "@games": "any game"}.get(e) or LAUNCHER_NAMES.get(e.lower()) or e
+        if n not in names:
+            names.append(n)
+    return "on this PC, " + ", ".join(names)
+
+
+def _captioned(caption: str, w: QWidget) -> QWidget:
+    """A small caption in front of a control, kept together when a row wraps."""
+    box = QWidget()
+    h = QHBoxLayout(box)
+    h.setContentsMargins(0, 0, 0, 0)
+    h.setSpacing(5)
+    h.addWidget(label(caption, "hint"))
+    h.addWidget(w)
+    return box
+
+
+class PlayerRow(QFrame):
     """One binding: on/off + what it is + which lights it drives.
 
     Two kinds share the row - a Jellyfin client on the network, and an app on
     this PC. The middle changes; the ends (the switch, the area, the ordering)
-    are the same for both."""
+    are the same for both. Laid out in lines - name, then how it is
+    recognised, then its settings - so the settings wrap in a narrow window
+    instead of making the whole page wider."""
 
     def __init__(self, player: dict, areas: list[dict], on_remove, on_move):
         super().__init__()
         self.player = dict(player)
         self.is_pc = player.get("source") == "pc"
-        lay = QHBoxLayout(self)
-        lay.setContentsMargins(0, 0, 0, 0)
-        lay.setSpacing(6)
+        self.setObjectName("sourceRow")
+        self.setStyleSheet("#sourceRow{border:1px solid %s;border-radius:8px;}" % theme.BORDER)
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(10, 8, 10, 10)
+        outer.setSpacing(6)
+        top = QHBoxLayout()
+        top.setSpacing(6)
+        outer.addLayout(top)
 
         self.enabled = ToggleSwitch()
         self.enabled.setChecked(bool(player.get("enabled", True)))
         self.enabled.setToolTip("Follow this one (off = ignore it, without deleting it)")
         self.enabled.clicked.connect(self._restyle)
-        lay.addWidget(self.enabled)
+        top.addWidget(self.enabled)
 
         name = (player.get("name") or player.get("exe") or player.get("device_name_contains")
                 or player.get("device_id") or "?")
         if self.is_pc:
-            exe = player.get("exe") or "?"
-            how = "on this PC, " + {"*": "any app", "@games": "any game"}.get(
-                exe, exe.replace(",", ", "))
+            how = _pc_how(player.get("exe") or "?")
             glyph = "display"
         else:
             how = "this exact device" if player.get("device_id") else (
@@ -700,22 +734,31 @@ class PlayerRow(QWidget):
                 how += ", app " + player["client"]
             if player.get("user"):
                 how += ", user " + player["user"]
-        lay.addWidget(icon(glyph, 14, theme.MUTED))
+        top.addWidget(icon(glyph, 14, theme.MUTED))
         # the name is yours to set: Jellyfin calls most phones "Android", which
         # is no help at all when two of them are on the same network
         self.name = QLineEdit(name)
         self.name.setToolTip("Call it whatever you like - this name is only for you.")
         self.name.setMinimumWidth(90)
-        lay.addWidget(self.name, 1)
+        top.addWidget(self.name, 1)
+        top.addWidget(icon_button("up", "Higher priority", lambda: on_move(self, -1)))
+        top.addWidget(icon_button("down", "Lower priority", lambda: on_move(self, 1)))
+        top.addWidget(icon_button("remove", "Remove this one", lambda: on_remove(self)))
+
         self.lbl = QLabel("<span style='color:%s'>%s</span>" % (theme.MUTED, how))
         self.lbl.setTextFormat(Qt.RichText)
+        self.lbl.setWordWrap(True)
         self.lbl.setToolTip("How Hue Ghost recognises it")
-        lay.addWidget(self.lbl, 1)
+        outer.addWidget(self.lbl)
 
         # Every source carries its own mode and intensity, so each one is set up
         # once and then simply played: Apple TV -> video/subtle, a phone running
         # a music app -> music/high. They are applied when it takes the lights.
-        self.mode = QComboBox()
+        settings = QWidget()
+        flow = FlowLayout(settings, spacing=10, vspacing=6)
+        outer.addWidget(settings)
+
+        self.mode = CompactCombo(6)
         for v, t in (MODE_LABELS if self.is_pc else JF_MODE_LABELS):
             self.mode.addItem(t, v)
         self.mode.setCurrentIndex(max(0, self.mode.findData(
@@ -724,19 +767,19 @@ class PlayerRow(QWidget):
                              "'Automatic' follows the media: music mode for a song, "
                              "video for anything else.")
         self.mode.currentIndexChanged.connect(self._mode_changed)
-        lay.addWidget(self.mode)
+        flow.addWidget(_captioned("Mode", self.mode))
 
-        self.intensity = QComboBox()
+        self.intensity = CompactCombo(7)
         for v, t in BINDING_INTENSITY_LABELS:
             self.intensity.addItem(t, v)
         self.intensity.setCurrentIndex(max(0, self.intensity.findData(player.get("intensity") or "")))
         self.intensity.setToolTip("How hard the lights react while this one plays.\n"
                                   "'Default' uses the intensity on the Home page.")
-        lay.addWidget(self.intensity)
+        flow.addWidget(_captioned("Intensity", self.intensity))
 
         self.detect = None
         if self.is_pc:
-            self.detect = QComboBox()
+            self.detect = CompactCombo(7)
             for v, t in DETECT_LABELS:
                 self.detect.addItem(t, v)
             self.detect.setCurrentIndex(max(0, self.detect.findData(player.get("detect") or "audio")))
@@ -744,12 +787,17 @@ class PlayerRow(QWidget):
                                    "Sound - it is making some\n"
                                    "Fullscreen - it is the window you are looking at, full screen\n"
                                    "Either - whichever happens first")
-            lay.addWidget(self.detect)
+            flow.addWidget(_captioned("Detect", self.detect))
 
-        bulb = icon("bulb", 14, theme.MUTED)
-        bulb.setToolTip("Which lights this one drives")
-        lay.addWidget(bulb)
-        self.area = QComboBox()
+        self.audio = CompactCombo(5)
+        for v, t in AUDIO_LABELS:
+            self.audio.addItem(t, v)
+        ua = player.get("use_audio")
+        self.audio.setCurrentIndex(max(0, self.audio.findData({True: "on", False: "off"}.get(ua, ""))))
+        self.audio_box = _captioned("Audio", self.audio)
+        flow.addWidget(self.audio_box)
+
+        self.area = CompactCombo(11)
         self.area.addItem("Current area", "")
         for a in areas:
             self.area.addItem(a["name"], a["id"])
@@ -758,13 +806,17 @@ class PlayerRow(QWidget):
         if player.get("area_id") and idx < 0:
             self.area.addItem(player.get("area_name") or player["area_id"], player["area_id"])
             self.area.setCurrentIndex(self.area.count() - 1)
-        self.area.setMinimumWidth(150)
         self.area.setToolTip("Which lights this one drives.\n"
                              "'Current area' leaves whatever is selected in the Hue Sync app alone.")
-        lay.addWidget(self.area)
-        lay.addWidget(icon_button("up", "Higher priority", lambda: on_move(self, -1)))
-        lay.addWidget(icon_button("down", "Lower priority", lambda: on_move(self, 1)))
-        lay.addWidget(icon_button("remove", "Remove this one", lambda: on_remove(self)))
+        area_box = QWidget()
+        ah = QHBoxLayout(area_box)
+        ah.setContentsMargins(0, 0, 0, 0)
+        ah.setSpacing(5)
+        bulb = icon("bulb", 14, theme.MUTED)
+        bulb.setToolTip("Which lights this one drives")
+        ah.addWidget(bulb)
+        ah.addWidget(self.area)
+        flow.addWidget(area_box)
         self._restyle()
 
     def _mode_changed(self) -> None:
@@ -773,6 +825,7 @@ class PlayerRow(QWidget):
         if self.detect is not None:
             want = "fullscreen" if self.mode.currentData() == "games" else "audio"
             self.detect.setCurrentIndex(max(0, self.detect.findData(want)))
+        self._restyle()
 
     def _restyle(self) -> None:
         on = self.enabled.isChecked()
@@ -780,6 +833,15 @@ class PlayerRow(QWidget):
         for w in (self.area, self.mode, self.intensity, self.detect):
             if w is not None:
                 w.setEnabled(on)
+        # music mode always listens to the sound: the switch is for video and games
+        music = self.mode.currentData() == "music"
+        self.audio.setEnabled(on and not music)
+        self.audio.setToolTip(
+            "Music mode always reacts to the sound." if music else
+            "Hue Sync's 'use audio for light effects' while this one plays.\n"
+            "On - the lights also pulse with the sound. Off - the picture only.\n"
+            "Default - the setting on the Home page.\n"
+            "Changing it restarts the Hue Sync app silently (~3 s) when this one takes the lights.")
 
     def value(self) -> dict:
         p = dict(self.player)
@@ -789,6 +851,7 @@ class PlayerRow(QWidget):
         p["area_name"] = self.area.currentText() if p["area_id"] else ""
         p["mode"] = self.mode.currentData()
         p["intensity"] = self.intensity.currentData()
+        p["use_audio"] = {"on": True, "off": False}.get(self.audio.currentData())
         if self.detect is not None:
             p["detect"] = self.detect.currentData()
         return p
@@ -828,7 +891,7 @@ class PlayerPage(Page):
         c.form("Server URL", self.url)
         c.form("API key", self.key, trailing=show)
         self.server_status = label("", "muted", wrap=True)
-        c.add_row(button("Test connection and list players", "primary", self._test, icon_name="search"),
+        c.add_row(button("Test and list players", "primary", self._test, icon_name="search"),
                   self.server_status, stretch_last=False)
         self.lay.addWidget(c)
 
@@ -860,6 +923,9 @@ class PlayerPage(Page):
                      "hint", wrap=True))
         self.list = QListWidget()
         self.list.setMinimumHeight(150)
+        # long names and window titles wrap instead of scrolling sideways
+        self.list.setWordWrap(True)
+        self.list.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         c3.add(self.list)
         self.by_name = QLineEdit()
         self.by_name.setPlaceholderText("device name contains... e.g. Apple TV")
@@ -886,6 +952,9 @@ class PlayerPage(Page):
         c4.add(self.proc_filter)
         self.proc_list = QListWidget()
         self.proc_list.setMinimumHeight(150)
+        # long names and window titles wrap instead of scrolling sideways
+        self.proc_list.setWordWrap(True)
+        self.proc_list.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         c4.add(self.proc_list)
         self.by_exe = QLineEdit()
         self.by_exe.setPlaceholderText("or type the .exe ... e.g. eldenring.exe (several: a.exe, b.exe)")
@@ -1141,8 +1210,7 @@ class DisplayPage(Page):
                      "nothing plugged into it (a spare HDMI/optical port, or a virtual audio cable). Hue Sync's "
                      "own music input is pointed at the same device. Left empty, music from your TV is shown but "
                      "not synced - the alternative would be playing it out loud.", "hint", wrap=True))
-        self.audio_out = QComboBox()
-        self.audio_out.setMinimumWidth(280)
+        self.audio_out = CompactCombo(16)
         c5.form("Play music into", self.audio_out)
         self.audio_note = label("", "muted", wrap=True)
         c5.add(self.audio_note)
@@ -1292,11 +1360,10 @@ class HueSyncPage(Page):
         self.lay.addWidget(c2)
 
         c3 = Card("Engine")
-        self.engine = QComboBox()
+        self.engine = CompactCombo(16)
         self.engine.addItem("Hue Sync app (recommended)", "huesync")
         self.engine.addItem("HTTP hook (GET url/start, url/stop)", "httphook")
         self.engine.addItem("None - I start sync myself", "none")
-        self.engine.setMinimumWidth(280)
         c3.form("Light engine", self.engine)
         self.port = QSpinBox()
         self.port.setRange(1, 65535)

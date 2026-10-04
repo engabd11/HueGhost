@@ -105,7 +105,7 @@ class JellyfinSource(Source):
             adev = b.get("audio_device") or self.cfg.get("ghost.audio_device") or None
         return Plan(area_id=b.get("area_id") or None, mode=mode, monitor=monitor,
                     audio_device=adev,
-                    use_audio=self.cfg.get("engine.huesync.use_audio"),
+                    use_audio=self.cfg.binding_use_audio(b),
                     intensity=(b.get("intensity")
                                or self.cfg.get("engine.huesync.intensity") or None))
 

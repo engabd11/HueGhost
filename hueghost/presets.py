@@ -17,8 +17,25 @@ PRESETS: list[dict] = [
         "exe": "@games",
         "mode": "games",
         "detect": "fullscreen",
-        "hint": "Every game from Steam, Epic, GOG, Xbox, EA, Ubisoft or Riot, plus anything Windows "
-                "reports as exclusive fullscreen. Covers games Sunshine starts for Moonlight too.",
+        "hint": "Every game: anything Steam, Epic, GOG, Xbox, EA, Ubisoft or Riot installed or started, "
+                "anything Windows lists as a game (wherever it is installed), plus anything running "
+                "exclusive fullscreen. Covers games Sunshine starts for Moonlight too.",
+    },
+    {
+        "name": "Steam games",
+        "exe": "steam.exe",
+        "mode": "games",
+        "detect": "either",
+        "hint": "Any game you start from Steam, from every Steam library. The Steam window itself "
+                "never counts.",
+    },
+    {
+        "name": "Epic, GOG and EA games",
+        "exe": "epicgameslauncher.exe,galaxyclient.exe,eadesktop.exe",
+        "mode": "games",
+        "detect": "either",
+        "hint": "Any game started from the Epic Games Launcher, GOG Galaxy or the EA app. The "
+                "launchers' own windows never count.",
     },
     {
         "name": "Web browsers",
