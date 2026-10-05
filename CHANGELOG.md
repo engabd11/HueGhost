@@ -2,6 +2,16 @@
 
 All notable changes to Hue Ghost. The newest release is first.
 
+- **2.11.2** - **Music syncs again after Windows renames its audio output.**
+  A GPU driver update, or moving a screen to another port, makes Windows
+  re-create that display's HDMI/DP audio under a new device id and leave the
+  old one behind as "not present" for good. Music from the TV pinned to the
+  old id then never started: Hue Ghost waited for it to come back, logged a
+  "ghost at" line twice a second and jiggled the mouse on every poll. Now,
+  when the chosen output is gone and exactly one active output carries its
+  name, the ghost and Hue Sync's music input both use that one (logged once),
+  and the Display page preselects it so a save fixes the setting. An output
+  that is only asleep is still woken, at most every 10 s.
 - **2.11.1** - **Steam and more games light up; each source chooses its own
   audio; the window fits any size.** A source bound to a game launcher
   (`steam.exe`, the Epic launcher, GOG Galaxy, the EA app, Ubisoft Connect,

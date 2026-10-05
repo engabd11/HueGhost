@@ -192,6 +192,7 @@ class Daemon:
         self._pause_stopped: str | None = None   # item stopped for sitting paused
         self._eof_item: str | None = None
         self._adev_warned: str | None = None
+        self._adev_woke = float("-inf")
         self._last_report_count = 0
         self._stalls_saved_mono = float("-inf")
         self._startup_latency = 1.0   # EMA of launch -> first time-pos
@@ -698,9 +699,6 @@ class Daemon:
         start = target + (0.0 if held else self._startup_latency)
         if runtime:
             start = min(start, max(0.0, runtime - 1.0))   # never start past the end
-        log.info("'%s' playing on %s -> ghost at %.1fs (offset %+.2fs, startup est %.2fs)",
-                 _asc(m.name), _asc(obs.report.device_label if obs.report else "?"), start,
-                 self.offset, self._startup_latency)
         if spec is None or not spec.audio_only:
             self._prepare_display()      # music has no picture: no display to wake
         else:
@@ -709,12 +707,19 @@ class Daemon:
                 # HDMI/DP audio lives on its display: asleep, the endpoint is
                 # gone, and mpv would die rc=2 opening the file. Wake the
                 # display (that brings the endpoint back) and retry next poll.
+                # The wake is input (a mouse jiggle): not on every poll.
                 if self._adev_warned != m.item_id:
                     self._adev_warned = m.item_id
                     log.warning("the ghost's audio output %s is not present - waking the "
-                                "display; launching when it is back", adev)
-                wake_display()
+                                "display; launching when it is back (if it never comes "
+                                "back, pick it again in Display > Ghost audio output)", adev)
+                if now - self._adev_woke >= 10.0:
+                    self._adev_woke = now
+                    wake_display()
                 return
+        log.info("'%s' playing on %s -> ghost at %.1fs (offset %+.2fs, startup est %.2fs)",
+                 _asc(m.name), _asc(obs.report.device_label if obs.report else "?"), start,
+                 self.offset, self._startup_latency)
         extra = {"audio_only": True, "audio_device": spec.audio_device} if spec.audio_only else {}
         self._ghost_audio_only = bool(spec.audio_only)
         try:

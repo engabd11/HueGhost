@@ -8,6 +8,7 @@ import os
 import re
 import shutil
 import sys
+import time
 from dataclasses import dataclass
 
 
@@ -416,6 +417,61 @@ def list_audio_outputs() -> list[AudioOutput]:
             eid = _RENDER_PREFIX + sub
             out.append(AudioOutput(id=eid, guid=sub, name=name or sub, default=(eid == default)))
     out.sort(key=lambda a: (not a.default, a.name.lower()))
+    return out
+
+
+def _endpoint_name(guid: str) -> str:
+    """Friendly name of a render endpoint in ANY state (an unplugged or
+    vanished one keeps its registry key), or "" when it is not there."""
+    if sys.platform != "win32":
+        return ""
+    import winreg
+
+    name = ""
+    try:
+        with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, _MMDEV_RENDER + "\\" + guid + "\\Properties") as pk:
+            for key in (_PKEY_NAME, _PKEY_DESC):
+                try:
+                    v, _ = winreg.QueryValueEx(pk, key)
+                    name = (name + " (" + v + ")") if name else v
+                except OSError:
+                    pass
+    except OSError:
+        return ""
+    return name
+
+
+_resolve_cache: dict[str, tuple[float, str]] = {}
+
+
+def resolve_audio_output(endpoint_id: str) -> str:
+    """The endpoint to use for ``endpoint_id`` right now.
+
+    Windows hands a display's HDMI/DP audio a NEW endpoint id when the GPU
+    driver is updated or the screen moves to another port; the old id stays
+    behind as "not present" for good. A pinned id would then never come back
+    and music would never sync. When the pinned endpoint is gone and exactly
+    one active endpoint carries its name, that one is it. Otherwise (present,
+    asleep with nothing to replace it, cannot tell) the id comes back as is.
+    Cached for a few seconds: the daemon asks on every poll."""
+    if not endpoint_id or endpoint_id == "auto" or sys.platform != "win32":
+        return endpoint_id
+    now = time.monotonic()
+    hit = _resolve_cache.get(endpoint_id)
+    if hit and now - hit[0] < 5.0:
+        return hit[1]
+    out = endpoint_id
+    try:
+        outputs = list_audio_outputs()
+        guid = "{" + endpoint_id.rsplit(".", 1)[-1].strip().strip("{}").lower() + "}"
+        if outputs and not any(o.guid.lower() == guid for o in outputs):
+            name = _endpoint_name(guid)
+            same = [o for o in outputs if name and o.name == name]
+            if len(same) == 1:
+                out = same[0].id
+    except Exception:
+        pass
+    _resolve_cache[endpoint_id] = (now, out)
     return out
 
 

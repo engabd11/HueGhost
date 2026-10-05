@@ -11,6 +11,7 @@ import logging
 
 from ..engines import AUTO, Plan
 from ..pcwatch import PcProbe
+from ..winutil import resolve_audio_output
 from . import Activity, Source
 
 log = logging.getLogger("hue-ghost.sources")
@@ -79,7 +80,7 @@ class PcSource(Source):
             monitor=monitor or None,
             # the PC's own output is what music mode should listen to here, and
             # it has to be able to undo an endpoint a Jellyfin-music session pinned
-            audio_device=(b.get("audio_device") or AUTO) if mode == "music" else None,
+            audio_device=resolve_audio_output(b.get("audio_device") or AUTO) if mode == "music" else None,
             use_audio=self.cfg.binding_use_audio(b),
             # the binding's own level, else the global one
             intensity=(b.get("intensity")

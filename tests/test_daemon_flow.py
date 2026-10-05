@@ -380,6 +380,7 @@ def test_missing_audio_output_blocks_launch_and_wakes_the_display(world, monkeyp
     assert ("wake",) in world.power.calls
     world.step(2.0, _music(31.0, world.t))
     assert world.ghost is None, "still no launch while the endpoint is gone"
+    assert world.power.calls.count(("wake",)) == 1, "the wake is a mouse jiggle: not every poll"
     monkeypatch.setattr(dm, "audio_endpoint_present", lambda endpoint: True)
     world.step(1.0, _music(32.0, world.t))
     assert world.ghost is not None and world.engine_on

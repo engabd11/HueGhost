@@ -1273,6 +1273,11 @@ class DisplayPage(Page):
             self.audio_out.addItem(a["name"] + ("   (your default - you WOULD hear this)" if a["default"] else ""),
                                    a["id"])
         idx = self.audio_out.findData(want)
+        if want and idx < 0:
+            # Windows re-created the endpoint under a new id (GPU driver update,
+            # another port): offer the new one, so a save fixes the setting
+            from ..winutil import resolve_audio_output
+            idx = self.audio_out.findData(resolve_audio_output(want))
         if want and idx < 0:                    # configured but not plugged in right now
             self.audio_out.addItem(want + "   (not available)", want)
             idx = self.audio_out.count() - 1
