@@ -400,8 +400,15 @@ class GhostPlayer:
         killing mpv for it stopped the sync and started it again, blinking the
         lights between songs. The daemon forces a seek to the new track's
         anchor once the new file's first position arrives. False when mpv has
-        gone - the caller falls back to a full relaunch."""
+        gone - the caller falls back to a full relaunch.
+
+        mpv keeps ``pause`` across ``loadfile`` and reports no change, so a
+        ghost paused with the client would load the next song paused while
+        ``self.paused`` (reset below) says it plays - no Resume is ever sent.
+        Unpause it with the new file; a client that is still paused gets its
+        Pause from the lockstep straight after."""
         ok = self.ipc.send("loadfile", url, "replace")
+        ok = self.ipc.send("set_property", "pause", False) and ok
         self._time_pos = None
         self._time_pos_mono = 0.0
         self.paused = False
