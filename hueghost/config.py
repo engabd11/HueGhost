@@ -71,6 +71,7 @@ DEFAULTS: dict[str, Any] = {
         # usually leaves the session open in the background rather than closing
         # it, so waiting for it to disappear means the lights never go out.
         "music_pause_stop_s": 15.0,  # ... but only this many SECONDS for music (0 = never)
+        "music_gap_s": 10.0,         # music: a client stopped this briefly between songs keeps the lights
         "stall_estimates": {},       # learned client buffering after seek/start/resume (auto-saved)
     },
     "ghost": {

@@ -2,7 +2,7 @@
 
 All notable changes to Hue Ghost. The newest release is first.
 
-- **2.11.2** - **Music syncs again after Windows renames its audio output; the wheel only scrolls.**
+- **2.11.2** - **Music syncs again after Windows renames its audio output, and keeps the lights on between songs; the wheel only scrolls.**
   A GPU driver update, or moving a screen to another port, makes Windows
   re-create that display's HDMI/DP audio under a new device id and leave the
   old one behind as "not present" for good. Music from the TV pinned to the
@@ -16,6 +16,12 @@ All notable changes to Hue Ghost. The newest release is first.
   drop-down, number box or slider used to change it (an area, an offset, the
   brightness). The wheel now always scrolls the page; click or use the
   keyboard to change a value.
+  **Music no longer stops and restarts the sync between songs.** A player
+  that closes its session for a moment between tracks (CAMusic does) made
+  Hue Ghost stop Hue Sync, at once when the song's ghost had just finished,
+  and start it again for the next song. The lights now keep running through
+  a gap of up to 10 s (**Music: gap between songs** on the Sync page,
+  `sync.music_gap_s`) and only go off if no song follows.
 - **2.11.1** - **Steam and more games light up; each source chooses its own
   audio; the window fits any size.** A source bound to a game launcher
   (`steam.exe`, the Epic launcher, GOG Galaxy, the EA app, Ubisoft Connect,

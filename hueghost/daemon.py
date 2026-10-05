@@ -193,6 +193,7 @@ class Daemon:
         self._eof_item: str | None = None
         self._adev_warned: str | None = None
         self._adev_woke = float("-inf")
+        self._music_gap = False        # a music ghost ran out: the engine waits for the next song
         self._last_report_count = 0
         self._stalls_saved_mono = float("-inf")
         self._startup_latency = 1.0   # EMA of launch -> first time-pos
@@ -575,6 +576,7 @@ class Daemon:
         picture is already on a screen Hue Sync captures. Just light it."""
         self._idle_since = None
         self._paused_since = None
+        self._music_gap = False        # an app has the lights now, not a song in between tracks
         if self._standby is not None:
             self._lights_on("%s is playing again" % (act.title or "the app"))
         if not self._engine_started:
@@ -592,7 +594,8 @@ class Daemon:
                 log.info("followed client %s", "stopped" if act.seen else "gone")
             idle = now - self._idle_since
             close_after = float(self.cfg.get("sync.idle_stop_delay_s", 10.0))
-            if self._standby != "stopped" and idle >= self.lights_off_delay:
+            off_after = self.music_gap if self._ghost_audio_only else self.lights_off_delay
+            if self._standby != "stopped" and idle >= off_after:
                 self._lights_off("stopped", now)
                 log.info("lights off - TV stopped %.1fs ago; ghost on standby for %.0fs in case it comes back",
                          idle, max(0.0, close_after - idle))
@@ -602,12 +605,14 @@ class Daemon:
             # a PC source stopped: there is no ghost to park, only lights to stop
             if self._idle_since is None:
                 self._idle_since = now
-                log.info("nothing playing on this PC any more")
-            if now - self._idle_since >= self.lights_off_delay:
+                log.info("music stopped (waiting %.0fs for the next song)" % self.music_gap
+                         if self._music_gap else "nothing playing on this PC any more")
+            if now - self._idle_since >= (self.music_gap if self._music_gap else self.lights_off_delay):
                 self.engine.stop()
                 self._engine_started = False
                 self._standby = None
                 self._idle_since = None
+                self._music_gap = False
                 self._plan_applied = None   # the next session re-asserts the binding's settings
                 self.state = IDLE
                 log.info("lights off")
@@ -617,6 +622,12 @@ class Daemon:
     @property
     def lights_off_delay(self) -> float:
         return max(0.0, float(self.cfg.get("sync.lights_off_delay_s", 1.5) or 0.0))
+
+    @property
+    def music_gap(self) -> float:
+        """How long music may stop between songs before the lights go off -
+        never shorter than the lights-off delay everything else gets."""
+        return max(self.lights_off_delay, float(self.cfg.get("sync.music_gap_s", 10.0) or 0.0))
 
     def _lights_off(self, reason: str, now: float) -> None:
         """Stop the light engine but keep the ghost alive (paused), so a client
@@ -722,6 +733,7 @@ class Daemon:
                  self.offset, self._startup_latency)
         extra = {"audio_only": True, "audio_device": spec.audio_device} if spec.audio_only else {}
         self._ghost_audio_only = bool(spec.audio_only)
+        self._music_gap = False
         try:
             self.ghost = GhostPlayer.launch(self.cfg, spec.url, spec.http_header, start,
                                             m.item_id, err_path=self._mpv_err, **extra)
@@ -780,16 +792,20 @@ class Daemon:
                 self.enabled = False
                 log.info("ghost closed by user -> sync disabled (hue-ghost on / tray to re-enable)")
             act = self.last_act
-            if self._ghost_audio_only and not g.user_quit and bool(getattr(act, "playing", False)):
+            if self._ghost_audio_only and not g.user_quit                     and (bool(getattr(act, "playing", False)) or reason == "eof"):
                 # Music: the lights ride on the audio endpoint, not on a
                 # picture, so there is nothing to stop for. Keep the engine
                 # through the gap; the next track relaunches the ghost without
                 # a stop/start blink, and if nothing follows the idle path
-                # stops the lights after their usual delay.
+                # stops the lights after the music gap allowance. A track that
+                # ran out counts even when the client already says "stopped":
+                # CAMusic closes its session between songs, often in the very
+                # poll the ghost reaches the end of the file.
                 self.state = SYNCING if self._engine_started else GHOSTING
                 self._paused_since = None
                 self._standby = None
                 self._idle_since = None
+                self._music_gap = True
                 return
             self.state = IDLE
             self.engine.stop()

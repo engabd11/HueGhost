@@ -523,6 +523,9 @@ class SyncPage(Page):
              "Music needs a much shorter limit than a film. A phone that stops a track often leaves the "
              "session open in the background instead of closing it, so without this the lights would stay "
              "on long after the music ended. 0 = never."),
+            ("sync.music_gap_s", "Music: gap between songs", 1.0, 30.0, 1.0, " s",
+             "Some players close the session for a moment between songs. The lights keep running through a "
+             "gap this long, so they do not switch off and on again at every track change."),
         ]
         for key, name, lo, hi, step, suffix, tip in stop_specs:
             sp = self._spin(lo, hi, step, suffix)

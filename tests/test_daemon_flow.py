@@ -337,6 +337,40 @@ def test_music_eof_between_tracks_keeps_the_engine(world):
     assert len(world.launched) == 2 and world.engine_on
 
 
+@pytest.mark.parametrize("ghost_ends", [True, False])
+def test_music_client_stopped_between_tracks_keeps_the_engine(world, ghost_ends):
+    """CAMusic closes the session for a moment between songs (no item at all),
+    often in the same poll as the ghost reaching the end of its file. Either
+    one used to stop the sync - at once (eof) or after 1.5 s (standby) - and
+    the next song started it again: the lights blinked off and on."""
+    world.d.cfg.set("ghost.audio_device", "{0.0.0.00000000}.{silent}")
+    world.step(1.0, _music(30.0, 0.5, item="track1"))
+    g = world.ghost
+    if ghost_ends:
+        g.end_reason = "eof"
+        g._alive = False
+    world.step(8.0, stopped())                # CAMusic can take a while to start the next song
+    assert world.engine_on, "a gap between songs is not the end of the music"
+    assert world.d._standby is None
+    world.step(1.0, _music(1.0, world.t, item="track2"))
+    assert world.ghost is not None and world.ghost.item_id == "track2"
+    assert world.engine_on and world.d.state == SYNCING
+    assert len(world.launched) == (2 if ghost_ends else 1), "a live ghost is swapped, not relaunched"
+
+
+@pytest.mark.parametrize("ghost_ends", [True, False])
+def test_music_that_really_stops_still_turns_the_lights_off(world, ghost_ends):
+    world.d.cfg.set("ghost.audio_device", "{0.0.0.00000000}.{silent}")
+    world.step(1.0, _music(30.0, 0.5, item="track1"))
+    if ghost_ends:
+        world.ghost.end_reason = "eof"
+        world.ghost._alive = False
+    world.step(11.0, stopped())
+    assert not world.engine_on, "past the gap allowance the lights go off"
+    world.step(10.0)
+    assert world.ghost is None and world.d.state == IDLE
+
+
 def test_finished_track_does_not_launch_a_ghost(world):
     """A phone that finished a song sits at its last position; launching a
     ghost there sent mpv past the end of the file, where it died rc=2 in a
