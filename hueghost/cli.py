@@ -16,7 +16,7 @@ from . import __author__, __version__
 from .config import Config, INTENSITIES, MODES, app_data_dir, log_path, resolve_config_path
 from .jellyfin import JellyfinClient, JellyfinError, label_sessions, session_label
 from .winutil import (autostart_installed, find_mpv, hue_sync_info, install_autostart,
-                      list_displays, tray_command, uninstall_autostart)
+                      list_displays, pick_ghost_display, tray_command, uninstall_autostart)
 
 log = logging.getLogger("hue-ghost")
 
@@ -291,12 +291,11 @@ def cmd_doctor(args) -> int:
     # displays
     disps = list_displays()
     if disps:
-        want = cfg.get("ghost.screen_name") or ""
-        idx = cfg.get("ghost.screen_index")
+        ghost, auto = pick_ghost_display(cfg.get("ghost.screen_name") or "", cfg.get("ghost.screen_index"), disps)
         for d in disps:
             mark = ""
-            if (want and d.name == want) or (idx is not None and idx != "" and int(idx) == d.index):
-                mark = "  <- ghost"
+            if ghost is not None and d.name == ghost.name:
+                mark = "  <- ghost (chosen automatically)" if auto else "  <- ghost"
             print("         display %d: %s%s" % (d.index, d.label(), mark))
         if want and not any(d.name == want for d in disps):
             row("FAIL", "ghost display", "%s not present" % want)

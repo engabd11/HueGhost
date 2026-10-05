@@ -1291,8 +1291,14 @@ class DisplayPage(Page):
             "Music from the TV will be shown on Home but will not drive the lights.")
 
     def _load_displays(self) -> None:
-        want = (self.ctx.daemon.cfg.get("ghost.screen_name") or "").lower()
+        cfg = self.ctx.daemon.cfg
         res = self.ctx.api.handle("GET", "/api/displays", {}, {})
+        # the one the ghost will really use - the picked display, or the one
+        # chosen when that is gone - so a save never stores "no display"
+        from ..winutil import list_displays, pick_ghost_display
+        ghost, _ = pick_ghost_display(cfg.get("ghost.screen_name") or "", cfg.get("ghost.screen_index"),
+                                      list_displays())
+        want = (ghost.name if ghost is not None else cfg.get("ghost.screen_name") or "").lower()
         self.displays.clear()
         for d in res["displays"]:
             txt = "%s   %dx%d%s" % (d["name"], d["width"], d["height"], "   (primary - your real screen)" if d["primary"] else "")

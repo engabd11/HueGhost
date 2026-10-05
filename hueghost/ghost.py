@@ -186,13 +186,14 @@ def resolve_screen(screen_name: str, screen_index) -> int | None:
     winutil.list_displays() reports - so the name is resolved at launch time and
     survives displays being added/removed.
     """
-    if screen_name and sys.platform == "win32":
-        from .winutil import list_displays
-        for d in list_displays():
-            if d.name.lower() == screen_name.lower():
-                return d.index
-        log.warning("display %s not present; falling back to %s", screen_name,
-                    "index %s" % screen_index if screen_index not in (None, "") else "current display")
+    if sys.platform == "win32":
+        from .winutil import list_displays, pick_ghost_display
+        d, auto = pick_ghost_display(screen_name, screen_index, list_displays())
+        if auto:
+            log.warning("ghost display %s -> playing on %s (not the primary display; pick one on "
+                        "the Display page to choose)", ("%s not present" % screen_name) if screen_name
+                        else "not set", d.name if d is not None else "the only display")
+        return d.index if d is not None else None
     if screen_index is not None and str(screen_index) != "":
         return int(screen_index)
     return None

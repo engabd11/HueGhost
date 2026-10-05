@@ -161,12 +161,8 @@ def _ghost_monitor(cfg) -> str:
     """The display the ghost plays on, as the Hue Sync app names it."""
     from ..winutil import list_displays
 
-    name = cfg.get("ghost.screen_name", "")
-    idx = cfg.get("ghost.screen_index", None)
-    displays = list_displays()
-    for d in displays:
-        if name and d.name == name:
-            return d.monitor_id
-    if idx is not None and 0 <= int(idx) < len(displays):
-        return displays[int(idx)].monitor_id
-    return ""
+    from ..winutil import pick_ghost_display
+
+    d, _ = pick_ghost_display(cfg.get("ghost.screen_name", ""), cfg.get("ghost.screen_index", None),
+                              list_displays())
+    return d.monitor_id if d is not None else ""
