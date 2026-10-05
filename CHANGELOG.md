@@ -27,6 +27,13 @@ All notable changes to Hue Ghost. The newest release is first.
   Hue Sync restarted in its music area for a song nobody was playing, then
   switched off again. A paused source now waits until it plays; the TV's
   lights go off as for any stop.
+  **The ghost finds its display by itself.** Windows renumbers displays (the
+  virtual one went from DISPLAY6 to DISPLAY5 after a driver update), and the
+  Display page then saved "no display", so a film from the TV played over
+  the PC's main screen until a display was picked again. When the chosen
+  display is missing or none is set, the ghost and Hue Sync's capture
+  display now use a display that is not the primary one, the virtual
+  display first, and the Display page shows that choice.
 - **2.11.1** - **Steam and more games light up; each source chooses its own
   audio; the window fits any size.** A source bound to a game launcher
   (`steam.exe`, the Epic launcher, GOG Galaxy, the EA app, Ubisoft Connect,

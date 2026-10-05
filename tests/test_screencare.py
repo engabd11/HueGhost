@@ -174,20 +174,27 @@ def test_the_display_hue_sync_captures_is_spared_too():
     assert r.covered_screens() == [1]
 
 
-def test_an_unknown_ghost_display_covers_nothing():
-    """With no ghost display set, mpv picks one itself - covering any display
-    could be covering the one the lights come from."""
+def test_an_unset_or_missing_ghost_display_resolves_to_the_virtual_one():
+    """Nothing picked, or the picked display gone (Windows renumbers them):
+    the ghost goes to a display that is not the primary - the virtual one
+    first - and screen care spares exactly that one."""
     r = Rig(blackout_idle_min=1)
     r.cfg.set("ghost.screen_name", "")
     r.idle = 2 * MIN
     r.care.tick(0.0, Ghost())
-    assert r.launched == []
+    assert r.covered_screens() == [0, 1]
+    assert sc.ghost_display(r.cfg, [MAIN, SIDE, GHOST]) is GHOST
     r.cfg.set("ghost.screen_name", r"\\.\DISPLAY9")     # set, but not plugged in
-    r.idle = 0.0
-    r.care.tick(1.0, Ghost())
-    r.idle = 2 * MIN
-    r.care.tick(2.0, Ghost())
-    assert r.launched == []
+    assert sc.ghost_display(r.cfg, [MAIN, SIDE, GHOST]) is GHOST
+
+
+def test_without_a_virtual_display_any_non_primary_one_is_used():
+    r = Rig(blackout_idle_min=1)
+    r.cfg.set("ghost.screen_name", "")
+    assert sc.ghost_display(r.cfg, [MAIN, SIDE]) is SIDE
+    assert sc.ghost_display(r.cfg, [MAIN]) is None, "the primary alone: nothing better to pick"
+    r.cfg.set("ghost.screen_name", MAIN.name)            # picked on purpose: honoured
+    assert sc.ghost_display(r.cfg, [MAIN, SIDE, GHOST]) is MAIN
 
 
 def test_the_ghost_display_can_be_chosen_by_index():

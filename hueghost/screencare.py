@@ -25,7 +25,7 @@ import subprocess
 import sys
 from typing import Callable
 
-from .winutil import Display, idle_seconds, kill_on_exit, list_displays
+from .winutil import Display, idle_seconds, kill_on_exit, list_displays, pick_ghost_display
 
 log = logging.getLogger("hue-ghost.screen")
 INPUT_CONF = os.path.join(os.path.dirname(os.path.abspath(__file__)), "cover_input.conf")
@@ -47,18 +47,11 @@ def orbit_offset(step: int) -> tuple[float, float]:
 
 
 def ghost_display(cfg, displays: list[Display]) -> Display | None:
-    """The display the ghost plays on, resolved the way ``ghost.resolve_screen``
-    resolves it for mpv: by name, else by index. None when neither is set -
-    mpv then picks a display itself, and nobody knows which."""
-    name = str(cfg.get("ghost.screen_name") or "").lower()
-    if name:
-        hit = next((d for d in displays if d.name.lower() == name), None)
-        if hit is not None:
-            return hit
-    idx = cfg.get("ghost.screen_index")
-    if idx is not None and str(idx) != "":
-        return next((d for d in displays if d.index == int(idx)), None)
-    return None
+    """The display the ghost plays on - the one ``ghost.resolve_screen`` hands
+    mpv (``winutil.pick_ghost_display``). None only when the primary display
+    is the only one."""
+    return pick_ghost_display(str(cfg.get("ghost.screen_name") or ""), cfg.get("ghost.screen_index"),
+                              displays)[0]
 
 
 def cover_args(cfg, index: int) -> list[str]:
