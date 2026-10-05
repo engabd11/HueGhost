@@ -806,3 +806,41 @@ def test_a_tv_left_paused_hands_the_lights_to_a_phone_that_plays(world):
     assert d.last_obs.report.device_id == "s23"
     assert world.ghost is not None and world.ghost.item_id == "solarmax"
     assert world.engine_on
+
+
+def test_a_paused_music_player_does_not_light_up_when_the_tv_stops(world):
+    """Live 2026-10-06: The Wire playing on the Apple TV, CAMusic linux paused
+    the whole time. The TV stopped, the paused player became the top source,
+    and Hue Ghost launched a ghost for its paused song and restarted Hue Sync
+    in the music area - only for the music pause limit to stop it all again.
+    A paused source must wait until it plays."""
+    d = world.d
+    d.cfg.set("ghost.audio_device", "{0.0.0.00000000}.{silent}")
+    tv = lambda: session(200.0 + world.t, False, LOCAL0 + world.t)
+    tv_id = tv()["DeviceId"]
+    d.cfg.set("jellyfin.players", [
+        {"device_id": tv_id, "device_name_contains": "", "area_id": "", "area_name": "",
+         "kinds": ["video", "music"]},
+        {"device_id": "camusic", "device_name_contains": "", "area_id": "", "area_name": "",
+         "kinds": ["video", "music"]},
+    ])
+    d._rebuild_sources()
+    d.jf.stream_url = lambda item_id, msid=None, **kw: "http://jf/stream/" + item_id
+    d.jf.auth_header_for_mpv = lambda: "Authorization: x"
+
+    def music(paused):
+        s = _music(64.0 + (0.0 if paused else world.t), world.t, paused=paused, item="nightmoves")[0]
+        s["DeviceId"], s["DeviceName"], s["Client"] = "camusic", "Camusic linux", "CAMusic"
+        return s
+
+    world.step(2.0, [tv(), music(True)])
+    tv_ghost = world.ghost
+    assert tv_ghost is not None and tv_ghost.item_id != "nightmoves" and world.engine_on
+    world.step(1.0, [music(True)])                       # the TV stops; the music stays paused
+    assert len(world.launched) == 1, "no ghost for a paused song"
+    world.step(2.0, [music(True)])
+    assert not world.engine_on, "the TV's lights go off as for any stop"
+    world.step(10.0, [music(True)])
+    assert world.ghost is None and not world.engine_on and len(world.launched) == 1
+    world.step(1.0, [music(False)])                      # it plays: now it lights up
+    assert world.ghost is not None and world.ghost.item_id == "nightmoves" and world.engine_on

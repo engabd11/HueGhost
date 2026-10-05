@@ -433,10 +433,34 @@ class Daemon:
             self._last_report_count = obs.model.reports
         self._persist_stalls(now)
 
-        if act.playing and self.enabled:
+        if act.playing and self.enabled and not self._waits_for_play(act):
             self._playing(now, act)
         else:
             self._idle(now, act)
+
+    def _waits_for_play(self, act) -> bool:
+        """A paused source never STARTS the lights - only one that plays does.
+
+        A paused item with no ghost of its own (Hue Ghost starting up beside a
+        phone left on a paused song, or a paused player becoming the top
+        source when the one above it stops) is treated like nothing playing:
+        whatever was lit stops as it would for any stop, and the source lights
+        up the moment it plays. One that pauses while its ghost runs is not
+        affected: that is a pause, with its own limits."""
+        if not act.needs_ghost or act.obs is None or act.obs.model is None:
+            return False
+        m = act.obs.model
+        if not m.paused:
+            return False
+        if self.ghost is not None and self.ghost.item_id == m.item_id:
+            return False
+        if self._pause_stopped != m.item_id:
+            # also the latch _maybe_launch honours, and _playing clears on play
+            self._pause_stopped = m.item_id
+            obs = act.obs
+            log.info("'%s' is paused on %s - the lights wait for it to play", _asc(m.name),
+                     _asc(obs.report.device_label if obs.report else "the client"))
+        return True
 
     def _playing(self, now: float, act) -> None:
         """Something is playing. What that costs us depends on where it is: a
@@ -460,14 +484,6 @@ class Daemon:
             self._paused_since = None
         if self._pause_stopped is not None and (self._pause_stopped != m.item_id or not m.paused):
             self._pause_stopped = None      # it plays again, or moved on: stop latching
-        if act.event == "new_item" and m.paused and self.ghost is None and self._pause_stopped != m.item_id:
-            # Found already paused - typically Hue Ghost starting up while a
-            # phone sits on a paused song. Nothing is playing, so nothing lights
-            # up: it used to launch, start the sync, and switch it all off again
-            # when the pause timeout ran out. Wait for it to play instead.
-            log.info("'%s' is paused on %s - the lights wait for it to play", _asc(m.name),
-                     (obs.report.device_label if obs.report else "the client"))
-            self._pause_stopped = m.item_id
         if act.event == "new_item" and obs.stale:
             log.warning("first report for '%s' is stale (>30 s old); position may be off", _asc(m.name))
         if self.ghost is not None and self.ghost.item_id != m.item_id:
