@@ -66,3 +66,22 @@ def test_a_request_gives_up_at_once_instead_of_waiting_out_its_timeout(exc):
     ipc = ipc_with(DeadPipe(exc))
     assert ipc.request("get_property", "time-pos", timeout=30.0) is None
     assert not ipc._pending, "the pending slot must not leak"
+
+
+def test_a_track_swapped_into_a_paused_ghost_plays():
+    """Live 2026-10-06: CAMusic paused (the ghost paused with it), then the
+    next song started. The swap reset the ghost's own 'paused' to False, but
+    mpv keeps pause=yes across loadfile and reports no change - so the
+    daemon thought it played, never sent Resume, and seeked a frozen ghost
+    3 s forward every 3 s for whole songs while the lights sat still."""
+    from hueghost.ghost import GhostPlayer
+    from hueghost.lockstep import Pause
+
+    fh = LivePipe()
+    g = GhostPlayer(proc=None, ipc=ipc_with(fh), item_id="track1")
+    g.apply([Pause()], 0.0)
+    fh.written = b""
+    assert g.swap("http://jf/Audio/track2/stream") is True
+    sent = [json.loads(line)["command"] for line in fh.written.splitlines()]
+    assert ["set_property", "pause", False] in sent, sent
+    assert g.paused is False, "what the ghost believes now matches what mpv does"

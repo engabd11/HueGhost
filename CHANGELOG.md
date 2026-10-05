@@ -34,6 +34,11 @@ All notable changes to Hue Ghost. The newest release is first.
   display is missing or none is set, the ghost and Hue Sync's capture
   display now use a display that is not the primary one, the virtual
   display first, and the Display page shows that choice.
+  **The next song after a pause plays in step.** Pausing music and then
+  starting another song left the hidden player paused on the new song while
+  Hue Ghost believed it was playing: it fell 3 s behind every 3 s, the lights
+  stopped reacting, and only switching sync off and on fixed it. The new song
+  now starts playing with the swap.
 - **2.11.1** - **Steam and more games light up; each source chooses its own
   audio; the window fits any size.** A source bound to a game launcher
   (`steam.exe`, the Epic launcher, GOG Galaxy, the EA app, Ubisoft Connect,
