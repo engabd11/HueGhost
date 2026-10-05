@@ -11,6 +11,7 @@ import logging
 from ..engines import Plan
 from ..jellyfin import JellyfinClient, JellyfinError
 from ..watcher import PlayerSet, SessionWatcher
+from ..winutil import resolve_audio_output
 from . import Activity, GhostSpec, Source
 
 log = logging.getLogger("hue-ghost.sources")
@@ -102,7 +103,7 @@ class JellyfinSource(Source):
         monitor = None if mode == "music" else (_ghost_monitor(self.cfg) or None)
         adev = None
         if mode == "music":
-            adev = b.get("audio_device") or self.cfg.get("ghost.audio_device") or None
+            adev = _audio_output(b.get("audio_device") or self.cfg.get("ghost.audio_device") or "") or None
         return Plan(area_id=b.get("area_id") or None, mode=mode, monitor=monitor,
                     audio_device=adev,
                     use_audio=self.cfg.binding_use_audio(b),
@@ -116,7 +117,7 @@ class JellyfinSource(Source):
         if kind == "music":
             url = self.client.stream_url(m.item_id, m.media_source_id, kind="music")
             b = next((x for x in self._bindings if x.get("audio_device")), None)
-            dev = (b or {}).get("audio_device") or self.cfg.get("ghost.audio_device", "")
+            dev = _audio_output((b or {}).get("audio_device") or self.cfg.get("ghost.audio_device", ""))
         else:
             url = self.client.stream_url(m.item_id, m.media_source_id)
         return GhostSpec(url=url, http_header=self.client.auth_header_for_mpv(), item_id=m.item_id,
@@ -124,6 +125,20 @@ class JellyfinSource(Source):
 
     def close(self) -> None:
         pass
+
+
+_moved: set[tuple[str, str]] = set()
+
+
+def _audio_output(endpoint: str) -> str:
+    """The pinned music output, or the endpoint Windows moved it to (a GPU
+    driver update re-creates a display's HDMI/DP audio under a new id). The
+    ghost and Hue Sync must agree on it, so both go through here."""
+    now = resolve_audio_output(endpoint) if endpoint else endpoint
+    if now != endpoint and (endpoint, now) not in _moved:
+        _moved.add((endpoint, now))
+        log.warning("music output %s is gone; Windows re-created it as %s - using that", endpoint, now)
+    return now
 
 
 def _binding_of(obs, bindings: list[dict]) -> dict | None:

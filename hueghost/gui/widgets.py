@@ -6,15 +6,42 @@ from __future__ import annotations
 from collections import deque
 from typing import Callable
 
-from PySide6.QtCore import (Property, QEasingCurve, QObject, QPoint, QPropertyAnimation, QRect, QRectF,
+from PySide6.QtCore import (Property, QEasingCurve, QEvent, QObject, QPoint, QPropertyAnimation, QRect, QRectF,
                             QRunnable, QSize, QTimer, Qt, QThreadPool, Signal, Slot)
 from PySide6.QtGui import (QColor, QFont, QFontDatabase, QLinearGradient, QPainter, QPainterPath, QPen,
                            QPixmap)
-from PySide6.QtWidgets import (QAbstractButton, QButtonGroup, QComboBox, QFrame, QGridLayout, QHBoxLayout, QLabel,
+from PySide6.QtWidgets import (QAbstractButton, QAbstractScrollArea, QAbstractSlider, QAbstractSpinBox,
+                               QApplication, QButtonGroup, QComboBox, QFrame, QGridLayout, QHBoxLayout, QLabel,
                                QLayout,
-                               QPushButton, QSizePolicy, QVBoxLayout, QWidget)
+                               QPushButton, QScrollBar, QSizePolicy, QVBoxLayout, QWidget)
 
 from . import theme
+
+
+# -- wheel ---------------------------------------------------------------------------------
+class WheelScrollsPage(QObject):
+    """Qt lets the mouse wheel change a combo box, spin box or slider the
+    pointer happens to pass over - scrolling down a page then quietly rewrites
+    settings (an area, an offset, the brightness). Installed on the
+    application, this sends those wheel turns to the page around the control
+    instead, so the wheel only ever scrolls. Clicks and the keyboard still
+    change values as before."""
+
+    def eventFilter(self, obj, ev) -> bool:
+        if ev.type() != QEvent.Wheel or isinstance(obj, QScrollBar)                 or not isinstance(obj, (QComboBox, QAbstractSpinBox, QAbstractSlider)):
+            return False
+        page = obj.parentWidget()
+        while page is not None and not isinstance(page, QAbstractScrollArea):
+            page = page.parentWidget()
+        if page is not None:
+            QApplication.sendEvent(page.viewport(), ev)
+        return True
+
+
+def install_wheel_guard(app) -> WheelScrollsPage:
+    guard = WheelScrollsPage(app)
+    app.installEventFilter(guard)
+    return guard
 
 
 # -- background work ---------------------------------------------------------------------

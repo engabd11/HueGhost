@@ -20,7 +20,8 @@ from ..daemon import IDLE, Daemon
 from ..webapi import WebApi
 from . import theme
 from .pages import PAGES, Context
-from .widgets import StatusPill, ToggleSwitch, icon, icon_css, icon_family, run_async, set_pill
+from .widgets import (StatusPill, ToggleSwitch, icon, icon_css, icon_family, install_wheel_guard, run_async,
+                      set_pill)
 
 log = logging.getLogger("hue-ghost.gui")
 
@@ -451,6 +452,7 @@ def run_gui(cfg: Config, minimized: bool = False, instance=None) -> int:
     app.setQuitOnLastWindowClosed(False)
     app.setStyleSheet(theme.QSS)
     app.setWindowIcon(ghost_icon(None))
+    install_wheel_guard(app)       # the wheel scrolls pages; it never changes a setting
 
     daemon = Daemon(cfg)
     t = threading.Thread(target=daemon.run, name="hue-ghost-daemon", daemon=True)

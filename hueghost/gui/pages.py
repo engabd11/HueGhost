@@ -523,6 +523,9 @@ class SyncPage(Page):
              "Music needs a much shorter limit than a film. A phone that stops a track often leaves the "
              "session open in the background instead of closing it, so without this the lights would stay "
              "on long after the music ended. 0 = never."),
+            ("sync.music_gap_s", "Music: gap between songs", 1.0, 30.0, 1.0, " s",
+             "Some players close the session for a moment between songs. The lights keep running through a "
+             "gap this long, so they do not switch off and on again at every track change."),
         ]
         for key, name, lo, hi, step, suffix, tip in stop_specs:
             sp = self._spin(lo, hi, step, suffix)
@@ -1273,6 +1276,11 @@ class DisplayPage(Page):
             self.audio_out.addItem(a["name"] + ("   (your default - you WOULD hear this)" if a["default"] else ""),
                                    a["id"])
         idx = self.audio_out.findData(want)
+        if want and idx < 0:
+            # Windows re-created the endpoint under a new id (GPU driver update,
+            # another port): offer the new one, so a save fixes the setting
+            from ..winutil import resolve_audio_output
+            idx = self.audio_out.findData(resolve_audio_output(want))
         if want and idx < 0:                    # configured but not plugged in right now
             self.audio_out.addItem(want + "   (not available)", want)
             idx = self.audio_out.count() - 1

@@ -73,6 +73,54 @@ def test_music_asks_for_music_mode_and_pins_the_output_it_plays_into():
     assert "/Audio/track1/stream" in a.ghost.url
 
 
+MOVED = "{0.0.0.00000000}.{8f48dd79-cd09-4920-9ed0-08933c3fa47a}"
+
+
+def test_an_output_windows_recreated_under_a_new_id_is_followed(monkeypatch):
+    """A GPU driver update re-creates a display's HDMI/DP audio under a new
+    endpoint id and leaves the old one "not present" for good. Waiting for the
+    old id meant music never synced again; the ghost AND Hue Sync must both
+    move to the new one."""
+    from hueghost.sources import jellyfin as jsrc
+
+    monkeypatch.setattr(jsrc, "resolve_audio_output", lambda e: MOVED if e == CABLE else e)
+    cfg = cfg_for_music(ghost={"audio_device": CABLE})
+    src = build_sources(cfg).sources[0]
+    w = SessionWatcher(PlayerSet.from_players(src.bindings()))
+    a = src.activity(w.observe([music_session()], LOCAL0 + 5, LOCAL0 + 5, MONO0 + 5))
+    assert a.plan.audio_device == MOVED and a.ghost.audio_device == MOVED
+
+
+def _outputs(monkeypatch, active, names):
+    from hueghost import winutil
+    from hueghost.winutil import AudioOutput
+
+    monkeypatch.setattr(winutil.sys, "platform", "win32")
+    monkeypatch.setattr(winutil, "list_audio_outputs",
+                        lambda: [AudioOutput(id="{0.0.0.00000000}." + g, guid=g, name=n, default=False)
+                                 for g, n in active])
+    monkeypatch.setattr(winutil, "_endpoint_name", lambda g: names.get(g.lower(), ""))
+    winutil._resolve_cache.clear()
+    return winutil.resolve_audio_output
+
+
+def test_resolver_swaps_only_a_missing_endpoint_with_one_namesake(monkeypatch):
+    old, new = "{f06b61ae-8af6-4b4e-94f9-f59d03355224}", "{8f48dd79-cd09-4920-9ed0-08933c3fa47a}"
+    r = _outputs(monkeypatch, [(new, "AW3423DWF (NVIDIA High Definition Audio)")],
+                 {old: "AW3423DWF (NVIDIA High Definition Audio)"})
+    assert r(CABLE) == MOVED
+    assert r(MOVED) == MOVED, "a present endpoint stays"
+    assert r("auto") == "auto" and r("") == ""
+
+
+def test_resolver_leaves_it_alone_when_nothing_or_two_things_match(monkeypatch):
+    old = "{f06b61ae-8af6-4b4e-94f9-f59d03355224}"
+    r = _outputs(monkeypatch, [("{a}", "Speakers"), ("{b}", "Speakers")], {old: "Speakers"})
+    assert r(CABLE) == CABLE, "ambiguous: do not guess (it could be one you hear)"
+    r = _outputs(monkeypatch, [("{a}", "Speakers")], {old: "AW3423DWF"})
+    assert r(CABLE) == CABLE, "asleep, no namesake: keep waiting for it"
+
+
 def test_without_a_silent_output_music_is_shown_but_not_synced():
     # playing it anywhere else means playing it out loud, so it is not played
     cfg = cfg_for_music()
