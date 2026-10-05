@@ -30,6 +30,33 @@ class Display:
                                              "  [primary]" if self.primary else "")
 
 
+VIRTUAL_DISPLAY_IDS = ("MTT1337",)   # Virtual Display Driver (what the installer adds)
+
+
+def pick_ghost_display(name: str, index, displays: list[Display]) -> tuple[Display | None, bool]:
+    """The display the ghost plays on, and whether it was chosen automatically.
+
+    The display picked on the Display page, by name; an index only when no
+    name is set (a hand-written config). Otherwise - nothing picked, or the
+    picked one gone (Windows renumbers displays: the virtual one went from
+    DISPLAY6 to DISPLAY5 after a driver update) - a display that is NOT the
+    primary one, the virtual display first: a film from the TV must never
+    play over the PC's real screen. None when the primary is all there is
+    (mpv then uses it; there is nothing better)."""
+    name = (name or "").lower()
+    if name:
+        hit = next((d for d in displays if d.name.lower() == name), None)
+        if hit is not None:
+            return hit, False
+    elif index is not None and str(index) != "":
+        hit = next((d for d in displays if d.index == int(index)), None)
+        if hit is not None:
+            return hit, False
+    spare = [d for d in displays if not d.primary]
+    spare.sort(key=lambda d: (not any(v in d.monitor_id.upper() for v in VIRTUAL_DISPLAY_IDS), d.index))
+    return (spare[0] if spare else None), True
+
+
 def list_displays() -> list[Display]:
     if sys.platform != "win32":
         return []
