@@ -22,6 +22,11 @@ All notable changes to Hue Ghost. The newest release is first.
   and start it again for the next song. The lights now keep running through
   a gap of up to 10 s (**Music: gap between songs** on the Sync page,
   `sync.music_gap_s`) and only go off if no song follows.
+  **A paused player never starts the lights.** With the Apple TV playing and
+  CAMusic paused, stopping the TV handed the lights to the paused player:
+  Hue Sync restarted in its music area for a song nobody was playing, then
+  switched off again. A paused source now waits until it plays; the TV's
+  lights go off as for any stop.
 - **2.11.1** - **Steam and more games light up; each source chooses its own
   audio; the window fits any size.** A source bound to a game launcher
   (`steam.exe`, the Epic launcher, GOG Galaxy, the EA app, Ubisoft Connect,
