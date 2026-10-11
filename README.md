@@ -1,5 +1,8 @@
 # Hue Ghost
 
+[![Latest release](https://img.shields.io/github/v/release/engabd11/HueGhost?logo=github)](https://github.com/engabd11/HueGhost/releases/latest)
+[![Downloads](https://img.shields.io/github/downloads/engabd11/HueGhost/total?logo=github&color=brightgreen)](https://github.com/engabd11/HueGhost/releases)
+
 **Philips Hue light sync for Jellyfin, PC apps and games.**
 
 Press play on any Jellyfin client (Apple TV, Android TV, a phone and more), or start a game or video on your PC, and the Hue lights in the room follow the picture. Hue Ghost does it with the free Hue Sync desktop app, and your TV keeps playing its own stream, so 4K, HDR and Dolby Vision work as usual.
