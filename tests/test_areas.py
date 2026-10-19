@@ -346,6 +346,27 @@ def test_engine_stops_its_own_sync_before_switching_and_leaves_manual_syncs_alon
         app.close()
 
 
+def test_a_sync_already_running_when_we_want_the_lights_is_ours_to_stop():
+    """Live 2026-10-19: a Hue Ghost that was killed left Hue Sync syncing; the
+    next one drove that session for its music but, never having sent the
+    start_sync, never stopped it - the area stayed lit after the music ended."""
+    app = MockHueSync()
+    eng = SwitchableEngine(app, area="area-office")
+    try:
+        assert wait(lambda: eng.state().connected)
+        app.state = "syncing"                  # left running by someone else
+        app.broadcast_state()
+        assert wait(lambda: eng.state().syncing)
+        eng.start()                            # a source of ours wants the lights
+        time.sleep(0.8)
+        assert "start_sync" not in app.commands(), "a running session is reused"
+        eng.stop()
+        assert wait(lambda: "stop_sync" in app.commands() and not eng.state().syncing, 5.0)
+    finally:
+        eng.close()
+        app.close()
+
+
 def test_apply_config_rebuilds_watcher_even_if_live_config_was_mutated_first(tmp_path):
     from hueghost.daemon import Daemon
     cfg = Config({"jellyfin": {"url": "http://127.0.0.1:1", "api_key": "k", "follow": {"device_id": "old"}},

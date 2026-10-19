@@ -2,6 +2,13 @@
 
 All notable changes to Hue Ghost. The newest release is first.
 
+- **2.11.4** - **The lights go off when the music stops, even when Hue Sync was
+  already syncing.** If Hue Sync was already syncing when a source wanted the
+  lights (left running by a Hue Ghost that was closed by force, or started in
+  the app), Hue Ghost used that session but never treated it as its own: when
+  the music ended or sat paused, it decided to stop on time and then left Hue
+  Sync running, holding the area. It now takes that session over, so the
+  sync stops after your **Music: gap between songs** or pause limit as usual.
 - **2.11.3** - **Music lets the screens sleep and keeps syncing while they do;
   no break between songs; the window stays on the main display.**
   **Music no longer keeps the monitor awake.** Music needs no screen, but in
