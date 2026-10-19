@@ -76,6 +76,7 @@ DEFAULTS: dict[str, Any] = {
         # Music (an audio-only ghost) - see watcher.ReportProfile. Nothing here
         # needs tuning: profiles and latencies are learned and saved as they go.
         "music_offset_s": None,      # None = offset_s; Hue Sync's own music latency, if it ever needs one
+        "pin": "",                   # a binding id picked to sync now: it wins whenever it plays ("" = list order)
         "music_seek_s": 0.04,        # music corrects by exact seeks beyond this drift, never by tempo
         "player_profiles": {},       # learned per player: how its reports err (auto-saved)
         "swap_latency_s": 0.5,       # learned: next song loadfile until it plays (auto-saved)

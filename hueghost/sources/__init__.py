@@ -94,9 +94,10 @@ class SourceSet:
     that is merely present (a connected client, a running app) only matters
     when nothing is playing, so the UI can say "seen, idle"."""
 
-    def __init__(self, sources: list[Source], hold_s: float = 20.0):
+    def __init__(self, sources: list[Source], hold_s: float = 20.0, pin: str = ""):
         self.sources = sources
         self.hold_s = float(hold_s)
+        self.pin = pin or ""               # binding picked to sync now: wins whenever it plays
         self._held: str | None = None      # binding id currently driving the lights
         self._held_since = 0.0
 
@@ -133,7 +134,8 @@ class SourceSet:
         # Switching binding restarts the Hue Sync app (a different area or
         # capture display), so a TV and a game alternating must not do it every
         # few seconds: the one that got there first keeps it for a while.
-        if self._held and self._held != _bid(win) and now - self._held_since < self.hold_s:
+        # (a source picked to sync now does not wait for the anti-flap hold)
+        if self._held and self._held != _bid(win) and now - self._held_since < self.hold_s                 and _bid(win) != self.pin:
             held = next((a for a in playing if _bid(a) == self._held), None)
             if held is not None:
                 return held
@@ -155,13 +157,17 @@ def build_sources(cfg, jf_client=None) -> SourceSet:
     from .jellyfin import JellyfinSource
     from .pc import PcSource
 
+    pin = str(cfg.get("sync.pin") or "")
     binds, skipped = [], []
     for i, b in enumerate(cfg.enabled_bindings()):
         probs = cfg.binding_problems(b)
         if probs:
             skipped.append("%s (%s)" % (b["name"] or b["id"], "; ".join(probs)))
             continue
-        binds.append(dict(b, rank=i))      # list order is priority order
+        # list order is priority order - except the binding picked to sync now
+        # (Home Assistant's "Sync source"), which goes first whenever it plays
+        binds.append(dict(b, rank=-1 if b["id"] == pin else i))
+    binds.sort(key=lambda b: b["rank"])    # a source's own player list follows the same order
     for s in skipped:
         log.warning("binding not usable, skipped: %s", s)
 
@@ -172,4 +178,4 @@ def build_sources(cfg, jf_client=None) -> SourceSet:
     pc = [b for b in binds if b["source"] == "pc"]
     if pc:
         sources.append(PcSource(cfg, pc))
-    return SourceSet(sources, hold_s=float(cfg.get("engine.huesync.min_session_s", 20.0)))
+    return SourceSet(sources, hold_s=float(cfg.get("engine.huesync.min_session_s", 20.0)), pin=pin)
