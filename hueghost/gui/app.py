@@ -119,6 +119,7 @@ class MainWindow(QMainWindow):
         self.setMinimumSize(780, 560)      # every page wraps to fit; see gui/widgets.FlowLayout
         self.setWindowIcon(ghost_icon(None))
         self._restore_geometry()
+        self._watch_screens()
         self.last_status: dict = {}
 
         root = QWidget()
@@ -310,8 +311,8 @@ class MainWindow(QMainWindow):
         avail = screen.availableGeometry() if screen else None
         saved = self._settings().value("geometry")
         if saved is not None and self.restoreGeometry(saved):
-            if avail is None or avail.intersects(self.frameGeometry()):
-                return                    # still on a screen that exists
+            if avail is None or avail.contains(self.frameGeometry().center()):
+                return                    # still on the primary display
         w, h = 1260, 840
         if avail is not None:
             w = max(self.minimumWidth(), min(w, avail.width() - 80))
@@ -319,6 +320,44 @@ class MainWindow(QMainWindow):
         self.resize(w, h)
         if avail is not None:
             self.move(avail.center() - self.rect().center())
+
+    def _watch_screens(self) -> None:
+        """Bring the window home whenever the set of screens changes.
+
+        A DisplayPort monitor that goes to sleep leaves Windows' desktop, and
+        Windows moves its windows onto what is left - the virtual ghost display.
+        It does not move them back when the monitor wakes, so Hue Ghost ended
+        up on the ghost screen. Debounced: a waking monitor comes back in
+        several steps."""
+        app = QGuiApplication.instance()
+        self._home_timer = QTimer(self)
+        self._home_timer.setSingleShot(True)
+        self._home_timer.setInterval(1500)
+        self._home_timer.timeout.connect(self._keep_on_primary)
+        for sig in (app.screenAdded, app.screenRemoved, app.primaryScreenChanged):
+            sig.connect(lambda *_: self._home_timer.start())
+
+    def _keep_on_primary(self) -> None:
+        """Keep the window on the primary display (Windows' display 1): moved
+        back, centred and shrunk to fit when it is anywhere else."""
+        screen = QGuiApplication.primaryScreen()
+        if screen is None:
+            return
+        if self.isMaximized() or self.isFullScreen():
+            if self.screen() is screen:
+                return
+            self.showNormal()
+        avail = screen.availableGeometry()
+        if avail.contains(self.frameGeometry().center()):
+            return
+        self.resize(max(self.minimumWidth(), min(self.width(), avail.width() - 80)),
+                    max(self.minimumHeight(), min(self.height(), avail.height() - 80)))
+        self.move(avail.center() - self.rect().center())
+        log.info("window moved back to the primary display (%s)", screen.name())
+
+    def showEvent(self, e) -> None:  # noqa: N802
+        super().showEvent(e)
+        self._keep_on_primary()
 
     def _save_geometry(self) -> None:
         try:

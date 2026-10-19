@@ -42,6 +42,7 @@ IDLE, GHOSTING, SYNCING, STANDBY = "idle", "ghosting", "syncing", "standby"
 TICK_S = 0.25
 ENGINE_STOP_WAIT_S = 2.0
 SLOW_STEP_S = 2.0          # a loop step holding the lock longer than this is logged
+SWAP_LATENCY_S = 0.25       # a music swap (loadfile in a running mpv) until the new song plays (live: 0.1-0.4 s)
 # time lock: engage once |drift| is this small ("0.0 s"), the
 # followed client has sent this many quiet reports since its last event ...
 LOCK_WINDOW_S = 0.02
@@ -175,7 +176,7 @@ class Daemon:
         # lights switched off on purpose while the ghost lives on: "stopped"
         # (client left, ghost on standby) or "paused" (pause timeout)
         self._standby: str | None = None
-        self._awake = False           # displays currently held awake by us
+        self._awake = ""              # what we hold awake: "" | "system" (music) | "display"
         self.care = ScreenCare(cfg)   # ... and what keeps an OLED held awake from burning in
         self._locked_warned = False
         self._launches: deque[float] = deque()
@@ -191,6 +192,7 @@ class Daemon:
         self._parked_since: float | None = None  # ... and since when another one has the lights
         self._pause_stopped: str | None = None   # item stopped for sitting paused
         self._eof_item: str | None = None
+        self._ended_since: float | None = None   # an idle music ghost finished its track then
         self._adev_warned: str | None = None
         self._adev_woke = float("-inf")
         self._music_gap = False        # a music ghost ran out: the engine waits for the next song
@@ -317,16 +319,27 @@ class Daemon:
         execution-state flag is per thread, so this only ever runs on the
         daemon loop thread."""
         mode = self.keep_awake_mode()
-        # a music ghost has no picture, and a PC source is on a screen the user
-        # is already looking at: neither needs a display held awake for us
-        playing_on_a_display = (self.ghost is not None and not self._ghost_audio_only) \
-            or (self.ghost is None and self._engine_started)
-        want = mode == "always" or (mode == "playing" and playing_on_a_display)
+        # Music has no picture: the lights ride on sound, so the screens may
+        # sleep - only the PC is held awake. That covers a music ghost, the gap
+        # between two of its songs (no ghost for a moment, engine still on -
+        # this used to read as "a PC app is playing" and woke the monitor at
+        # every track change) and a music app on this PC.
+        music = (self._ghost_audio_only and (self.ghost is not None or self._music_gap)) \
+            or (self._plan_applied is not None and self._plan_applied.mode == "music")
+        lit = self.ghost is not None or self._engine_started
+        if mode == "always":
+            want = "display"
+        elif mode == "playing" and lit:
+            want = "system" if music else "display"
+        else:
+            want = ""
         if want == self._awake:
             return
-        if keep_awake(want):
-            log.info("displays held awake %s" % ("(always)" if mode == "always" else "while the ghost plays")
-                     if want else "displays may sleep again")
+        if keep_awake(bool(want), display=(want == "display")):
+            log.info({"display": "displays held awake %s" % ("(always)" if mode == "always"
+                                                            else "while the ghost plays"),
+                      "system": "music: the PC is held awake, the displays may sleep",
+                      "": "displays may sleep again"}[want])
         self._awake = want
 
     def _screen_care(self, now: float) -> None:
@@ -371,7 +384,7 @@ class Daemon:
                 self.engine.close()
             if self._awake:
                 keep_awake(False)
-                self._awake = False
+                self._awake = ""
         if self.control:
             self.control.stop()
         log.info("stopped")
@@ -486,12 +499,23 @@ class Daemon:
             self._pause_stopped = None      # it plays again, or moved on: stop latching
         if act.event == "new_item" and obs.stale:
             log.warning("first report for '%s' is stale (>30 s old); position may be off", _asc(m.name))
-        if self.ghost is not None and self.ghost.item_id != m.item_id:
+        if self.ghost is not None and getattr(self.ghost, "ended", False) \
+                and self.ghost.item_id == m.item_id == self._eof_item and m.runtime_s \
+                and m.position_at(now) <= m.runtime_s - 5.0:
+            # the idle music ghost finished this track, and the client plays it
+            # again (repeat one, or seeked back): load it again
             if not self._swap_ghost(now, act, m):
+                self._stop_ghost("track replayed")
+        swapped = False
+        if self.ghost is not None and self.ghost.item_id != m.item_id:
+            swapped = self._swap_ghost(now, act, m)
+            if not swapped:
                 log.info("followed client switched to '%s' -> relaunching ghost", _asc(m.name))
                 self._stop_ghost("item changed")
         if self.ghost is None:
             self._maybe_launch(now, act)
+        elif swapped and act.event == "new_item":
+            pass                        # the swap opened the new song on its anchor
         elif act.event in ("seek", "resume", "new_item", "resync"):
             self._pending_seek = True
             if act.event == "seek":
@@ -542,15 +566,25 @@ class Daemon:
             return False
         if self._ghost_binding != ((act.binding or {}).get("id") or None):
             return False              # a different binding won: give it a fresh ghost
-        if not g.alive() or not g.swap(spec.url):
+        # open the new file where the client is by the time it plays: no
+        # process to start, a loadfile plays in 0.1-0.4 s (live, 2026-10-19)
+        held = m.paused or m.frozen(now)
+        start = m.position_at(now) + self.offset + (0.0 if held else SWAP_LATENCY_S)
+        if m.runtime_s:
+            start = min(start, max(0.0, m.runtime_s - 1.0))
+        if not g.alive() or not g.swap(spec.url, start=max(0.0, start)):
             return False              # mpv has gone: relaunch
         g.item_id = m.item_id
         self._last_launch_item = m.item_id
         self._eof_item = None
-        self._pending_seek = True     # land exactly on the new track's anchor
+        self._ended_since = None
+        self._music_gap = False
         self._paused_since = None
         if self._standby is not None:
             self._lights_on("the next track is here")
+        # it opened on the anchor already: a forced seek on top of that is an
+        # audible stutter for a tenth of a second; the lockstep nudges the rest
+        self._pending_seek = False
         log.info("'%s' playing on %s -> hot-swapping the track (lights stay on)",
                  _asc(m.name), _asc((act.binding or {}).get("name") or "?"))
         return True
@@ -771,6 +805,26 @@ class Daemon:
         if held:
             self.ghost.apply([Pause()], now)
 
+    def _music_track_ended(self, now: float, g) -> None:
+        """The music ghost played its file to the end and sits idle (mpv runs
+        with --idle), waiting for the client's next track.
+
+        It used to exit here, and the next song paid for a whole new mpv - a
+        second of silence, so a second of dark lights, between every two songs.
+        Now the next track is only a ``loadfile`` into the running player. If
+        nothing follows within the music gap (a client that stays on the
+        finished song), the ghost is closed like any other that ran out."""
+        if self._eof_item != g.item_id:
+            self._eof_item = g.item_id
+            self._ended_since = now
+            log.info("track ended -> the music ghost waits for the next one")
+        self.state = SYNCING if self._engine_started else GHOSTING
+        self._paused_since = None
+        self._music_gap = True
+        if self._ended_since is not None and now - self._ended_since >= self.music_gap \
+                and self._idle_since is None:
+            self._stop_ghost("the track ended and nothing followed")
+
     def _prepare_display(self) -> None:
         """The displays may have been switched off by Windows' idle timeout (the
         virtual ghost display goes with them) - wake them before mpv draws its
@@ -795,6 +849,12 @@ class Daemon:
         g = self.ghost
         if g is None:
             return
+        if self._ghost_audio_only and g.alive() and getattr(g, "ended", False) \
+                and g.end_reason == "eof" and not g.user_quit:
+            self._music_track_ended(now, g)
+            return
+        if g.alive() and self._ghost_audio_only and getattr(g, "ended", False):
+            g.kill()                    # an idle music ghost whose file failed: treat it as gone
         if not g.alive():
             rc = g.proc.poll()
             reason = g.end_reason or "?"
@@ -1080,7 +1140,8 @@ class Daemon:
                 },
                 "system": {
                     "keep_awake": self.keep_awake_mode(),
-                    "awake_held": self._awake,
+                    "awake_held": self._awake == "display",
+                    "pc_held_awake": bool(self._awake),
                     "locked": desktop_locked(),
                     "screen_care": self.care.status(),
                 },

@@ -268,7 +268,7 @@ def test_a_cover_that_cannot_launch_is_reported_not_retried(caplog):
 @pytest.fixture
 def daemon(tmp_path, monkeypatch):
     from hueghost import daemon as dm
-    monkeypatch.setattr(dm, "keep_awake", lambda on: True)
+    monkeypatch.setattr(dm, "keep_awake", lambda on, display=True: True)
     monkeypatch.setattr(dm, "desktop_locked", lambda: False)
     cfg = Config({"jellyfin": {"url": "http://jf", "api_key": "k", "follow": {"device_id": "atv"}},
                   "engine": {"type": "none"}, "control": {"port": 0}}, str(tmp_path / "config.json"))

@@ -288,6 +288,8 @@ _RENDER_PREFIX = "{0.0.0.00000000}."
 _MMDEV_RENDER = r"SOFTWARE\Microsoft\Windows\CurrentVersion\MMDevices\Audio\Render"
 _PKEY_NAME = "{a45c254e-df1c-4efd-8020-67d146a850e0},2"      # friendly name
 _PKEY_DESC = "{b3f8fa53-0004-438e-9003-51a46e139bfc},6"      # device description
+_PKEY_FORM_FACTOR = "{1da5d803-d492-4edd-8c23-e0c0ffee7f0e},0"  # PKEY_AudioEndpoint_FormFactor
+FORM_FACTOR_DISPLAY_AUDIO = 9                                  # DigitalAudioDisplayDevice (HDMI/DP)
 
 
 @dataclass
@@ -296,6 +298,7 @@ class AudioOutput:
     guid: str            # {guid}                   - mpv: --audio-device=wasapi/{guid}
     name: str
     default: bool = False
+    on_display: bool = False   # HDMI/DP audio of a monitor: gone while that monitor sleeps
 
     @property
     def mpv_device(self) -> str:
@@ -432,6 +435,7 @@ def list_audio_outputs() -> list[AudioOutput]:
                     if state != 1:          # 1 = DEVICE_STATE_ACTIVE
                         continue
                     name = ""
+                    on_display = False
                     with winreg.OpenKey(k, "Properties") as pk:
                         for key in (_PKEY_NAME, _PKEY_DESC):
                             try:
@@ -439,10 +443,16 @@ def list_audio_outputs() -> list[AudioOutput]:
                                 name = (name + " (" + v + ")") if name else v
                             except OSError:
                                 pass
+                        try:
+                            ff, _ = winreg.QueryValueEx(pk, _PKEY_FORM_FACTOR)
+                            on_display = ff == FORM_FACTOR_DISPLAY_AUDIO
+                        except OSError:
+                            pass
             except OSError:
                 continue
             eid = _RENDER_PREFIX + sub
-            out.append(AudioOutput(id=eid, guid=sub, name=name or sub, default=(eid == default)))
+            out.append(AudioOutput(id=eid, guid=sub, name=name or sub, default=(eid == default),
+                                   on_display=on_display))
     out.sort(key=lambda a: (not a.default, a.name.lower()))
     return out
 
@@ -924,15 +934,19 @@ ES_SYSTEM_REQUIRED = 0x00000001
 ES_DISPLAY_REQUIRED = 0x00000002
 
 
-def keep_awake(on: bool) -> bool:
-    """Hold (or release) the display + system idle timers for the *calling
-    thread*. Windows switches every display off after the idle timeout - the
-    virtual ghost display included - and Hue Sync then captures a dead screen.
+def keep_awake(on: bool, display: bool = True) -> bool:
+    """Hold (or release) the system idle timer - and with ``display`` the
+    display one too - for the *calling thread*. Windows switches every display
+    off after the idle timeout - the virtual ghost display included - and Hue
+    Sync then captures a dead screen. Music needs no screen: ``display=False``
+    keeps the PC running and lets the monitors sleep.
     Returns True when the request was applied (Windows only)."""
     if sys.platform != "win32":
         return False
     import ctypes
-    flags = ES_CONTINUOUS | ((ES_SYSTEM_REQUIRED | ES_DISPLAY_REQUIRED) if on else 0)
+    flags = ES_CONTINUOUS
+    if on:
+        flags |= ES_SYSTEM_REQUIRED | (ES_DISPLAY_REQUIRED if display else 0)
     try:
         return bool(ctypes.windll.kernel32.SetThreadExecutionState(ctypes.c_uint(flags)))
     except Exception:

@@ -147,6 +147,7 @@ def test_the_music_ghost_is_audible_windowless_and_on_the_chosen_device():
     args = mpv_args(cfg, "t", audio_only=True, audio_device=CABLE)
     assert "--mute=no" in args and "--volume=90" in args
     assert "--vid=no" in args and "--force-window=no" in args
+    assert "--idle=yes" in args, "a finished song leaves the player up for the next one"
     assert "--audio-device=wasapi/{f06b61ae-8af6-4b4e-94f9-f59d03355224}" in args
     assert not any(a.startswith("--fullscreen") or a.startswith("--fs-screen") for a in args)
     # the video ghost is still the exact opposite
