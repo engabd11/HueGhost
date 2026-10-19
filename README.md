@@ -36,7 +36,7 @@ You set it up once. After that you press play, and the lights stop when playback
 | **Hue Sync** | The free [Hue Sync desktop app](https://www.philips-hue.com/en-us/explore-hue/propositions/entertainment/sync-with-pc), paired with your bridge |
 | **For TV sync** | A Jellyfin server (10.9 or newer) on your network, and a Jellyfin API key |
 | **For TV sync** | A spare display for the ghost: the installer adds a **virtual display**, or use an HDMI dummy plug |
-| **For Jellyfin music** *(optional)* | A spare audio output reserved for the ghost, such as an unused HDMI or optical port, or a virtual audio cable |
+| **For Jellyfin music** *(optional)* | A spare audio output reserved for the ghost, such as an unused optical port or a virtual output (virtual audio cable, Steam Streaming Speakers); not a monitor's own audio, which goes away when the screen sleeps |
 
 Syncing apps and games on the PC only? You need just the PC, the bridge and Hue Sync.
 

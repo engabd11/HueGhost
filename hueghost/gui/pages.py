@@ -1186,7 +1186,8 @@ class DisplayPage(Page):
         c1.add(self.keep_awake)
         c1.add(label("A switched-off display gives Hue Sync nothing to capture: the lights sit on one dim colour "
                      "until someone touches the mouse. 'While the ghost plays' wakes the displays the moment a movie "
-                     "starts and lets them sleep again afterwards. The PC itself must not be set to sleep.",
+                     "starts and lets them sleep again afterwards. Music needs no screen: while it syncs only the "
+                     "PC is kept awake and the displays sleep as usual. The PC itself must not be set to sleep.",
                      "hint", wrap=True))
         self.lay.addWidget(c1)
 
@@ -1273,7 +1274,9 @@ class DisplayPage(Page):
             self.audio_note.setText("Could not list the audio outputs: %s" % e)
             return
         for a in res["outputs"]:
-            self.audio_out.addItem(a["name"] + ("   (your default - you WOULD hear this)" if a["default"] else ""),
+            self.audio_out.addItem(a["name"] + ("   (your default - you WOULD hear this)" if a["default"] else "")
+                                   + ("   (monitor audio - music sync stops while the screen sleeps)"
+                                      if a.get("on_display") else ""),
                                    a["id"])
         idx = self.audio_out.findData(want)
         if want and idx < 0:

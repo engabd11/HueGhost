@@ -168,8 +168,11 @@ is followed like a film now, and it can drive the lights too - but the ghost
 has to do the opposite of its usual job. It plays the track's **sound** (no
 window at all) into an output **you cannot hear**, and Hue Sync runs in music
 mode against that same output. Choose it under *Display > Ghost audio output*:
-a spare HDMI or optical port with nothing plugged in, or a virtual audio cable.
-Leave it empty and music is shown but not synced — the alternative would be
+a spare optical port with nothing plugged in, or a virtual output (a virtual
+audio cable, Steam Streaming Speakers). Avoid a monitor's own HDMI/DisplayPort
+audio (marked "monitor audio" in the list): Windows removes it seconds after
+the screen goes to sleep, and the music sync stops with it. Music never holds
+the displays awake - only the PC. Leave it empty and music is shown but not synced — the alternative would be
 playing your TV's music out of the PC's speakers.
 
 Music playing **on the PC itself** needs none of that: the sound is already

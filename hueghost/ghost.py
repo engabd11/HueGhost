@@ -219,8 +219,11 @@ def mpv_args(cfg, title: str, audio_only: bool = False, audio_device: str = "") 
             "--input-conf=" + INPUT_CONF]
     if audio_only:
         vol = max(0, min(100, int(100 if g.get("music_volume") is None else g.get("music_volume"))))
+        # --idle: at the end of a track mpv stays up, so the next one is a
+        # loadfile into the running player instead of a new process (that
+        # cost a second of silence - dark lights - between every two songs)
         args += ["--mute=no", "--volume=%d" % vol, "--vid=no", "--force-window=no",
-                 "--audio-client-name=hue-ghost"]
+                 "--idle=yes", "--audio-client-name=hue-ghost"]
         dev = mpv_audio_device(audio_device)
         if dev:
             args += ["--audio-device=" + dev]
@@ -261,6 +264,7 @@ class GhostPlayer:
         self.core_idle = True
         self.user_quit = False
         self.end_reason: str | None = None
+        self.ended = False          # the file is over and mpv sits idle (music: --idle)
         self.last_seek_mono = float("-inf")
         self.seeks = 0
         self.nudges = 0
@@ -341,6 +345,11 @@ class GhostPlayer:
                 self.core_idle = bool(data)
         elif ev == "end-file":
             self.end_reason = msg.get("reason")
+            # "stop" is the old file making way for a loadfile: not an end
+            if self.end_reason in ("eof", "error"):
+                self.ended = True
+        elif ev == "start-file":
+            self.ended = False
             if self.end_reason == "quit":
                 self.user_quit = True
         elif ev == "shutdown":
@@ -393,7 +402,7 @@ class GhostPlayer:
         self.ipc.send("set_property", "video-pan-x", x)
         self.ipc.send("set_property", "video-pan-y", y)
 
-    def swap(self, url: str) -> bool:
+    def swap(self, url: str, start: float | None = None) -> bool:
         """Swap what this ghost is playing without leaving the process.
 
         A music track change is only another file in the same invisible player:
@@ -406,8 +415,13 @@ class GhostPlayer:
         ghost paused with the client would load the next song paused while
         ``self.paused`` (reset below) says it plays - no Resume is ever sent.
         Unpause it with the new file; a client that is still paused gets its
-        Pause from the lockstep straight after."""
-        ok = self.ipc.send("loadfile", url, "replace")
+        Pause from the lockstep straight after.
+
+        ``start`` is where the new file opens. Without it, the ``--start`` the
+        ghost was launched with applied to every later file too: each new song
+        opened seconds in, and the seek back to its start was audible."""
+        ok = self.ipc.send("set_property", "start", "%.3f" % max(0.0, start or 0.0))
+        ok = self.ipc.send("loadfile", url, "replace") and ok
         ok = self.ipc.send("set_property", "pause", False) and ok
         self._time_pos = None
         self._time_pos_mono = 0.0
@@ -418,6 +432,7 @@ class GhostPlayer:
         self.core_idle = True
         self.user_quit = False
         self.end_reason = None
+        self.ended = False
         self.seeks = 0
         self.nudges = 0
         return ok

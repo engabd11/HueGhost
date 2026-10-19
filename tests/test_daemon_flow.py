@@ -32,6 +32,7 @@ class FakeGhost:
         self.buffering = False
         self.stalled = False
         self.end_reason = None
+        self.ended = False
         self.user_quit = False
         self.last_seek_mono = float("-inf")
         self.started_mono = float("inf")   # "ran for ever": never a healthy refund by accident
@@ -74,9 +75,11 @@ class FakeGhost:
                 self.last_seek_mono = now
                 self.seeks += 1
 
-    def swap(self, url: str) -> bool:
+    def swap(self, url: str, start=None) -> bool:
         self.swapped.append(url)
+        self.swap_starts = getattr(self, "swap_starts", []) + [start]
         self.end_reason = None
+        self.ended = False
         self.eof = False
         self.paused = False
         self._time_pos = 0.0     # the new file's first position
@@ -87,8 +90,8 @@ class Power:
     def __init__(self):
         self.calls = []
 
-    def keep_awake(self, on):
-        self.calls.append(("keep", on))
+    def keep_awake(self, on, display=True):
+        self.calls.append(("keep", on if (display or not on) else "system"))
         return True
 
     def wake(self):
@@ -317,7 +320,7 @@ def test_music_skip_hot_swaps_without_stopping_the_lights(world):
     assert len(world.launched) == 1, "a swap must not consume a launch"
     assert world.engine_on and world.d.state == SYNCING
     world.step(2.0)
-    assert any(isinstance(a, Seek) for a in g.actions), "it lands on the new anchor"
+    assert 0.5 <= g.swap_starts[-1] <= 2.0, "it opens on the new anchor, no seek needed"
 
 
 def test_music_eof_between_tracks_keeps_the_engine(world):
@@ -335,6 +338,88 @@ def test_music_eof_between_tracks_keeps_the_engine(world):
     world.step(1.0, _music(1.0, world.t, item="track2"))
     assert world.ghost is not None and world.ghost.item_id == "track2"
     assert len(world.launched) == 2 and world.engine_on
+
+
+def _end_idle(g):
+    """mpv runs music with --idle: at the end of a file it reports end-file
+    (eof) and stays up, waiting for the next loadfile."""
+    g.end_reason = "eof"
+    g.ended = True
+
+
+def test_music_track_end_keeps_the_idle_ghost_and_swaps_the_next_song_in(world):
+    """A ghost that exited at every song end cost a new mpv - about a second of
+    silence, so of dark lights - between every two songs. The idle ghost takes
+    the next song as a loadfile, opened where the client is."""
+    world.d.cfg.set("ghost.audio_device", "{0.0.0.00000000}.{silent}")
+    world.step(1.0, _music(30.0, 0.5, item="track1"))
+    g = world.ghost
+    world.step(1.0, _music(237.0, world.t, item="track1"))
+    world.step(1.0, _music(238.0, world.t, item="track1"))
+    _end_idle(g)
+    steered = len(g.actions)
+    world.step(1.0, _music(239.0, world.t, item="track1"))
+    assert world.ghost is g and g.alive(), "the finished ghost stays up"
+    assert world.engine_on and world.d.state == SYNCING
+    assert len(g.actions) == steered, "an idle player is not steered"
+    world.step(0.5, _music(0.5, world.t, item="track2"))
+    assert world.ghost is g and len(world.launched) == 1, "the next song is a swap, not a launch"
+    assert g.swapped == ["http://jf/stream/track2"] and g.item_id == "track2"
+    assert 0.0 <= g.swap_starts[-1] < 2.0, "it opens at the client's position, not the old --start"
+    assert world.engine_on
+
+
+def test_an_idle_music_ghost_nothing_follows_is_closed_after_the_gap(world):
+    world.d.cfg.set("ghost.audio_device", "{0.0.0.00000000}.{silent}")
+    world.step(1.0, _music(30.0, 0.5, item="track1"))
+    g = world.ghost
+    _end_idle(g)
+    world.step(5.0, _music(240.0, world.t, item="track1", paused=True))
+    assert world.ghost is g and world.engine_on
+    world.step(6.0)
+    assert world.ghost is None and not g.alive() and not world.engine_on
+    world.step(2.0)
+    assert len(world.launched) == 1, "the finished track is not relaunched"
+
+
+def test_an_idle_music_ghost_reloads_a_replayed_track(world):
+    world.d.cfg.set("ghost.audio_device", "{0.0.0.00000000}.{silent}")
+    world.step(1.0, _music(30.0, 0.5, item="track1"))
+    g = world.ghost
+    _end_idle(g)
+    world.step(1.0, _music(239.5, world.t, item="track1"))
+    world.step(1.0, _music(0.5, world.t, item="track1"))     # repeat one
+    assert world.ghost is g and g.swapped == ["http://jf/stream/track1"] and not g.ended
+
+
+def test_an_idle_ghost_whose_file_failed_is_relaunched(world):
+    world.d.cfg.set("ghost.audio_device", "{0.0.0.00000000}.{silent}")
+    world.step(1.0, _music(30.0, 0.5, item="track1"))
+    g = world.ghost
+    g.end_reason, g.ended = "error", True
+    world.step(1.0, _music(31.0, world.t, item="track1"))
+    assert not g.alive()
+    world.step(6.0, _music(37.0, world.t, item="track1"))
+    assert world.ghost is not None and world.ghost is not g
+
+
+def test_music_holds_the_pc_awake_but_lets_the_displays_sleep(world):
+    """Music needs no screen. It used to hold the displays awake through every
+    gap between songs (no ghost + engine on read as "a PC app is playing"),
+    and wake the monitor at each track change."""
+    world.d.cfg.set("ghost.audio_device", "{0.0.0.00000000}.{silent}")
+    world.step(1.0, _music(30.0, 0.5, item="track1"))
+    assert world.power.calls[-1] == ("keep", "system")
+    assert ("keep", True) not in world.power.calls and ("wake",) not in world.power.calls
+    g = world.ghost
+    g.end_reason = "eof"
+    g._alive = False                   # an mpv without --idle: the old gap
+    world.step(1.0, _music(239.9, world.t, item="track1"))
+    assert world.ghost is None and world.engine_on
+    world.step(1.0, _music(1.0, world.t, item="track2"))
+    assert ("keep", True) not in world.power.calls and ("wake",) not in world.power.calls
+    world.step(15.0, stopped())
+    assert world.power.calls[-1] == ("keep", False)
 
 
 @pytest.mark.parametrize("ghost_ends", [True, False])

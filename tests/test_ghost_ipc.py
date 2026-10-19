@@ -85,3 +85,28 @@ def test_a_track_swapped_into_a_paused_ghost_plays():
     sent = [json.loads(line)["command"] for line in fh.written.splitlines()]
     assert ["set_property", "pause", False] in sent, sent
     assert g.paused is False, "what the ghost believes now matches what mpv does"
+
+
+def test_a_swapped_track_opens_where_it_is_asked_to_not_at_the_launch_start():
+    """mpv's --start from the launch applies to every later loadfile too: each
+    new song opened seconds in and was then seeked back (audible)."""
+    from hueghost.ghost import GhostPlayer
+
+    fh = LivePipe()
+    g = GhostPlayer(proc=None, ipc=ipc_with(fh), item_id="track1")
+    assert g.swap("http://jf/Audio/track2/stream", start=0.4) is True
+    sent = [json.loads(line)["command"] for line in fh.written.splitlines()]
+    assert sent.index(["set_property", "start", "0.400"]) < sent.index(
+        ["loadfile", "http://jf/Audio/track2/stream", "replace"]), sent
+
+
+def test_the_idle_music_ghost_ends_on_eof_but_not_on_a_loadfile_replace():
+    from hueghost.ghost import GhostPlayer
+
+    g = GhostPlayer(proc=None, ipc=ipc_with(LivePipe()), item_id="track1")
+    g._on_event({"event": "end-file", "reason": "eof"})
+    assert g.ended
+    g._on_event({"event": "start-file"})
+    assert not g.ended
+    g._on_event({"event": "end-file", "reason": "stop"})     # replaced by the next song
+    assert not g.ended

@@ -2,6 +2,27 @@
 
 All notable changes to Hue Ghost. The newest release is first.
 
+- **2.11.3** - **Music lets the screens sleep and keeps syncing while they do;
+  no break between songs; the window stays on the main display.**
+  **Music no longer keeps the monitor awake.** Music needs no screen, but in
+  the moment between two songs Hue Ghost read "no ghost, lights on" as an
+  app playing on this PC and held the displays awake, which also switched a
+  sleeping monitor back on at every track change. While music syncs only the
+  PC is kept awake now; the displays sleep on their usual timeout.
+  **Pick an output that does not sleep with the monitor.** A monitor's
+  HDMI/DisplayPort audio disappears from Windows within seconds of the screen
+  switching off, and music sync stopped with it. The Display page now marks
+  those outputs ("monitor audio"); choose a virtual or unused output instead
+  (for example Steam Streaming Speakers, or an unused S/PDIF output) and the
+  lights keep following the music with the screen off.
+  **No gap between songs.** The hidden music player used to quit at the end
+  of each song and a new one started for the next: about a second of silence,
+  so of dark lights. It now stays open and loads the next song straight away,
+  starting where the player is instead of a few seconds in.
+  **The window stays on the main display.** When a DisplayPort monitor
+  sleeps, Windows moves windows onto the virtual ghost display and leaves
+  them there when it wakes. Hue Ghost now moves itself back to the primary
+  display whenever displays come or go, and always opens there.
 - **2.11.2** - **Music syncs again after Windows renames its audio output, and keeps the lights on between songs; the wheel only scrolls.**
   A GPU driver update, or moving a screen to another port, makes Windows
   re-create that display's HDMI/DP audio under a new device id and leave the
