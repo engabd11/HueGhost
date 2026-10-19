@@ -42,7 +42,7 @@ IDLE, GHOSTING, SYNCING, STANDBY = "idle", "ghosting", "syncing", "standby"
 TICK_S = 0.25
 ENGINE_STOP_WAIT_S = 2.0
 SLOW_STEP_S = 2.0          # a loop step holding the lock longer than this is logged
-SWAP_LATENCY_S = 0.15       # a music swap (loadfile in a running mpv) until the new song plays
+SWAP_LATENCY_S = 0.25       # a music swap (loadfile in a running mpv) until the new song plays (live: 0.1-0.4 s)
 # time lock: engage once |drift| is this small ("0.0 s"), the
 # followed client has sent this many quiet reports since its last event ...
 LOCK_WINDOW_S = 0.02
@@ -567,7 +567,7 @@ class Daemon:
         if self._ghost_binding != ((act.binding or {}).get("id") or None):
             return False              # a different binding won: give it a fresh ghost
         # open the new file where the client is by the time it plays: no
-        # process to start, a loadfile plays within ~0.1 s (live, 2026-10-19)
+        # process to start, a loadfile plays in 0.1-0.4 s (live, 2026-10-19)
         held = m.paused or m.frozen(now)
         start = m.position_at(now) + self.offset + (0.0 if held else SWAP_LATENCY_S)
         if m.runtime_s:
