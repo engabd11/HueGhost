@@ -92,7 +92,10 @@ def decide(target_pos: float, target_paused: bool, ghost: GhostObs, p: Params,
     if target_paused:
         if not ghost.paused:
             actions.append(Pause())
-        if ghost.pos is not None and abs(ghost.pos - target_pos) >= p.seek_threshold_s:
+        # seek-only mode has a tiny threshold: honour the cooldown, or a ghost
+        # that lands a hair off is sent there again on every tick
+        settle_ok = p.speed_nudge or (now_mono - ghost.last_seek_mono) >= p.seek_cooldown_s
+        if ghost.pos is not None and abs(ghost.pos - target_pos) >= p.seek_threshold_s and settle_ok:
             actions.append(Seek(target_pos))      # align while paused so resume is clean
         if abs(ghost.speed - 1.0) > 1e-6:
             actions.append(Speed(1.0))

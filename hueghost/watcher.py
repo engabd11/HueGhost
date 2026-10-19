@@ -120,8 +120,10 @@ class SessionMatcher:
             # name never takes a device another binding owns, switched off or
             # not: that is how one phone's binding followed another phone whose
             # own binding was disabled.
-            label = ((s.get("DeviceName") or "") + " " + (s.get("Client") or "")).lower()
-            if not (by_name and self.needle and self.needle in label) or did in self.claimed:
+            # Jellyfin for Android form-encodes its name: "Abdullah's+S23"
+            label = ((s.get("DeviceName") or "") + " " + (s.get("Client") or "")).replace("+", " ").lower()
+            needle = self.needle.replace("+", " ")
+            if not (by_name and needle and needle in label) or did in self.claimed:
                 return False
         # Narrowing by app is what separates two entries a phone reports under
         # the same generic device name - music in one app, films in another.
@@ -147,39 +149,16 @@ class SessionMatcher:
 
 
 class PlayerSet:
-    """Several players in priority order; the first one that is playing wins."""
+    """Several players in priority order; the first one that is playing wins.
+
+    A paused player never holds the lights against one that plays, whatever
+    their order (Abdullah, 2026-10-19: CAMusic-linux sat paused above his phone
+    and the phone's music stayed dark for 15 s). It takes them straight back
+    when it plays again - it is still higher in the list. With nothing else
+    playing, a paused player keeps its place, so it resumes where it was."""
 
     def __init__(self, matchers: list[SessionMatcher]):
         self.matchers = matchers
-        # (video, music) seconds a paused player keeps its place before a lower
-        # one that is really playing takes over; 0 = it never gives way. The
-        # same limits after which the daemon turns a paused player's lights off:
-        # a TV left paused on an episode must not keep a phone's film dark.
-        self.pause_yield_s: tuple[float, float] = (0.0, 0.0)
-        # when each session (device, item) was first seen paused - per session,
-        # not per list entry, so two entries for one device share the count
-        self._paused_since: dict[tuple[str, str], float] = {}
-
-    @staticmethod
-    def _key(s: dict) -> tuple[str, str]:
-        return (s.get("DeviceId") or "", ((s.get("NowPlayingItem") or {}).get("Id") or ""))
-
-    def _time_pauses(self, sessions: list[dict], now: float) -> None:
-        paused = {self._key(s) for s in sessions
-                  if s.get("NowPlayingItem") and (s.get("PlayState") or {}).get("IsPaused")}
-        for k in list(self._paused_since):
-            if k not in paused:
-                del self._paused_since[k]
-        for k in paused:
-            self._paused_since.setdefault(k, now)
-
-    def _yielding(self, s: dict, r: "Report", now: float | None) -> bool:
-        """Whether this session, paused, has sat long enough to give way."""
-        since = self._paused_since.get(self._key(s)) if now is not None and r.paused else None
-        if since is None:
-            return False
-        limit = self.pause_yield_s[1] if r.media_type == "music" else self.pause_yield_s[0]
-        return limit > 0 and now - since >= limit
 
     @classmethod
     def from_players(cls, players: list[dict], claimed: Iterable[str] | None = None) -> "PlayerSet":
@@ -188,28 +167,25 @@ class PlayerSet:
 
     def pick(self, sessions: Iterable[dict], now: float | None = None
              ) -> tuple[dict | None, SessionMatcher | None]:
-        """The first player in list order that plays something it follows -
-        skipping one that has sat paused past its limit while a later one
-        plays. ``now`` (monotonic) is what times the pauses; without it the
-        order alone decides."""
+        """The first player in list order that plays something it follows; a
+        paused one only when no player is playing. (``now`` is unused; kept
+        for callers.)"""
         sessions = list(sessions or [])
-        if now is not None:
-            self._time_pauses(sessions, now)
         first_seen: tuple[dict, SessionMatcher] | None = None
-        first_parked: tuple[dict, SessionMatcher] | None = None
+        first_paused: tuple[dict, SessionMatcher] | None = None
         for m in self.matchers:
             s = m.pick(sessions)
             if s is None:
                 continue
             r = report_from_session(s)
             if m.wants(r):
-                if self._yielding(s, r, now):
-                    first_parked = first_parked or (s, m)
+                if r.paused:
+                    first_paused = first_paused or (s, m)
                     continue
                 return s, m
             first_seen = first_seen or (s, m)
-        if first_parked:
-            return first_parked
+        if first_paused:
+            return first_paused
         return first_seen if first_seen else (None, None)
 
 
@@ -256,6 +232,7 @@ LAG_TOL_REPORTS = 2
 LIFT_LOG_S = 0.05          # an envelope lift this big is worth a log line
 CLASSIFY_EVERY = 30        # steady timed reports between two looks at a player's profile
 CLASSIFY_SPAN_S = 40.0
+CLASSIFY_SLOW_SPAN_S = 80.0  # ... or after this long, for a player with few timed reports
 BIG_STEP_S = 0.05
 SAWTOOTH_RATIO = 12.0      # envelope depth over the per-report change, for a sawtooth
 NOISE_RATIO = 8.0          # ... and below this, plain symmetric noise
@@ -464,7 +441,17 @@ class PlaybackModel:
         with the timeline to within ``window_s`` - or within its own jitter,
         for a client whose reports are noisier than that: the sync is at 0."""
         return (self.stall_kind is None and not self.paused and self.steady_reports >= reports
-                and self.residual is not None and abs(self.residual) <= max(window_s, 3.0 * self.noise))
+                and self.residual is not None and abs(self.residual) <= max(window_s, 3.0 * self.jitter))
+
+    @property
+    def jitter(self) -> float:
+        """This client's report scatter: what the recent reports show, or - for
+        a player learned to scatter both ways - what it is known to do. The
+        recent figure starts from nothing after every lock; Jellyfin for
+        Android (one timed report per 10 s, +/-0.14 s) released the lock on
+        its first noisy report every time."""
+        known = self.profile.noise_s if (self.profile and self.profile.kind == "symmetric") else 0.0
+        return max(self.noise, known)
 
     def begin_stall(self, kind: str, pos: float, report_mono: float) -> None:
         self._anchor(pos, report_mono + self.stalls.predict(kind))
@@ -500,7 +487,10 @@ class PlaybackModel:
             self.env_prior = None     # a real tooth top: the envelope speaks for itself now
         if self.profile is not None:
             self.since_look += 1
-            if self.since_look >= CLASSIFY_EVERY:
+            # by count, or - for a player with few timed reports (Jellyfin for
+            # Android: one per 10 s) - by time
+            if self.since_look >= CLASSIFY_EVERY or (
+                    self.since_look >= 8 and report_mono - self.raw[0][0] >= CLASSIFY_SLOW_SPAN_S):
                 self.since_look = 0
                 self.profile.look(list(self.raw))
         return y
@@ -623,8 +613,11 @@ class PlaybackModel:
                     # watched, and a persistent gap (a short re-buffer, clock
                     # skew over a long film) hands back to the corrections
                     self.lock_residual = med
-                    # a gap within the client's own jitter is not a gap
-                    if abs(med) <= max(self.lock_release_s, 3.0 * self.noise):
+                    # a gap within the client's own jitter is not a gap, and
+                    # a small one needs three reports to agree on it (one
+                    # noisy report is not a re-buffer)
+                    tol = max(self.lock_release_s, 3.0 * self.jitter)
+                    if abs(med) <= tol or (len(self.residuals) < 3 and abs(med) <= 4.0 * tol):
                         self._debug(r, pred, delta, None)
                         return None
                     self.unlock()

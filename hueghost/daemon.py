@@ -32,7 +32,6 @@ from .jellyfin import JellyfinClient, JellyfinError
 from .lockstep import GhostObs, Params, Pause, Resume, Seek, decide
 from .screencare import ScreenCare
 from .sources import IDLE as IDLE_ACTIVITY, build_sources
-from .sources.jellyfin import pause_yield_limits
 from .watcher import Observation, PlayerSet, SessionWatcher
 from .winutil import desktop_locked, keep_awake, wake_display
 
@@ -997,8 +996,10 @@ class Daemon:
         actions = decide(target, target_held, gobs, self._lock_params(m), now, force_seek=force)
         if force:
             self._pending_seek = False
-        if self._ghost_audio_only and actions:
-            # a music seek lands this much short of its aim (learned): aim past it
+        if self._ghost_audio_only and actions and not target_held:
+            # a music seek lands this much short of its aim (learned): aim past it.
+            # Not while held: a paused ghost lands exactly where it is sent, and
+            # aiming past the target there made it seek again on every tick.
             actions = [Seek(a.pos + self._seek_lead) if isinstance(a, Seek) else a for a in actions]
             # judged only in steady play: a seek in the first seconds of a file
             # waits on the network (little is cached yet), and teaches nothing
@@ -1317,7 +1318,6 @@ class Daemon:
                 self._plan_applied = None
             self.watcher.jitter_tol = float(self.cfg.get("sync.jitter_tolerance_s", 1.5))
             self.watcher.precise_timing = bool(self.cfg.get("sync.time_lock", True))
-            self.watcher.players.pause_yield_s = pause_yield_limits(self.cfg)
             self.params = Params.from_config(self.cfg)
             if changed("engine.type", "engine.huesync.host", "engine.huesync.port",
                        "engine.huesync.launch_exe", "engine.httphook.url"):
@@ -1398,7 +1398,6 @@ class Daemon:
         self.params = Params.from_config(self.cfg)
         self.watcher.jitter_tol = float(self.cfg.get("sync.jitter_tolerance_s", 1.5))
         self.watcher.precise_timing = bool(self.cfg.get("sync.time_lock", True))
-        self.watcher.players.pause_yield_s = pause_yield_limits(self.cfg)
         self.watcher.poll_interval = float(self.cfg.get("jellyfin.poll_interval_s", 0.5))
         self._push_engine_prefs()
         log.info("config reloaded (offset %+.2fs, intensity %s)", self.offset,

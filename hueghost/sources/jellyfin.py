@@ -17,14 +17,6 @@ from . import Activity, GhostSpec, Source
 log = logging.getLogger("hue-ghost.sources")
 
 
-def pause_yield_limits(cfg) -> tuple[float, float]:
-    """(video, music) seconds a paused player holds its place in the list:
-    the daemon's own pause limits, so a player gives way exactly when its
-    lights would go out anyway."""
-    return (float(cfg.get("sync.pause_stop_min", 0.0) or 0.0) * 60.0,
-            float(cfg.get("sync.music_pause_stop_s", 15.0) or 0.0))
-
-
 class JellyfinSource(Source):
     id = "jellyfin"
 
@@ -48,7 +40,6 @@ class JellyfinSource(Source):
             stall_priors=self.cfg.get("sync.stall_estimates") or None)
         w.precise_timing = bool(self.cfg.get("sync.time_lock", False))
         w.load_profiles(self.cfg.get("sync.player_profiles"))
-        w.players.pause_yield_s = pause_yield_limits(self.cfg)
         return w
 
     def bindings(self) -> list[dict]:

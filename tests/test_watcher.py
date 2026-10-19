@@ -423,3 +423,12 @@ def test_name_only_bindings_never_take_a_claimed_device():
     assert players.pick([_sess("camusic-linux", "Android", "Camusic linux")]) == (None, None)
     other = _sess("pixel-1", "Android", "Jellyfin")
     assert players.pick([other])[0] is other
+
+
+def test_a_form_encoded_device_name_still_matches_by_name():
+    """Jellyfin for Android 2.7.3 reports "Abdullah's+S23" and a shortened
+    device id (live, 2026-10-19): the binding saved earlier must still find it."""
+    m = SessionMatcher(device_id="fa9d65da834b107fa169025a-c30f-4a91-9ad1-834e8efe9b2a",
+                       name_contains="Abdullah's S23")
+    s = _sess("fa9d65da834b107f", "Abdullah's+S23", "Jellyfin for Android")
+    assert m.pick([s]) is s

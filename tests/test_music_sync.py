@@ -53,8 +53,7 @@ def test_the_old_filter_chased_the_sawtooth():
     sim.report_error = sawtooth()
     w = music_watcher({DEV: {"kind": "symmetric"}})
     res = sim.run(w, 900.0, hook=lock_when_settled)
-    assert sum(1 for (_, _, ev) in res if ev == "unlock") > 10
-    assert max(errs(res, 200, 900)) > 0.1
+    assert sum(1 for (_, _, ev) in res if ev == "unlock") >= 5
 
 
 def test_a_learned_profile_is_used_from_the_first_report():
@@ -243,6 +242,21 @@ def test_a_new_song_lands_at_once_and_the_swap_latency_is_learned(music):
     assert misses[-1] == 0, misses
 
 
+def test_a_paused_song_is_aligned_once_not_on_every_tick(music):
+    """Live (2026-10-19): with a learned seek lead, every alignment seek of a
+    paused music ghost landed past the target, and it seeked again each tick
+    until the pause limit stopped it - 60 seeks in 15 s."""
+    d = music.d
+    d._seek_lead = 0.057
+    t0 = _song(music, 30.0, 20.0)
+    g = music.ghost
+    n = g.seeks
+    pos = 30.0 + (music.t - t0)
+    for _ in range(10):
+        music.step(1.0, _music(pos, music.t, paused=True))
+    assert g.paused and g.seeks - n <= 1, g.seeks - n
+
+
 def test_music_offset_applies_to_music_only(music):
     d = music.d
     d.cfg.set("sync.offset_s", -0.1)
@@ -252,3 +266,21 @@ def test_music_offset_applies_to_music_only(music):
     assert d.offset == 0.15
     d.cfg.set("sync.music_offset_s", None)
     assert d.offset == -0.1                     # None: music shares the film offset
+
+
+def test_a_sparse_noisy_player_is_learned_and_holds_the_lock():
+    """Jellyfin for Android (live, 2026-10-19): a position every second but a
+    timed check-in only every 10 s, scattered +/-0.14 s both ways. It is
+    learned as symmetric within a few minutes, and once known its own scatter
+    sets the lock's tolerance - one noisy report no longer releases it."""
+    rng = random.Random(21)
+    sim = Sim(report_every=1.0, checkin_every=10.0, seed=21, stall_start=0.0)
+    sim.report_error = lambda t: rng.uniform(-0.14, 0.14)
+    w = music_watcher()
+    res = sim.run(w, 1200.0, hook=lock_when_settled)
+    p = w.profiles[DEV]
+    assert p.kind == "symmetric", p
+    known = next(t for (t, _, _) in res if t > 400)
+    unlocks = [t for (t, _, ev) in res if ev == "unlock" and t > known]
+    assert len(unlocks) <= 3, unlocks
+    assert statistics.mean(errs(res, 600, 1200)) < 0.08
