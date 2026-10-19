@@ -44,6 +44,8 @@ SLOW_STEP_S = 2.0          # a loop step holding the lock longer than this is lo
 MUSIC_SEEK_COOLDOWN_S = 2.0
 MUSIC_SEEK_CHECK_S = 1.0    # a music seek is judged this long after it was sent
 MUSIC_SETTLE_S = 5.0        # ... once a file has played this long (before, seeks wait on the network)
+MUSIC_PRECISE_JITTER_S = 0.03  # a music player scattering less than this locks after LOCK_SETTLE_REPORTS ...
+MUSIC_NOISY_SETTLE_REPORTS = 6  # ... a noisier one after this many reports agree
 # time lock: engage once |drift| is this small ("0.0 s"), the
 # followed client has sent this many quiet reports since its last event ...
 LOCK_WINDOW_S = 0.02
@@ -1085,7 +1087,13 @@ class Daemon:
         and the client's position has been steady for a few reports."""
         if not self.params.time_lock or m.locked or target_held:
             return
-        if not m.settled(LOCK_SETTLE_REPORTS, LOCK_AGREE_S) or self._pending_seek or actions:
+        # Music holds a lock for the whole song (watcher._hold_music_lock), so it
+        # is only taken on a good estimate: a noisy player (Jellyfin for Android,
+        # +/-0.14 s per timed report) gets a few more reports to agree first.
+        settle = LOCK_SETTLE_REPORTS
+        if m.media_type == "music" and m.jitter >= MUSIC_PRECISE_JITTER_S:
+            settle = MUSIC_NOISY_SETTLE_REPORTS
+        if not m.settled(settle, LOCK_AGREE_S) or self._pending_seek or actions:
             return
         if gobs.pos is None or gobs.buffering or gobs.paused or now - g.last_seek_mono < 2.0:
             return

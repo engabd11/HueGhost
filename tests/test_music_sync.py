@@ -13,7 +13,7 @@ from hueghost import daemon as dm
 from hueghost.lockstep import GhostObs, Params, Seek, Speed, decide
 from hueghost.watcher import ReportProfile, SessionWatcher, SessionMatcher
 from tests.test_daemon_flow import MONO0, RunningGhost, _music, world  # noqa: F401  (fixture)
-from tests.test_watcher import DEV, Sim, errs, lock_when_settled
+from tests.test_watcher import DEV, Sim, errs, lock_when_settled, steps
 
 
 def sawtooth(period=90.0, slope=0.00244, phase=30.0):
@@ -145,15 +145,13 @@ def _replay_live(w):
 def test_the_live_recording_replays_without_chasing_the_sawtooth():
     w = music_watcher()
     events, locked = _replay_live(w)
+    # the player is still learned while the songs are held
     assert w.profiles[DEV].kind == "lagging"
-    learned = next(t for t, ev in events if ev == "lift")
-    assert learned < 200, "learned within the first song"
-    assert not [t for t, ev in events if ev == "unlock" and t > learned], events
-    # and with the profile saved from that run, the next session holds from the start
-    w2 = music_watcher(w.dump_profiles())
-    events2, locked2 = _replay_live(w2)
-    assert not [t for t, ev in events2 if ev == "unlock" and t > 15], events2
-    assert sum(locked2) / len(locked2) > 0.95
+    first = next(i for i, x in enumerate(locked) if x)
+    assert first * 0.25 < 20, "locked within the first seconds of the song"
+    # held for the whole song: nothing but the next song moves it
+    assert [ev for t, ev in events if ev not in ("new_item",)] == [], events
+    assert sum(locked) / len(locked) > 0.95
 
 
 # -- the lockstep: music never touches the tempo -------------------------------------
@@ -284,3 +282,55 @@ def test_a_sparse_noisy_player_is_learned_and_holds_the_lock():
     unlocks = [t for (t, _, ev) in res if ev == "unlock" and t > known]
     assert len(unlocks) <= 3, unlocks
     assert statistics.mean(errs(res, 600, 1200)) < 0.08
+
+
+# -- music: lock once per song, then leave it ------------------------------------------
+
+def _music_sim(seed, **kw):
+    sim = Sim(report_every=1.0, seed=seed, stall_start=0.0, **kw)
+    sim.media = "Audio"
+    return sim
+
+
+@pytest.mark.parametrize("player", ["camusic", "phone"])
+def test_a_locked_song_is_left_alone_until_the_player_does_something(player):
+    """Abdullah (2026-10-19): once a song is locked and confirmed, leave it -
+    both players run at the same speed. Steering by report scatter made the
+    lights look like they were chasing the song."""
+    rng = random.Random(31)
+    if player == "camusic":
+        sim = _music_sim(31)
+        sim.report_error = sawtooth()
+        w = music_watcher({DEV: {"kind": "lagging", "noise_s": 0.003, "lag_depth_s": 0.11}})
+    else:
+        sim = _music_sim(31, checkin_every=10.0)
+        sim.report_error = lambda t: rng.uniform(-0.14, 0.14)
+        w = music_watcher({DEV: {"kind": "symmetric", "noise_s": 0.09}})
+    locked_at = []
+    steps_after = []
+
+    def hook(obs):
+        m = obs.model
+        was = m.locked
+        lock_when_settled(obs, settle=3 if player == "camusic" else 6)
+        if m.locked and not was and not locked_at:
+            locked_at.append(m.position_at(MONO0))
+    res = sim.run(w, 900.0, hook=hook)
+    assert w.model.locked
+    after = [(t, ev) for (t, _, ev) in res if ev and t > 120]
+    assert after == [], after                    # no unlock, no lift, nothing
+    # held, the timeline runs at exactly 1.0x: no steps at all
+    assert max(steps(res, 120)) < 0.005
+
+
+def test_a_locked_song_still_follows_seeks_pauses_and_rebuffers():
+    sim = _music_sim(32, stall_seek=0.5)
+    sim.events += [(200.0, "seek", 1500.0), (300.0, "pause", 0), (310.0, "resume", 0),
+                   (400.0, "hiccup", 0.8)]
+    w = music_watcher({DEV: {"kind": "symmetric", "noise_s": 0.004}})
+    res = sim.run(w, 500.0, hook=lock_when_settled)
+    evs = [(round(t), ev) for (t, _, ev) in res if ev in ("seek", "pause", "resume", "resync")]
+    kinds = [ev for _, ev in evs]
+    assert kinds[:3] == ["seek", "pause", "resume"] and "resync" in kinds, evs
+    assert any(400 < t < 405 for t, ev in evs if ev == "resync"), evs
+    assert w.model.locked and statistics.mean(errs(res, 450, 500)) < 0.03

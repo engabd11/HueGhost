@@ -229,6 +229,7 @@ SHARP_NOISE_S = 0.03       # timed reports this consistent are steered by in ful
 ENVELOPE_WINDOW_S = 150.0  # a lagging player's envelope is the top of this much of its reports
 LAG_TOL_S = 0.4            # ... which sit at most this far under it, or the player re-buffered
 LAG_TOL_REPORTS = 2
+MUSIC_JUMP_S = 0.5          # a locked song only moves for a jump past this (twice running)
 LIFT_LOG_S = 0.05          # an envelope lift this big is worth a log line
 CLASSIFY_EVERY = 30        # steady timed reports between two looks at a player's profile
 CLASSIFY_SPAN_S = 40.0
@@ -495,6 +496,29 @@ class PlaybackModel:
                 self.profile.look(list(self.raw))
         return y
 
+    def _hold_music_lock(self, r: Report, report_mono: float, delta: float) -> str | None:
+        """Music, once locked, is left alone: both players run at 1.0x, so a
+        timeline confirmed at the start of a song stays right until the player
+        does something - a seek, pause, resume or the next song, which all
+        arrive as their own events. Report scatter (Jellyfin for Android,
+        +/-0.14 s) and a player's sawtooth (CAMusic-linux, 0.22 s) are not
+        news, and steering by them is what made the lights look as if they
+        were chasing the song (Abdullah, 2026-10-19). Only a jump no report
+        error explains - over MUSIC_JUMP_S, twice running: a re-buffer or a
+        scrub the player did not announce - starts over."""
+        self._take_raw(r, report_mono)      # still learning the player's profile
+        self.lock_residual = delta
+        if abs(delta) <= MUSIC_JUMP_S:
+            self.deep = 0
+            return None
+        self.deep += 1
+        if self.deep < LAG_TOL_REPORTS:
+            return None
+        self._anchor(r.pos + (self.profile.lag_depth_s if self.envelope else 0.0), report_mono)
+        self.new_stretch()
+        self.unlock()
+        return "resync"
+
     def _follow_envelope(self, r: Report, report_mono: float, pred: float, y: float) -> str | None:
         """A lagging player: the timeline is a 1.0x line through the top of
         its reports. Reports under it are the player's lag, not news - only a
@@ -587,6 +611,10 @@ class PlaybackModel:
                 # +/-0.25 s over tens of seconds, which is what kept releasing
                 # the time lock live. Only reports Jellyfin timed steer.
                 pass
+            elif self.locked and self.media_type == "music":
+                event = self._hold_music_lock(r, report_mono, delta)
+                self._debug(r, pred, delta, event)
+                return event
             elif self.envelope:
                 y = self._take_raw(r, report_mono)
                 event = self._follow_envelope(r, report_mono, pred, y)

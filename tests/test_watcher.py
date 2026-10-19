@@ -19,11 +19,11 @@ def iso(epoch: float) -> str:
     return dt.strftime("%Y-%m-%dT%H:%M:%S.") + "%07d" % (dt.microsecond * 10) + "Z"
 
 
-def session(pos: float, paused: bool, checkin_epoch: float | None, item="item1"):
+def session(pos: float, paused: bool, checkin_epoch: float | None, item="item1", media="Video"):
     return {
         "DeviceId": DEV, "DeviceName": "Living Room", "Client": "Moonfin for tvOS", "UserName": "abd",
         "LastPlaybackCheckIn": iso(checkin_epoch) if checkin_epoch else "0001-01-01T00:00:00.0000000Z",
-        "NowPlayingItem": {"Id": item, "Name": "Ep", "MediaType": "Video", "Type": "Episode",
+        "NowPlayingItem": {"Id": item, "Name": "Ep", "MediaType": media, "Type": "Episode",
                            "SeriesName": "Show", "ParentIndexNumber": 1, "IndexNumber": 2,
                            "RunTimeTicks": int(3600 * TICKS_PER_S)},
         "PlayState": {"PositionTicks": int(round(pos * TICKS_PER_S)), "IsPaused": paused,
@@ -51,6 +51,7 @@ class Sim:
         self.pos0 = 600.0
         self.t_start = 0.2   # the client sends its first (start) report here
         self.report_error = None   # f(t) -> seconds added to what the client reports at t
+        self.media = "Video"       # "Audio": the client plays music
 
     def truth(self, t: float) -> tuple[float, bool]:
         pos, paused, last_t = self.pos0, False, self.t_start
@@ -107,7 +108,8 @@ class Sim:
             if self.checkin_every:
                 ct = self.t_start + math.floor((rt - self.t_start) / self.checkin_every + 1e-9) * self.checkin_every
             checkin = ct + self.lat + LOCAL0 + self.off
-            obs = watcher.observe([session(pos_r, paused_r, checkin)], server_now, t + LOCAL0, t + MONO0)
+            obs = watcher.observe([session(pos_r, paused_r, checkin, media=self.media)], server_now,
+                                  t + LOCAL0, t + MONO0)
             if hook:
                 hook(obs)
             est = obs.model.position_at(t + MONO0)
