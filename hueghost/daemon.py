@@ -44,6 +44,7 @@ ENGINE_STOP_WAIT_S = 2.0
 SLOW_STEP_S = 2.0          # a loop step holding the lock longer than this is logged
 MUSIC_SEEK_COOLDOWN_S = 2.0
 MUSIC_SEEK_CHECK_S = 1.0    # a music seek is judged this long after it was sent
+MUSIC_SETTLE_S = 5.0        # ... once a file has played this long (before, seeks wait on the network)
 # time lock: engage once |drift| is this small ("0.0 s"), the
 # followed client has sent this many quiet reports since its last event ...
 LOCK_WINDOW_S = 0.02
@@ -205,10 +206,11 @@ class Daemon:
         # play (live: ~0.5 s - the old constant 0.25 opened every song behind),
         # and how far an exact seek lands short of where it was aimed
         self._swap_latency = min(max(float(cfg.get("sync.swap_latency_s", 0.5) or 0.5), 0.0), 3.0)
-        self._seek_lead = min(max(float(cfg.get("sync.music_seek_lead_s", 0.0) or 0.0), 0.0), 0.5)
+        self._seek_lead = min(max(float(cfg.get("sync.music_seek_lead_s", 0.0) or 0.0), 0.0), 0.3)
         self._music_learned = False
         self._swap_opened: tuple[float, float] | None = None   # (mono, pos) a swap opened at
         self._seek_check: float | None = None    # when to look where the last music seek landed
+        self._music_settled_at = float("-inf")  # music seeks before this (a file's first seconds) teach nothing
         self._ghost_audio_only = False
         self._stop = threading.Event()
         self._lock = threading.RLock()
@@ -544,8 +546,12 @@ class Daemon:
         elif act.event == "stalled":
             log.info("followed client still buffering at %.1fs", m.anchor_pos)
         elif act.event == "lift":
-            log.info("'%s' reports caught up %+.2fs (this player lags, then steps) -> timeline follows "
-                     "the top of its reports", _asc(m.name), m.last_lift)
+            if m.last_lift > 0:
+                log.info("'%s': the player's reports caught up %+.2fs (it lags, then steps) -> the "
+                         "timeline follows the top of its reports", _asc(m.name), m.last_lift)
+            else:
+                log.info("'%s': the top of the player's reports settled %+.2fs lower -> timeline "
+                         "follows it", _asc(m.name), m.last_lift)
         elif act.event == "unlock":
             log.info("time lock released: the client's reports sit %+.2fs off the locked timeline "
                      "-> correcting again", m.lock_residual or 0.0)
@@ -609,6 +615,7 @@ class Daemon:
         # closed at 4 % fast tempo over 17 s (live, 2026-10-19).
         self._pending_seek = not held
         self._swap_opened = None if held else (now, max(0.0, start))
+        self._music_settled_at = now + MUSIC_SETTLE_S
         log.info("'%s' playing on %s -> hot-swapping the track (lights stay on)",
                  _asc(m.name), _asc((act.binding or {}).get("name") or "?"))
         return True
@@ -839,6 +846,7 @@ class Daemon:
         self._launches.append(now)
         self._launch_mono = now
         self._guard_logged = False
+        self._music_settled_at = now + MUSIC_SETTLE_S
         self._engine_started = False
         self._pending_seek = False
         self._standby = None
@@ -978,7 +986,12 @@ class Daemon:
         target_held = m.paused or m.frozen(now)     # client paused, or on a still frame after a seek
         gobs = GhostObs(pos=g.pos, paused=g.paused, buffering=(g.buffering or g.stalled),
                         speed=g.speed, last_seek_mono=g.last_seek_mono)
-        force = self._pending_seek and g.has_position
+        if self._ghost_audio_only and getattr(g, "core_idle", False) and not g.paused:
+            # a song just loaded reports its position before it plays (live: 0.5 s
+            # before): a seek spent then is lost, and its cooldown holds the real
+            # correction back. Loading is buffering: wait until it really plays.
+            gobs.buffering = True
+        force = self._pending_seek and g.has_position and not gobs.buffering
         if self._ghost_audio_only:
             self._learn_music_latency(now, g, gobs, target, target_held)
         actions = decide(target, target_held, gobs, self._lock_params(m), now, force_seek=force)
@@ -987,7 +1000,10 @@ class Daemon:
         if self._ghost_audio_only and actions:
             # a music seek lands this much short of its aim (learned): aim past it
             actions = [Seek(a.pos + self._seek_lead) if isinstance(a, Seek) else a for a in actions]
-            if any(isinstance(a, Seek) for a in actions) and gobs.pos is not None:
+            # judged only in steady play: a seek in the first seconds of a file
+            # waits on the network (little is cached yet), and teaches nothing
+            if any(isinstance(a, Seek) for a in actions) and gobs.pos is not None \
+                    and abs(gobs.pos - target) < 0.5 and now >= self._music_settled_at:
                 self._seek_check = now + MUSIC_SEEK_CHECK_S
         if actions:
             g.apply(actions, now)
@@ -1022,10 +1038,11 @@ class Daemon:
         """Where a music swap or seek really landed, against where it was
         aimed: both are learned, so the next one lands on the beat."""
         steady = gobs.pos is not None and not held and not gobs.buffering and not gobs.paused
-        if self._swap_opened is not None and g.has_position:
+        if self._swap_opened is not None and (steady or now - self._swap_opened[0] >= 5.0):
+            # the first moment the new song really plays (loading counts as buffering)
             opened = self._swap_opened
             self._swap_opened = None
-            if steady and not getattr(g, "core_idle", False) and now - opened[0] < 5.0:
+            if steady and now - opened[0] < 5.0:
                 miss = gobs.pos - target        # < 0: it plays behind - the loadfile took longer
                 if abs(miss) < 2.0:
                     self._swap_latency = round(min(max(
@@ -1035,8 +1052,8 @@ class Daemon:
             self._seek_check = None
             if steady and now - g.last_seek_mono < 2 * MUSIC_SEEK_CHECK_S:
                 miss = gobs.pos - target
-                if abs(miss) < 0.3:
-                    self._seek_lead = round(min(max(self._seek_lead - 0.5 * miss, 0.0), 0.5), 3)
+                if abs(miss) < 0.2:
+                    self._seek_lead = round(min(max(self._seek_lead - 0.3 * miss, 0.0), 0.3), 3)
                     self._music_learned = True
 
     def _lock_params(self, m) -> Params:
