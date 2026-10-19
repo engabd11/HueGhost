@@ -50,6 +50,7 @@ class Sim:
         self.events: list[tuple[float, str, float]] = []   # (t, kind, value)
         self.pos0 = 600.0
         self.t_start = 0.2   # the client sends its first (start) report here
+        self.report_error = None   # f(t) -> seconds added to what the client reports at t
 
     def truth(self, t: float) -> tuple[float, bool]:
         pos, paused, last_t = self.pos0, False, self.t_start
@@ -100,6 +101,8 @@ class Sim:
             pos_r, paused_r = self.truth(rt)
             if self.quantize:
                 pos_r = math.floor(pos_r)
+            if self.report_error and not paused_r:
+                pos_r += self.report_error(rt)
             ct = rt
             if self.checkin_every:
                 ct = self.t_start + math.floor((rt - self.t_start) / self.checkin_every + 1e-9) * self.checkin_every

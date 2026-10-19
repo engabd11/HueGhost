@@ -2,6 +2,27 @@
 
 All notable changes to Hue Ghost. The newest release is first.
 
+- **2.12.0** - **Music stays in sync, and song starts land on the beat.** Hue
+  Ghost now learns how each player reports its position and syncs to the music
+  itself, not to the player's reports. A 15-minute recording of CAMusic-linux
+  showed its reports falling behind the audio by 2.4 ms every second and then
+  catching up 0.2 s at once, every 70 to 100 s. Hue Ghost used to follow that
+  sawtooth: it let go of the sync every half minute and sped the music up or
+  slowed it down by up to 4 %, which Hue Sync's music mode hears as a change
+  of tempo. Now:
+  - A player that lags like this is recognised within a song or two
+    (remembered in `sync.player_profiles`), and the timeline follows the top
+    of its reports at exactly 1.0x. In a replay of the recording, the lock was
+    released 0 times instead of 24.
+  - Music is corrected only by exact seeks of the silent copy, never by speed.
+  - A new song opens where the player really is: the delay before it plays is
+    learned (it was about 0.5 s, the old fixed guess was 0.25 s), and the
+    first position gets a seek. The opening seconds used to sit 0.4 to 0.5 s
+    behind for about 17 s.
+  - Music can have its own `sync.music_offset_s`; left empty, it uses the
+    film offset.
+  Players whose reports scatter evenly (Apple TV with Moonfin, Jellyfin's own
+  apps) are recognised as such and keep the existing filter.
 - **2.11.4** - **The lights go off when the music stops, even when Hue Sync was
   already syncing.** If Hue Sync was already syncing when a source wanted the
   lights (left running by a Hue Ghost that was closed by force, or started in

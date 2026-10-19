@@ -73,6 +73,13 @@ DEFAULTS: dict[str, Any] = {
         "music_pause_stop_s": 15.0,  # ... but only this many SECONDS for music (0 = never)
         "music_gap_s": 10.0,         # music: a client stopped this briefly between songs keeps the lights
         "stall_estimates": {},       # learned client buffering after seek/start/resume (auto-saved)
+        # Music (an audio-only ghost) - see watcher.ReportProfile. Nothing here
+        # needs tuning: profiles and latencies are learned and saved as they go.
+        "music_offset_s": None,      # None = offset_s; Hue Sync's own music latency, if it ever needs one
+        "music_seek_s": 0.04,        # music corrects by exact seeks beyond this drift, never by tempo
+        "player_profiles": {},       # learned per player: how its reports err (auto-saved)
+        "swap_latency_s": 0.5,       # learned: next song loadfile until it plays (auto-saved)
+        "music_seek_lead_s": 0.0,    # learned: how far a music seek lands short (auto-saved)
     },
     "ghost": {
         "mpv_path": "mpv",

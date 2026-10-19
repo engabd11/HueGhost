@@ -250,6 +250,114 @@ RESIDUAL_MAX_STEP = 0.25
 SHARP_NOISE_S = 0.03       # timed reports this consistent are steered by in full
 
 
+ENVELOPE_WINDOW_S = 150.0  # a lagging player's envelope is the top of this much of its reports
+LAG_TOL_S = 0.4            # ... which sit at most this far under it, or the player re-buffered
+LAG_TOL_REPORTS = 2
+LIFT_LOG_S = 0.05          # an envelope lift this big is worth a log line
+CLASSIFY_EVERY = 30        # steady timed reports between two looks at a player's profile
+CLASSIFY_SPAN_S = 40.0
+BIG_STEP_S = 0.05
+SAWTOOTH_RATIO = 12.0      # envelope depth over the per-report change, for a sawtooth
+NOISE_RATIO = 8.0          # ... and below this, plain symmetric noise
+PROFILE_VOTES = 2          # agreeing looks that settle (or flip) a player's kind
+
+
+def despike(ys: list[float]) -> list[float]:
+    """Drop single reports that jump away and straight back (CAMusic-linux
+    sends one a second off now and then: +1.0 s, then on the line again)."""
+    out = []
+    for i, y in enumerate(ys):
+        if 0 < i < len(ys) - 1:
+            a, b = y - ys[i - 1], ys[i + 1] - y
+            if abs(a) > BIG_STEP_S and abs(b) > BIG_STEP_S and (a > 0) != (b > 0) \
+                    and abs(a + b) < 0.5 * min(abs(a), abs(b)):
+                continue
+        out.append(y)
+    return out
+
+
+def envelope_top(ys: list[float]) -> float:
+    """The top of a lagging player's reports, as far as two reports in a row
+    agree on it: a tooth top is followed by reports just under it, a single
+    stray report is not - one alone never lifts the timeline."""
+    if len(ys) < 2:
+        return ys[-1]
+    return max(min(a, b) for a, b in zip(ys, ys[1:]))
+
+
+@dataclass
+class ReportProfile:
+    """How one player's position reports err - learned, kept per device.
+
+    ``symmetric``: reports scatter both ways around the truth (Moonfin, ~4 ms):
+    the median filter is right. ``lagging``: reports only ever fall behind and
+    then catch up in steps - CAMusic-linux forwards MPD's ``elapsed``, which
+    lost 2.44 ms/s and jumped +0.22 s every 70-100 s (live, 2026-10-19). Its
+    true position is the TOP of its reports; following the reports themselves
+    dragged the ghost up and down that sawtooth and released the time lock
+    every half minute."""
+    kind: str = "unknown"          # unknown | symmetric | lagging
+    noise_s: float = 0.0           # median change between two steady timed reports
+    lag_depth_s: float = 0.0       # mean gap under the envelope (lagging)
+    interval_s: float = 0.0        # report cadence
+    votes: int = 0                 # > 0 leans lagging, < 0 symmetric
+    changed: bool = False
+
+    @classmethod
+    def from_dict(cls, d) -> "ReportProfile":
+        p = cls()
+        if isinstance(d, dict):
+            if d.get("kind") in ("symmetric", "lagging"):
+                p.kind = d["kind"]
+                p.votes = PROFILE_VOTES if p.kind == "lagging" else -PROFILE_VOTES
+            for k in ("noise_s", "lag_depth_s", "interval_s"):
+                if isinstance(d.get(k), (int, float)):
+                    setattr(p, k, min(max(float(d[k]), 0.0), 5.0))
+        return p
+
+    def to_dict(self) -> dict:
+        return {"kind": self.kind, "noise_s": round(self.noise_s, 4),
+                "lag_depth_s": round(self.lag_depth_s, 3), "interval_s": round(self.interval_s, 2)}
+
+    def look(self, pts: list[tuple[float, float]]) -> None:
+        """One look at a steady stretch of ``(report_mono, raw)`` - ``raw`` is
+        the report against a fixed 1.0x line - and a vote on what it shows."""
+        if len(pts) < 8 or pts[-1][0] - pts[0][0] < CLASSIFY_SPAN_S:
+            return
+        ys = despike([y for _, y in pts])
+        ds = [b - a for a, b in zip(ys, ys[1:])]
+        step = max(statistics.median(abs(d) for d in ds), 0.001)
+        big = max(BIG_STEP_S, 6.0 * step)
+        up = sum(d for d in ds if d > big)
+        down = -sum(d for d in ds if d < -big)
+        depth = max(ys) - min(ys)
+        # a sawtooth also LOSES ground between its steps; steps up alone are
+        # only the clock-offset estimate getting better
+        decline = -sum(d for d in ds if abs(d) <= big)
+        before = (self.kind, self.noise_s, self.lag_depth_s)
+        vote = 0
+        if up > 0 and up >= 3.0 * down and depth / step >= SAWTOOTH_RATIO \
+                and decline >= max(BIG_STEP_S, 0.5 * up):
+            vote = 1
+        elif up == 0 and down == 0 and depth / step < NOISE_RATIO:
+            vote = -1
+        self.noise_s = round(0.7 * self.noise_s + 0.3 * step, 4) if self.noise_s else round(step, 4)
+        self.interval_s = round((pts[-1][0] - pts[0][0]) / (len(pts) - 1), 2)
+        if vote > 0:
+            top = envelope_top(ys)
+            gap = statistics.mean(top - y for y in ys if y <= top)
+            self.lag_depth_s = round(0.6 * self.lag_depth_s + 0.4 * gap, 3) if self.lag_depth_s else round(gap, 3)
+        if vote:
+            self.votes = max(-2 * PROFILE_VOTES, min(2 * PROFILE_VOTES, self.votes + vote))
+        kind = ("lagging" if self.votes >= PROFILE_VOTES else
+                "symmetric" if self.votes <= -PROFILE_VOTES else self.kind)
+        self.kind = kind
+        # worth saving: a new kind, or a value that really moved
+        if kind != before[0] or abs(self.noise_s - before[1]) > 0.002 \
+                or abs(self.lag_depth_s - before[2]) > 0.01:
+            self.changed = True
+
+
 class StallEstimator:
     """How long the followed client sits on a still frame after a seek / start /
     resume before its position actually advances (buffering). Learned per event
@@ -307,6 +415,22 @@ class PlaybackModel:
     residual: float | None = None          # recent report-vs-timeline gap (before correcting)
     noise: float = 0.0                     # spread (MAD) of recent residuals: this client's jitter
     precise: bool = False                  # reports are precisely timed (SessionWatcher.precise_timing)
+    # the player's learned report profile, and the steady stretch it is read
+    # from: (report_mono, raw), raw = report - a fixed 1.0x line from the
+    # stretch's first report. Events start a new stretch.
+    profile: ReportProfile | None = None
+    raw: deque = field(default_factory=deque)
+    raw_ref: tuple[float, float] | None = None     # (pos, mono) the 1.0x line starts at
+    since_look: int = 0
+    env_prior: float | None = None         # lag_depth assumed until the first real tooth top
+    deep: int = 0                          # reports in a row far under the envelope
+    last_lift: float = 0.0
+    env_gap: float | None = None           # latest report under the envelope (lagging)
+
+    @property
+    def envelope(self) -> bool:
+        """Steer by the top of the reports: a player known to lag."""
+        return self.profile is not None and self.profile.kind == "lagging"
 
     # -- queries ---------------------------------------------------------------------
     def position_at(self, now_mono: float) -> float:
@@ -348,7 +472,73 @@ class PlaybackModel:
         self.stall_pos = float(pos)
         self.stall_report_mono = report_mono
         self.residuals.clear()
+        self.new_stretch()
         self.unlock()
+
+    def new_stretch(self) -> None:
+        """A seek, pause, resume or re-buffer: the reports start a new line."""
+        self.raw.clear()
+        self.raw_ref = None
+        self.since_look = 0
+        self.deep = 0
+        self.env_prior = None
+
+    def _take_raw(self, r: Report, report_mono: float) -> float:
+        if self.raw_ref is None:
+            self.raw_ref = (r.pos, report_mono)
+            if self.envelope and self.profile.lag_depth_s > 0:
+                # a fresh line starts somewhere on the sawtooth: assume the
+                # average depth until a tooth top shows where the audio is
+                self.env_prior = self.profile.lag_depth_s
+        y = r.pos - self.raw_ref[0] - (report_mono - self.raw_ref[1])
+        self.raw.append((report_mono, y))
+        while self.raw and report_mono - self.raw[0][0] > ENVELOPE_WINDOW_S:
+            self.raw.popleft()
+        if self.env_prior is not None and len(self.raw) >= 3 and \
+                (min(y, self.raw[-2][1]) - self.raw[-3][1] > BIG_STEP_S
+                 or report_mono - self.raw[0][0] >= ENVELOPE_WINDOW_S - 1):
+            self.env_prior = None     # a real tooth top: the envelope speaks for itself now
+        if self.profile is not None:
+            self.since_look += 1
+            if self.since_look >= CLASSIFY_EVERY:
+                self.since_look = 0
+                self.profile.look(list(self.raw))
+        return y
+
+    def _follow_envelope(self, r: Report, report_mono: float, pred: float, y: float) -> str | None:
+        """A lagging player: the timeline is a 1.0x line through the top of
+        its reports. Reports under it are the player's lag, not news - only a
+        tooth top moves it (``lift``), and a lock survives that."""
+        top = envelope_top([v for _, v in self.raw])
+        if self.env_prior is not None:
+            top = max(top, self.env_prior)
+        gap = y - top
+        self.env_gap = gap
+        noise = self.profile.noise_s if self.profile else 0.0
+        self.noise = noise
+        if gap < -max(LAG_TOL_S, 4.0 * noise):
+            self.deep += 1
+            if self.deep >= LAG_TOL_REPORTS:
+                # far under, and staying there: the audio really fell behind
+                # (a re-buffer the player did not report) - start over from it
+                self._anchor(r.pos, report_mono)
+                self.new_stretch()
+                self.unlock()
+                return "resync"
+            return None
+        self.deep = 0
+        line = self.raw_ref[0] + (report_mono - self.raw_ref[1]) + top
+        lift = line - pred
+        self.steady_reports += 1
+        self.residual = lift
+        self._anchor(line, report_mono)
+        if self.locked:
+            self.lock_residual = gap
+        if abs(lift) >= LIFT_LOG_S and len(self.raw) > 1:   # (the first point only places the line)
+            self.last_lift = lift
+            return "lift"
+        return None
+
 
     def apply(self, r: Report, report_mono: float, jitter_tol: float, timed: bool = True) -> str | None:
         """Fold a (new) report in. Returns an event name or None.
@@ -372,6 +562,7 @@ class PlaybackModel:
             self.paused = True
             self.stall_kind = None
             self._anchor(r.pos, report_mono)
+            self.new_stretch()
             event = "pause"
         elif not r.paused and self.paused:
             self.paused = False
@@ -406,7 +597,13 @@ class PlaybackModel:
                 # +/-0.25 s over tens of seconds, which is what kept releasing
                 # the time lock live. Only reports Jellyfin timed steer.
                 pass
+            elif self.envelope:
+                y = self._take_raw(r, report_mono)
+                event = self._follow_envelope(r, report_mono, pred, y)
+                self._debug(r, pred, delta, event)
+                return event
             else:
+                self._take_raw(r, report_mono)
                 # steady state: the rate is exactly 1.0, only the intercept is
                 # uncertain - correct it slowly from the median residual so
                 # per-report position jitter does not reach the ghost
@@ -439,7 +636,7 @@ class PlaybackModel:
                     corr = max(-RESIDUAL_MAX_STEP, min(RESIDUAL_MAX_STEP, med)) * RESIDUAL_GAIN
                 self._anchor(pred + corr, report_mono)
                 self.residuals = deque((x - corr for x in self.residuals), maxlen=RESIDUAL_WINDOW)
-        if event and event != "unlock":
+        if event and event not in ("unlock", "lift"):
             self.unlock()
         self._debug(r, pred, delta, event)
         return event
@@ -478,6 +675,7 @@ class SessionWatcher:
         self.last_error: str | None = None
         # time lock also times reports properly: see _report_time
         self.precise_timing = False
+        self.profiles: dict[str, ReportProfile] = {}   # per device id, learned (sync.player_profiles)
         self._last_checkin: float | None = None
         self._timed = True             # whether the last report's time is known precisely
 
@@ -514,8 +712,13 @@ class SessionWatcher:
             # playback that just appeared (not: the daemon started mid-movie)
             # is a fresh start: the client reports its position, then buffers
             just_started = prev_poll is not None and not was_playing and (now_mono - report_mono) < 3.0
+            self.model.profile = self.profile_for(r.device_id)
             if just_started and not r.paused:
                 self.model.begin_stall("start", r.pos, report_mono)
+            if self.model.envelope and not r.paused:
+                # a lagging player's first report of a song is somewhere on its
+                # sawtooth: open where its audio is on average, not on the report
+                self.model.anchor_pos += self.model.profile.lag_depth_s
             self.model.last_debug = "report #1 pos=%.2f age=%.2fs%s" % (
                 r.pos, now_mono - report_mono, " (start stall %.1fs)" % self.stalls.predict("start") if just_started else "")
             return Observation(True, True, self.model, "new_item", r, stale, player=who)
@@ -556,6 +759,28 @@ class SessionWatcher:
         lo = prev_poll if prev_poll is not None else now_mono - self.poll_interval
         age = min(max(age, 0.0), max(0.0, now_mono - lo))
         return now_mono - age, False
+
+    def profile_for(self, device_id: str | None) -> ReportProfile | None:
+        if not device_id:
+            return None
+        p = self.profiles.get(device_id)
+        if p is None:
+            p = self.profiles[device_id] = ReportProfile()
+        return p
+
+    def load_profiles(self, saved) -> None:
+        if isinstance(saved, dict):
+            for dev, d in saved.items():
+                if isinstance(dev, str) and dev:
+                    self.profiles[dev] = ReportProfile.from_dict(d)
+
+    def profiles_changed(self) -> bool:
+        return any(p.changed for p in self.profiles.values())
+
+    def dump_profiles(self) -> dict:
+        for p in self.profiles.values():
+            p.changed = False
+        return {dev: p.to_dict() for dev, p in self.profiles.items() if p.kind != "unknown" or p.noise_s}
 
     # -- I/O wrapper ------------------------------------------------------
     def poll(self, client: JellyfinClient) -> Observation:

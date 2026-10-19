@@ -47,6 +47,7 @@ class JellyfinSource(Source):
             poll_interval_s=float(self.cfg.get("jellyfin.poll_interval_s", 0.5)),
             stall_priors=self.cfg.get("sync.stall_estimates") or None)
         w.precise_timing = bool(self.cfg.get("sync.time_lock", False))
+        w.load_profiles(self.cfg.get("sync.player_profiles"))
         w.players.pause_yield_s = pause_yield_limits(self.cfg)
         return w
 

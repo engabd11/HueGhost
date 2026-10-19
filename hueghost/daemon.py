@@ -42,7 +42,8 @@ IDLE, GHOSTING, SYNCING, STANDBY = "idle", "ghosting", "syncing", "standby"
 TICK_S = 0.25
 ENGINE_STOP_WAIT_S = 2.0
 SLOW_STEP_S = 2.0          # a loop step holding the lock longer than this is logged
-SWAP_LATENCY_S = 0.25       # a music swap (loadfile in a running mpv) until the new song plays (live: 0.1-0.4 s)
+MUSIC_SEEK_COOLDOWN_S = 2.0
+MUSIC_SEEK_CHECK_S = 1.0    # a music seek is judged this long after it was sent
 # time lock: engage once |drift| is this small ("0.0 s"), the
 # followed client has sent this many quiet reports since its last event ...
 LOCK_WINDOW_S = 0.02
@@ -200,6 +201,14 @@ class Daemon:
         self._stalls_saved_mono = float("-inf")
         self._startup_latency = 1.0   # EMA of launch -> first time-pos
         self._launch_mono = 0.0
+        # music, learned and saved: how long the next song's loadfile takes to
+        # play (live: ~0.5 s - the old constant 0.25 opened every song behind),
+        # and how far an exact seek lands short of where it was aimed
+        self._swap_latency = min(max(float(cfg.get("sync.swap_latency_s", 0.5) or 0.5), 0.0), 3.0)
+        self._seek_lead = min(max(float(cfg.get("sync.music_seek_lead_s", 0.0) or 0.0), 0.0), 0.5)
+        self._music_learned = False
+        self._swap_opened: tuple[float, float] | None = None   # (mono, pos) a swap opened at
+        self._seek_check: float | None = None    # when to look where the last music seek landed
         self._ghost_audio_only = False
         self._stop = threading.Event()
         self._lock = threading.RLock()
@@ -252,6 +261,7 @@ class Daemon:
         """Rebuild after a config change, carrying the learned client buffering
         over - it is expensive to relearn and has nothing to do with bindings."""
         stalls = getattr(self.watcher, "stalls", None)
+        profiles = getattr(self.watcher, "profiles", None)
         old = self._jelly
         self.sources.close()
         self.sources = build_sources(self.cfg,
@@ -260,6 +270,8 @@ class Daemon:
         s = self._jelly
         if s is not None and stalls is not None:
             s.watcher.stalls = stalls
+        if s is not None and profiles:
+            s.watcher.profiles.update(profiles)
 
     def _start_control(self) -> None:
         c = self.cfg.section("control")
@@ -391,6 +403,12 @@ class Daemon:
 
     @property
     def offset(self) -> float:
+        """The film offset - or, while a music ghost plays, the music one
+        (its own path: no picture, Hue Sync's audio analysis instead)."""
+        if self._ghost_audio_only:
+            mo = self.cfg.get("sync.music_offset_s")
+            if isinstance(mo, (int, float)):
+                return float(mo)
         return float(self.cfg.get("sync.offset_s", 0.0))
 
     # -- polling the followed session --------------------------------------------
@@ -525,6 +543,9 @@ class Daemon:
                 log.info("client resumed earlier/later than predicted -> resync to %.1fs", m.position_at(now))
         elif act.event == "stalled":
             log.info("followed client still buffering at %.1fs", m.anchor_pos)
+        elif act.event == "lift":
+            log.info("'%s' reports caught up %+.2fs (this player lags, then steps) -> timeline follows "
+                     "the top of its reports", _asc(m.name), m.last_lift)
         elif act.event == "unlock":
             log.info("time lock released: the client's reports sit %+.2fs off the locked timeline "
                      "-> correcting again", m.lock_residual or 0.0)
@@ -567,9 +588,9 @@ class Daemon:
         if self._ghost_binding != ((act.binding or {}).get("id") or None):
             return False              # a different binding won: give it a fresh ghost
         # open the new file where the client is by the time it plays: no
-        # process to start, a loadfile plays in 0.1-0.4 s (live, 2026-10-19)
+        # process to start, only a loadfile - whose latency is learned
         held = m.paused or m.frozen(now)
-        start = m.position_at(now) + self.offset + (0.0 if held else SWAP_LATENCY_S)
+        start = m.position_at(now) + self.offset + (0.0 if held else self._swap_latency)
         if m.runtime_s:
             start = min(start, max(0.0, m.runtime_s - 1.0))
         if not g.alive() or not g.swap(spec.url, start=max(0.0, start)):
@@ -582,9 +603,12 @@ class Daemon:
         self._paused_since = None
         if self._standby is not None:
             self._lights_on("the next track is here")
-        # it opened on the anchor already: a forced seek on top of that is an
-        # audible stutter for a tenth of a second; the lockstep nudges the rest
-        self._pending_seek = False
+        # Land the song exactly, at once: the first position mpv reports gets a
+        # seek to the target. Nobody hears the music ghost, so the seek costs
+        # nothing - while leaving the rest to the lockstep cost a 0.5 s start
+        # closed at 4 % fast tempo over 17 s (live, 2026-10-19).
+        self._pending_seek = not held
+        self._swap_opened = None if held else (now, max(0.0, start))
         log.info("'%s' playing on %s -> hot-swapping the track (lights stay on)",
                  _asc(m.name), _asc((act.binding or {}).get("name") or "?"))
         return True
@@ -705,17 +729,34 @@ class Daemon:
             self._launches.clear()
 
     def _persist_stalls(self, now: float) -> None:
+        """Save what was learned about the clients: their buffering, how their
+        reports err (player profiles) and the music ghost's own latencies."""
         st = self.watcher.stalls
-        if not st.changed or now - self._stalls_saved_mono < 60 or not self.cfg.path:
+        w = self.watcher
+        profiles = hasattr(w, "profiles_changed") and w.profiles_changed()
+        if not (st.changed or profiles or self._music_learned) \
+                or now - self._stalls_saved_mono < 60 or not self.cfg.path:
             return
-        st.changed = False
         self._stalls_saved_mono = now
-        self.cfg.set("sync.stall_estimates", dict(st.est))
+        said = []
+        if st.changed:
+            st.changed = False
+            self.cfg.set("sync.stall_estimates", dict(st.est))
+            said.append("client buffering %s" % {k: round(v, 1) for k, v in st.est.items()})
+        if profiles:
+            dump = w.dump_profiles()
+            self.cfg.set("sync.player_profiles", dump)
+            said.append("players %s" % ", ".join("%s %s" % (dev[:12], p["kind"]) for dev, p in dump.items()))
+        if self._music_learned:
+            self._music_learned = False
+            self.cfg.set("sync.swap_latency_s", round(self._swap_latency, 3))
+            self.cfg.set("sync.music_seek_lead_s", round(self._seek_lead, 3))
+            said.append("music swap %.2fs, seek lead %.3fs" % (self._swap_latency, self._seek_lead))
         try:
             self.cfg.save()
-            log.info("learned client buffering: %s", {k: round(v, 1) for k, v in st.est.items()})
+            log.info("learned: %s", "; ".join(said))
         except OSError as e:
-            log.warning("could not persist stall estimates: %s", e)
+            log.warning("could not persist what was learned: %s", e)
 
     def _maybe_launch(self, now: float, act) -> None:
         obs = act.obs
@@ -938,9 +979,16 @@ class Daemon:
         gobs = GhostObs(pos=g.pos, paused=g.paused, buffering=(g.buffering or g.stalled),
                         speed=g.speed, last_seek_mono=g.last_seek_mono)
         force = self._pending_seek and g.has_position
+        if self._ghost_audio_only:
+            self._learn_music_latency(now, g, gobs, target, target_held)
         actions = decide(target, target_held, gobs, self._lock_params(m), now, force_seek=force)
         if force:
             self._pending_seek = False
+        if self._ghost_audio_only and actions:
+            # a music seek lands this much short of its aim (learned): aim past it
+            actions = [Seek(a.pos + self._seek_lead) if isinstance(a, Seek) else a for a in actions]
+            if any(isinstance(a, Seek) for a in actions) and gobs.pos is not None:
+                self._seek_check = now + MUSIC_SEEK_CHECK_S
         if actions:
             g.apply(actions, now)
             for a in actions:
@@ -970,10 +1018,39 @@ class Daemon:
                          s["p95_abs"], s["max_abs"], s["mean"], s["seeks"], s["nudge_ticks"], s["n"],
                          " locked %d/%d" % (s["locked_ticks"], s["n"]) if self.params.time_lock else "")
 
+    def _learn_music_latency(self, now: float, g, gobs: GhostObs, target: float, held: bool) -> None:
+        """Where a music swap or seek really landed, against where it was
+        aimed: both are learned, so the next one lands on the beat."""
+        steady = gobs.pos is not None and not held and not gobs.buffering and not gobs.paused
+        if self._swap_opened is not None and g.has_position:
+            opened = self._swap_opened
+            self._swap_opened = None
+            if steady and not getattr(g, "core_idle", False) and now - opened[0] < 5.0:
+                miss = gobs.pos - target        # < 0: it plays behind - the loadfile took longer
+                if abs(miss) < 2.0:
+                    self._swap_latency = round(min(max(
+                        0.7 * self._swap_latency + 0.3 * (self._swap_latency - miss), 0.0), 3.0), 3)
+                    self._music_learned = True
+        if self._seek_check is not None and now >= self._seek_check:
+            self._seek_check = None
+            if steady and now - g.last_seek_mono < 2 * MUSIC_SEEK_CHECK_S:
+                miss = gobs.pos - target
+                if abs(miss) < 0.3:
+                    self._seek_lead = round(min(max(self._seek_lead - 0.5 * miss, 0.0), 0.5), 3)
+                    self._music_learned = True
+
     def _lock_params(self, m) -> Params:
         """The lockstep parameters for this tick. With the time lock armed but
         not yet engaged the deadband narrows inside the lock window, so the
-        ghost converges to ~0 instead of stopping at the deadband's edge."""
+        ghost converges to ~0 instead of stopping at the deadband's edge.
+
+        Music never touches the tempo: exact seeks beyond ``sync.music_seek_s``."""
+        if self._ghost_audio_only:
+            if m.locked and not self.params.time_lock:
+                m.unlock()
+            band = max(0.01, float(self.cfg.get("sync.music_seek_s", 0.04) or 0.04))
+            return dataclasses.replace(self.params, speed_nudge=False, deadband_s=band,
+                                       seek_threshold_s=band, seek_cooldown_s=MUSIC_SEEK_COOLDOWN_S)
         if not self.params.time_lock:
             if m.locked:
                 m.unlock()
@@ -995,7 +1072,10 @@ class Daemon:
         if gobs.pos is None or gobs.buffering or gobs.paused or now - g.last_seek_mono < 2.0:
             return
         drift = gobs.pos - target
-        if abs(g.speed - 1.0) > 0.005 or abs(drift) > LOCK_WINDOW_S:
+        window = LOCK_WINDOW_S
+        if self._ghost_audio_only:      # music corrects by seeks: it sits within their band
+            window = max(window, float(self.cfg.get("sync.music_seek_s", 0.04) or 0.04))
+        if abs(g.speed - 1.0) > 0.005 or abs(drift) > window:
             return
         m.lock(self.params.time_lock_release_s)
         log.info("time lock engaged at drift %+.3fs ('%s' at %.1fs)", drift, _asc(m.name), m.position_at(now))
@@ -1121,6 +1201,15 @@ class Daemon:
                     "area_name": (obs.player.area_name if obs and obs.player else None),
                     "reports": m.reports if m else 0,
                     "stall_estimates": {k: round(v, 2) for k, v in self.watcher.stalls.est.items()},
+                    # how this player's reports err (learned): see watcher.ReportProfile
+                    "profile": (m.profile.to_dict() if (m and m.profile) else None),
+                    "envelope_gap_s": (round(m.env_gap, 3)
+                                       if (m and m.envelope and m.env_gap is not None) else None),
+                },
+                "music": {
+                    "offset_s": self.cfg.get("sync.music_offset_s"),
+                    "swap_latency_s": self._swap_latency,
+                    "seek_lead_s": self._seek_lead,
                 },
                 "ghost": {
                     "alive": bool(g and g.alive()),
