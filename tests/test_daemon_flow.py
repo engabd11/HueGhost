@@ -885,12 +885,13 @@ def test_a_tv_left_paused_hands_the_lights_to_a_phone_that_plays(world):
         return s
 
     world.step(1.0, [tv(True), phone()])
-    assert d.last_obs.report.device_id == tv_id           # paused, but first: holds its place
-    for _ in range(70):                                    # past the 1 min pause limit
-        world.step(1.0, [tv(True), phone()])
+    # 2.12: paused does not count while another plays - no pause limit to wait out
     assert d.last_obs.report.device_id == "s23"
     assert world.ghost is not None and world.ghost.item_id == "solarmax"
     assert world.engine_on
+    for _ in range(5):
+        world.step(1.0, [tv(False), phone()])            # the TV plays again: first in the list
+    assert d.last_obs.report.device_id == tv_id
 
 
 def test_a_paused_music_player_does_not_light_up_when_the_tv_stops(world):

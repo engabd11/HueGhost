@@ -19,11 +19,11 @@ def iso(epoch: float) -> str:
     return dt.strftime("%Y-%m-%dT%H:%M:%S.") + "%07d" % (dt.microsecond * 10) + "Z"
 
 
-def session(pos: float, paused: bool, checkin_epoch: float | None, item="item1"):
+def session(pos: float, paused: bool, checkin_epoch: float | None, item="item1", media="Video"):
     return {
         "DeviceId": DEV, "DeviceName": "Living Room", "Client": "Moonfin for tvOS", "UserName": "abd",
         "LastPlaybackCheckIn": iso(checkin_epoch) if checkin_epoch else "0001-01-01T00:00:00.0000000Z",
-        "NowPlayingItem": {"Id": item, "Name": "Ep", "MediaType": "Video", "Type": "Episode",
+        "NowPlayingItem": {"Id": item, "Name": "Ep", "MediaType": media, "Type": "Episode",
                            "SeriesName": "Show", "ParentIndexNumber": 1, "IndexNumber": 2,
                            "RunTimeTicks": int(3600 * TICKS_PER_S)},
         "PlayState": {"PositionTicks": int(round(pos * TICKS_PER_S)), "IsPaused": paused,
@@ -50,6 +50,8 @@ class Sim:
         self.events: list[tuple[float, str, float]] = []   # (t, kind, value)
         self.pos0 = 600.0
         self.t_start = 0.2   # the client sends its first (start) report here
+        self.report_error = None   # f(t) -> seconds added to what the client reports at t
+        self.media = "Video"       # "Audio": the client plays music
 
     def truth(self, t: float) -> tuple[float, bool]:
         pos, paused, last_t = self.pos0, False, self.t_start
@@ -100,11 +102,14 @@ class Sim:
             pos_r, paused_r = self.truth(rt)
             if self.quantize:
                 pos_r = math.floor(pos_r)
+            if self.report_error and not paused_r:
+                pos_r += self.report_error(rt)
             ct = rt
             if self.checkin_every:
                 ct = self.t_start + math.floor((rt - self.t_start) / self.checkin_every + 1e-9) * self.checkin_every
             checkin = ct + self.lat + LOCAL0 + self.off
-            obs = watcher.observe([session(pos_r, paused_r, checkin)], server_now, t + LOCAL0, t + MONO0)
+            obs = watcher.observe([session(pos_r, paused_r, checkin, media=self.media)], server_now,
+                                  t + LOCAL0, t + MONO0)
             if hook:
                 hook(obs)
             est = obs.model.position_at(t + MONO0)
@@ -420,3 +425,12 @@ def test_name_only_bindings_never_take_a_claimed_device():
     assert players.pick([_sess("camusic-linux", "Android", "Camusic linux")]) == (None, None)
     other = _sess("pixel-1", "Android", "Jellyfin")
     assert players.pick([other])[0] is other
+
+
+def test_a_form_encoded_device_name_still_matches_by_name():
+    """Jellyfin for Android 2.7.3 reports "Abdullah's+S23" and a shortened
+    device id (live, 2026-10-19): the binding saved earlier must still find it."""
+    m = SessionMatcher(device_id="fa9d65da834b107fa169025a-c30f-4a91-9ad1-834e8efe9b2a",
+                       name_contains="Abdullah's S23")
+    s = _sess("fa9d65da834b107f", "Abdullah's+S23", "Jellyfin for Android")
+    assert m.pick([s]) is s

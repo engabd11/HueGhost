@@ -58,6 +58,10 @@ class Params:
     seek_cooldown_s: float = 3.0
     time_lock: bool = True             # hold the timeline once drift reaches 0
     time_lock_release_s: float = 0.02  # ... until the client's timed reports disagree by this much
+    # False: never change speed, correct beyond the deadband by exact seeks.
+    # For music, speed is tempo - Hue Sync's beat tracking hears a 4 % nudge
+    # for as long as it lasts - and nobody hears the ghost's seeks.
+    speed_nudge: bool = True
 
     @classmethod
     def from_config(cls, cfg) -> "Params":
@@ -88,7 +92,10 @@ def decide(target_pos: float, target_paused: bool, ghost: GhostObs, p: Params,
     if target_paused:
         if not ghost.paused:
             actions.append(Pause())
-        if ghost.pos is not None and abs(ghost.pos - target_pos) >= p.seek_threshold_s:
+        # seek-only mode has a tiny threshold: honour the cooldown, or a ghost
+        # that lands a hair off is sent there again on every tick
+        settle_ok = p.speed_nudge or (now_mono - ghost.last_seek_mono) >= p.seek_cooldown_s
+        if ghost.pos is not None and abs(ghost.pos - target_pos) >= p.seek_threshold_s and settle_ok:
             actions.append(Seek(target_pos))      # align while paused so resume is clean
         if abs(ghost.speed - 1.0) > 1e-6:
             actions.append(Speed(1.0))
@@ -118,6 +125,13 @@ def decide(target_pos: float, target_paused: bool, ghost: GhostObs, p: Params,
         actions.append(Seek(target_pos))
         if abs(ghost.speed - 1.0) > 1e-6:
             actions.append(Speed(1.0))
+        return actions
+
+    if not p.speed_nudge:
+        if abs(ghost.speed - 1.0) > 1e-6:
+            actions.append(Speed(1.0))
+        if abs(drift) > p.deadband_s and cooldown_ok:
+            actions.append(Seek(target_pos))
         return actions
 
     want = speed_for(drift, p)
