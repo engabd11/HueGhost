@@ -613,6 +613,14 @@ class HueSyncEngine(Engine):
             if self._send(ws, "start_sync", build_command("start_sync")):
                 self._started_by_us = True
             return                       # mode/intensity only apply to a live session
+        if not self._started_by_us:
+            # Already syncing when a source of ours wanted the lights: one left
+            # running by a Hue Ghost that was killed, or started by the app
+            # itself. We drive it from here on, so it is ours to stop - left
+            # "not ours", it stayed on after the music had ended, holding the
+            # area for good.
+            log.info("Hue Sync was already syncing - taking that session over")
+            self._started_by_us = True
         if want_mode and st.mode != want_mode:
             self._send(ws, "set_app_mode", build_command("set_app_mode", mode=want_mode),
                        value=want_mode)
