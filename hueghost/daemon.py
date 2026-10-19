@@ -41,6 +41,7 @@ IDLE, GHOSTING, SYNCING, STANDBY = "idle", "ghosting", "syncing", "standby"
 TICK_S = 0.25
 ENGINE_STOP_WAIT_S = 2.0
 SLOW_STEP_S = 2.0          # a loop step holding the lock longer than this is logged
+BINDING_FIELDS = ("area_id", "mode", "intensity", "use_audio")  # what /set may change per source
 MUSIC_SEEK_COOLDOWN_S = 2.0
 MUSIC_SEEK_CHECK_S = 1.0    # a music seek is judged this long after it was sent
 MUSIC_SETTLE_S = 5.0        # ... once a file has played this long (before, seeks wait on the network)
@@ -209,6 +210,8 @@ class Daemon:
         self._swap_latency = min(max(float(cfg.get("sync.swap_latency_s", 0.5) or 0.5), 0.0), 3.0)
         self._seek_lead = min(max(float(cfg.get("sync.music_seek_lead_s", 0.0) or 0.0), 0.0), 0.3)
         self._music_learned = False
+        self._areas_cache: list[dict] | None = None
+        self._areas_read = float("-inf")
         self._swap_opened: tuple[float, float] | None = None   # (mono, pos) a swap opened at
         self._seek_check: float | None = None    # when to look where the last music seek landed
         self._music_settled_at = float("-inf")  # music seeks before this (a file's first seconds) teach nothing
@@ -1187,6 +1190,101 @@ class Daemon:
             log.info("binding '%s' %s", hit["name"] or hit["id"], "on" if on else "off")
         return {"id": hit["id"], "enabled": bool(on)}
 
+    def _find_binding(self, binds: list[dict], key: str) -> dict:
+        want = str(key or "").strip().lower()
+        hit = next((b for b in binds if b["id"].lower() == want), None) or \
+            next((b for b in binds if (b["name"] or "").lower() == want), None)
+        if hit is None:
+            raise ValueError("no binding %r (have: %s)" % (key, ", ".join(b["id"] for b in binds)))
+        return hit
+
+    def set_binding_fields(self, key: str, fields: dict) -> dict:
+        """Change one source's entertainment area, mode or intensity (Home
+        Assistant, per source). "" hands the choice back: the area Hue Sync is
+        on, the global mode or intensity. The playing source's plan changes
+        with it, so the lights follow at once."""
+        binds = self.cfg.bindings()
+        hit = self._find_binding(binds, key)
+        if "area_id" in fields:
+            aid = str(fields["area_id"] or "")
+            if aid:
+                area = next((a for a in self.areas() if aid in (a["id"], a["name"])), None)
+                if area is None:
+                    raise ValueError("no entertainment area %r (have: %s)"
+                                     % (aid, ", ".join(a["name"] for a in self.areas())))
+                hit["area_id"], hit["area_name"] = area["id"], area["name"]
+            else:
+                hit["area_id"], hit["area_name"] = "", ""
+        for field, allowed in (("mode", MODES), ("intensity", INTENSITIES)):
+            if field in fields:
+                v = str(fields[field] or "").lower()
+                if v and v not in allowed:
+                    raise ValueError("%s must be one of %s, or empty" % (field, ", ".join(allowed)))
+                hit[field] = v
+        if "use_audio" in fields:
+            hit["use_audio"] = _tri_state(fields["use_audio"])
+        self.cfg.set_bindings(binds)
+        if self.cfg.path:
+            try:
+                self.cfg.save()
+            except OSError as e:
+                log.warning("could not persist bindings: %s", e)
+        self._rebuild_sources()
+        log.info("binding '%s': %s", _asc(hit["name"] or hit["id"]),
+                 ", ".join("%s %s" % (k, hit.get(k) or "(default)") for k in fields))
+        return {"id": hit["id"], **{k: hit.get(k) for k in fields}}
+
+    def set_pin(self, key) -> dict:
+        """Pick the source to sync now (Home Assistant's "Sync source"): it goes
+        first whenever it plays, ahead of the list order, and the others still
+        sync while it does not play. None or "" = the list order."""
+        pin = ""
+        if key:
+            hit = self._find_binding(self.cfg.bindings(), str(key))
+            if not hit["enabled"]:
+                self.set_binding_enabled(hit["id"], True)   # picking a source that is off turns it on
+            pin = hit["id"]
+        if (self.cfg.get("sync.pin") or "") != pin:
+            self.cfg.set("sync.pin", pin)
+            if self.cfg.path:
+                try:
+                    self.cfg.save()
+                except OSError as e:
+                    log.warning("could not persist the source pick: %s", e)
+            self._rebuild_sources()
+            log.info("sync source: %s", ("'%s' first whenever it plays" % pin) if pin else "list order")
+        return {"pin": pin or None}
+
+    def areas(self) -> list[dict]:
+        """The entertainment areas Hue Sync knows, re-read at most every 30 s
+        (it is a file read, and /status is polled every few seconds)."""
+        now = time.monotonic()
+        if self._areas_cache is None or now - self._areas_read >= 30.0:
+            try:
+                self._areas_cache = [{"id": a["id"], "name": a["name"]} for a in (self.engine.areas() or [])]
+            except Exception:
+                self._areas_cache = self._areas_cache or []
+            self._areas_read = now
+        return list(self._areas_cache)
+
+    def settings(self) -> dict:
+        """Every tunable a remote control (Home Assistant) shows, as it is now."""
+        g = self.cfg.section("ghost")
+        return {
+            "offset_s": float(self.cfg.get("sync.offset_s", 0.0)),
+            "music_offset_s": self.cfg.get("sync.music_offset_s"),
+            "lights_off_delay_s": self.lights_off_delay,
+            "idle_stop_delay_s": float(self.cfg.get("sync.idle_stop_delay_s", 10.0)),
+            "music_gap_s": float(self.cfg.get("sync.music_gap_s", 10.0) or 0.0),
+            "music_pause_stop_s": float(self.cfg.get("sync.music_pause_stop_s", 15.0) or 0.0),
+            "pause_stop_min": float(self.cfg.get("sync.pause_stop_min", 0.0) or 0.0),
+            "time_lock": bool(self.params.time_lock),
+            "keep_awake": self.keep_awake_mode(),
+            "pixel_shift_min": float(g.get("pixel_shift_min", 0.0) or 0.0),
+            "blackout_idle_min": float(g.get("blackout_idle_min", 0.0) or 0.0),
+            "manage_area": bool(self.cfg.get("engine.huesync.manage_area", True)),
+        }
+
     def status(self) -> dict:
         with self._lock:
             obs = self.last_obs
@@ -1291,6 +1389,11 @@ class Daemon:
                 "use_audio": self.cfg.get("engine.huesync.use_audio"),
                 "manage_area": bool(self.cfg.get("engine.huesync.manage_area", True)),
                 "lights_off_delay_s": self.lights_off_delay,
+                # for remote controls: the source picked to sync now, the areas
+                # a source can be sent to, and every tunable as it stands
+                "pin": self.cfg.get("sync.pin") or None,
+                "areas": self.areas(),
+                "settings": self.settings(),
             }
 
     def _live(self, key: str, value: str | None, allowed: tuple) -> str | None:
@@ -1593,11 +1696,26 @@ class Daemon:
             if not 0 <= level <= 100:
                 raise ValueError("brightness must be 0-100")
             self.engine.set_brightness(level)
+        if "music_offset_s" in p:
+            v = p["music_offset_s"]
+            self.cfg.set("sync.music_offset_s", None if v is None or v == "" else round(float(v), 3))
+            changed = True
+        for key, lo, hi in (("music_gap_s", 0.0, 600.0), ("idle_stop_delay_s", 0.0, 3600.0)):
+            if key in p:
+                self.cfg.set("sync." + key, min(hi, max(lo, round(float(p[key]), 1))))
+                changed = True
+        if "pin" in p:
+            self.set_pin(p["pin"])
         if "binding" in p:
             b = p["binding"] or {}
             if not isinstance(b, dict) or "key" not in b:
-                raise ValueError('binding must be {"key": "<id>", "enabled": true|false}')
-            self.set_binding_enabled(str(b["key"]), bool(b.get("enabled", True)))
+                raise ValueError('binding must be {"key": "<id>", "enabled": true|false, '
+                                 '"area_id": ..., "mode": ..., "intensity": ...}')
+            fields = {k: b[k] for k in BINDING_FIELDS if k in b}
+            if fields:
+                self.set_binding_fields(str(b["key"]), fields)
+            if "enabled" in b or not fields:
+                self.set_binding_enabled(str(b["key"]), bool(b.get("enabled", True)))
         if changed:
             self._push_engine_prefs()
             if self.cfg.path:

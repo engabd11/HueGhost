@@ -2,6 +2,17 @@
 
 All notable changes to Hue Ghost. The newest release is first.
 
+- **2.13.0** - **Run Hue Ghost from Home Assistant.** Hue Synco 1.62 can now change almost
+  everything the app can, so a dashboard or the phone is a remote for the PC:
+  - **Sync source**: pick the source to sync now. It goes first whenever it plays, ahead
+    of the list order; the others still sync while it does not.
+  - Each source's **entertainment area**, **mode** and **intensity**.
+  - Every timing: film and music sync offsets, lights-off delay, standby time, the gap
+    between songs, the music and film pause limits and screen care, plus the time lock
+    and keeping the displays awake.
+  `/status` now reports `pin`, `areas` and a `settings` block with every one of them, and
+  `/set` takes `pin`, `music_offset_s`, `music_gap_s`, `idle_stop_delay_s` and per-source
+  `area_id`, `mode` and `intensity`.
 - **2.12.1** - **The first song of a session opens on your music offset.** The
   first music copy Hue Ghost started after a pause or a film used the film
   offset, then corrected itself with a jump a second later. Songs after the
