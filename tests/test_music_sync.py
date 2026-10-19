@@ -334,3 +334,24 @@ def test_a_locked_song_still_follows_seeks_pauses_and_rebuffers():
     assert kinds[:3] == ["seek", "pause", "resume"] and "resync" in kinds, evs
     assert any(400 < t < 405 for t, ev in evs if ev == "resync"), evs
     assert w.model.locked and statistics.mean(errs(res, 450, 500)) < 0.03
+
+
+def test_the_first_music_ghost_opens_on_the_music_offset(world, monkeypatch):  # noqa: F811
+    """2.12.0 opened a session's first music ghost on the FILM offset (the
+    daemon still thought of the ghost before it) and then seeked a second
+    later; only later songs, swapped in, used the music offset."""
+    d = world.d
+    d.cfg.set("ghost.audio_device", "{0.0.0.00000000}.{silent}")
+    d.cfg.set("sync.offset_s", -0.1)
+    d.cfg.set("sync.music_offset_s", 0.4)
+    starts = []
+
+    def launch(cfg_, url, hdr, start, item_id, err_path=None, **kw):
+        here = d.watcher.model.position_at(MONO0 + world.t) + d._startup_latency
+        starts.append(start - here)          # = the offset it was opened on
+        g = RunningGhost(item_id, lambda: MONO0 + world.t, start)
+        world.launched.append(g)
+        return g
+    monkeypatch.setattr(dm.GhostPlayer, "launch", staticmethod(launch))
+    world.step(1.0, _music(30.0, 0.5))
+    assert len(starts) == 1 and abs(starts[0] - 0.4) < 0.01, starts

@@ -2,6 +2,10 @@
 
 All notable changes to Hue Ghost. The newest release is first.
 
+- **2.12.1** - **The first song of a session opens on your music offset.** The
+  first music copy Hue Ghost started after a pause or a film used the film
+  offset, then corrected itself with a jump a second later. Songs after the
+  first were already right.
 - **2.12.0** - **Music stays in sync, and song starts land on the beat.** Hue
   Ghost now learns how each player reports its position and syncs to the music
   itself, not to the player's reports. A 15-minute recording of CAMusic-linux
