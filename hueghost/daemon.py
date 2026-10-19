@@ -408,7 +408,10 @@ class Daemon:
     def offset(self) -> float:
         """The film offset - or, while a music ghost plays, the music one
         (its own path: no picture, Hue Sync's audio analysis instead)."""
-        if self._ghost_audio_only:
+        return self.offset_for(self._ghost_audio_only)
+
+    def offset_for(self, music: bool) -> float:
+        if music:
             mo = self.cfg.get("sync.music_offset_s")
             if isinstance(mo, (int, float)):
                 return float(mo)
@@ -786,7 +789,10 @@ class Daemon:
             self._eof_item = None
         if self._pause_stopped == m.item_id and m.paused:
             return                  # stopped because it sat paused; wait for play
-        target = m.position_at(now) + self.offset
+        # the ghost about to launch decides the offset, not the one before it: a
+        # first music ghost used to open on the film offset and seek a second later
+        offset = self.offset_for(bool(spec is not None and spec.audio_only))
+        target = m.position_at(now) + offset
         runtime = m.runtime_s
         if runtime and target >= runtime - 0.5:
             # the track is already over: a phone that finished a song sits at
@@ -829,7 +835,7 @@ class Daemon:
                 return
         log.info("'%s' playing on %s -> ghost at %.1fs (offset %+.2fs, startup est %.2fs)",
                  _asc(m.name), _asc(obs.report.device_label if obs.report else "?"), start,
-                 self.offset, self._startup_latency)
+                 offset, self._startup_latency)
         extra = {"audio_only": True, "audio_device": spec.audio_device} if spec.audio_only else {}
         self._ghost_audio_only = bool(spec.audio_only)
         self._music_gap = False
