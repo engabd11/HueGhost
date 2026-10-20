@@ -2,6 +2,13 @@
 
 All notable changes to Hue Ghost. The newest release is first.
 
+- **2.13.2** - **A paused source no longer blocks the ones below it.** A player left paused
+  after its sync had stopped (music after 15 s, a film after its pause limit turned the lights
+  off) still counted as playing, so it kept first place in the list: CAMusic linux sitting
+  paused on a song stopped a YouTube video in Firefox from ever syncing. Once a paused source
+  has stopped, the next source that plays gets the lights at once. When the paused one plays
+  again it takes them back; a film relaunches its ghost if another source had them meanwhile.
+  With nothing else playing, a paused film still holds its ghost and resumes without a relaunch.
 - **2.13.1** - **Film and music sync offsets stay separate.** While music played, a film
   offset nudge (Home Assistant, the tray) was applied to the music offset in use and saved as
   the film offset. Nudges now always change the film offset, and while music still shares the

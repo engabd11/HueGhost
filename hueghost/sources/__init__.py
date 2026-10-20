@@ -100,6 +100,11 @@ class SourceSet:
         self.pin = pin or ""               # binding picked to sync now: wins whenever it plays
         self._held: str | None = None      # binding id currently driving the lights
         self._held_since = 0.0
+        # item whose lights the daemon turned off for sitting paused (or found
+        # paused with no ghost): while it stays paused it is not "playing" for
+        # the priority list, or a phone left on a paused song outranks a
+        # browser for ever
+        self.parked = ""
 
     def close(self) -> None:
         for s in self.sources:
@@ -126,10 +131,12 @@ class SourceSet:
         # the user's order across *all* bindings, not the order of the sources:
         # a game listed above the TV beats the TV
         acts.sort(key=_rank)
-        playing = [a for a in acts if a.playing]
+        playing = [a for a in acts if a.playing and not self._is_parked(a)]
         if not playing:
             self._held = None
-            return next((a for a in acts if a.seen), IDLE)
+            # a parked item still owns the lights' timers when nothing else plays
+            return next((a for a in acts if self._is_parked(a)), None) \
+                or next((a for a in acts if a.seen), IDLE)
         win = playing[0]
         # Switching binding restarts the Hue Sync app (a different area or
         # capture display), so a TV and a game alternating must not do it every
@@ -142,6 +149,12 @@ class SourceSet:
         if self._held != _bid(win):
             self._held, self._held_since = _bid(win), now
         return win
+
+    def _is_parked(self, a: Activity) -> bool:
+        if not self.parked or not a.needs_ghost or a.item_key != self.parked:
+            return False
+        m = a.obs.model if a.obs is not None else None
+        return bool(m is not None and m.paused)
 
 
 def _bid(a: Activity) -> str:

@@ -434,6 +434,7 @@ class Daemon:
         if pc is not None:
             pc.ignore_pid(self.ghost.proc.pid if (self.ghost and self.ghost.proc) else None,
                           *self.care.cover_pids())
+        self.sources.parked = self._pause_stopped or ""
         act = self.sources.poll(now)
         jelly = self._jelly
         if jelly is not None:
@@ -988,9 +989,11 @@ class Daemon:
                 self._paused_since = None
                 self.state = IDLE
                 return
-            log.info("client paused for %s -> lights off (ghost holds, resumes on play)",
+            log.info("client paused for %s -> lights off (ghost holds, resumes on play; "
+                     "another source may sync meanwhile)",
                      "%.0f s" % held if held < 120 else "%.0f min" % (held / 60.0))
             self._lights_off("paused", now)
+            self._pause_stopped = m.item_id     # its lights are off: free for the next source
 
         target = m.position_at(now) + self.offset
         target_held = m.paused or m.frozen(now)     # client paused, or on a still frame after a seek

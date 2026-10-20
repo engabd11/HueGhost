@@ -930,3 +930,67 @@ def test_a_paused_music_player_does_not_light_up_when_the_tv_stops(world):
     assert world.ghost is None and not world.engine_on and len(world.launched) == 1
     world.step(1.0, [music(False)])                      # it plays: now it lights up
     assert world.ghost is not None and world.ghost.item_id == "nightmoves" and world.engine_on
+
+
+def test_a_song_left_paused_frees_the_lights_for_a_browser_below_it(world):
+    """Live 2026-10-21: CAMusic linux paused Kong at 00:45 and its sync stopped,
+    but the session stayed open, paused - and as second in the list it kept
+    out-ranking the Web browsers source for good: YouTube in Firefox never
+    synced. Paused and already stopped is free for the next source."""
+    d = world.d
+    d.cfg.set("ghost.audio_device", "{0.0.0.00000000}.{silent}")
+    world.step(1.0, _music(30.0, 0.5))
+    world.step(2.0, _music(31.0, world.t, paused=True))
+    world.step(15.0, _music(31.0, world.t, paused=True))
+    assert world.ghost is None and not world.engine_on
+    browser = FakePcSource(Plan(area_id="office", mode="video", intensity="subtle"),
+                           bid="web-browsers", rank=99)
+    d.sources.sources.append(browser)
+    world.step(1.0, _music(31.0, world.t, paused=True))
+    assert d.last_act.binding["id"] == "web-browsers"
+    assert world.engine_on and d._plan_applied.area_id == "office"
+    # the song plays again: first in the list, it takes the lights back
+    browser._act = Activity(binding=browser._act.binding, seen=True, playing=False,
+                            needs_ghost=False, plan=browser._act.plan)
+    world.step(1.0, _music(31.0, world.t))
+    assert d.last_act.binding["id"] != "web-browsers" and world.ghost is not None
+
+
+def test_a_film_paused_past_its_limit_frees_the_lights_and_comes_back_on_play(world):
+    """The same for a film: once its pause limit turned the lights off, a
+    source below it that plays gets them; the film relaunches on play."""
+    d = world.d
+    d.cfg.set("sync.pause_stop_min", 1.0)
+    world.step(1.0, playing(100.0, 0.5))
+    world.step(1.0, playing(101.0, world.t, paused=True))
+    browser = FakePcSource(Plan(area_id="office", mode="video", intensity="subtle"),
+                           bid="web-browsers", rank=99)
+    d.sources.sources.append(browser)
+    world.step(10.0, playing(101.0, world.t, paused=True))
+    assert d.last_act.binding["id"] != "web-browsers", "a short pause keeps its place"
+    world.step(55.0, playing(101.0, world.t, paused=True))
+    world.step(1.0, playing(101.0, world.t, paused=True))
+    assert d.last_act.binding["id"] == "web-browsers"
+    assert world.engine_on and d._plan_applied.area_id == "office"
+    world.step(11.0, playing(101.0, world.t, paused=True))
+    assert world.ghost is None, "the parked film ghost is closed"
+    browser._act = Activity(binding=browser._act.binding, seen=True, playing=False,
+                            needs_ghost=False, plan=browser._act.plan)
+    world.step(1.0, playing(101.0, world.t))
+    world.step(2.0, playing(101.0 + 2.0, world.t - 2.0))
+    assert world.ghost is not None and world.engine_on and d.state == SYNCING
+
+
+def test_a_film_paused_past_its_limit_with_nothing_else_keeps_its_ghost(world):
+    """... but with nothing else playing, nothing changes: the ghost holds on
+    standby and resumes without a relaunch."""
+    d = world.d
+    d.cfg.set("sync.pause_stop_min", 1.0)
+    world.step(1.0, playing(100.0, 0.5))
+    g = world.ghost
+    world.step(1.0, playing(101.0, world.t, paused=True))
+    world.step(61.0)
+    world.step(30.0, playing(101.0, world.t, paused=True))
+    assert world.ghost is g and d.status()["ghost"]["standby"] == "paused"
+    world.step(1.0, playing(101.0, world.t))
+    assert world.ghost is g and world.engine_on and len(world.launched) == 1
