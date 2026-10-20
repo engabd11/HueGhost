@@ -2,6 +2,12 @@
 
 All notable changes to Hue Ghost. The newest release is first.
 
+- **2.13.1** - **Film and music sync offsets stay separate.** While music played, a film
+  offset nudge (Home Assistant, the tray) was applied to the music offset in use and saved as
+  the film offset. Nudges now always change the film offset, and while music still shares the
+  film offset, the first film change gives music its own copy, so tuning films never moves
+  the music. Pairs with Hue Synco 1.62.2, whose Film sync offset entity showed the music value
+  while music played.
 - **2.13.0** - **Run Hue Ghost from Home Assistant.** Hue Synco 1.62 can now change almost
   everything the app can, so a dashboard or the phone is a remote for the PC:
   - **Sync source**: pick the source to sync now. It goes first whenever it plays, ahead
