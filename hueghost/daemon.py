@@ -1683,11 +1683,17 @@ class Daemon:
             self.params = Params.from_config(self.cfg)
             self.watcher.precise_timing = self.params.time_lock
             changed = True
-        if "offset_s" in p:
-            self.cfg.set("sync.offset_s", round(float(p["offset_s"]), 3))
-            changed = True
-        if "offset_delta" in p:
-            self.cfg.set("sync.offset_s", round(self.offset + float(p["offset_delta"]), 3))
+        if "offset_s" in p or "offset_delta" in p:
+            # the FILM offset. Not self.offset: that is the one in use, the
+            # music offset while music plays - a nudge there moved the film
+            # offset to the music value plus the nudge.
+            film = float(self.cfg.get("sync.offset_s", 0.0))
+            new = float(p["offset_s"]) if "offset_s" in p else film + float(p["offset_delta"])
+            if self.cfg.get("sync.music_offset_s") is None and "music_offset_s" not in p:
+                # music shared the film offset: it keeps the value it had, so
+                # tuning films never moves the music
+                self.cfg.set("sync.music_offset_s", round(film, 3))
+            self.cfg.set("sync.offset_s", round(new, 3))
             changed = True
         if "brightness_step" in p:
             self.engine.adjust_brightness(int(p["brightness_step"]))
@@ -1723,4 +1729,8 @@ class Daemon:
                     self.cfg.save()
                 except OSError as e:
                     log.warning("could not persist settings: %s", e)
-            log.info("settings: offset %+.2fs intensity %s", self.offset, self.cfg.get("engine.huesync.intensity"))
+            mo = self.cfg.get("sync.music_offset_s")
+            log.info("settings: film offset %+.2fs, music offset %s, intensity %s",
+                     float(self.cfg.get("sync.offset_s", 0.0)),
+                     "%+.2fs" % mo if isinstance(mo, (int, float)) else "(film)",
+                     self.cfg.get("engine.huesync.intensity"))

@@ -110,3 +110,28 @@ def test_the_new_timings_are_set_and_reported(remote):
             s["music_pause_stop_s"], s["pause_stop_min"]) == (0.15, 6.0, 30.0, 2.5, 20.0, 5.0)
     d.action("set", {"music_offset_s": None})
     assert d.status()["settings"]["music_offset_s"] is None    # back to sharing the film offset
+
+
+def test_film_and_music_offsets_never_move_each_other(remote):
+    """Live 2026-10-21: with music playing, a film-offset nudge was applied to
+    the offset in use (the music one) and written as the film offset."""
+    d = remote.d
+    d.cfg.set("sync.offset_s", 0.15)
+    d.cfg.set("sync.music_offset_s", 0.1)
+    d._ghost_audio_only = True                     # a music ghost is playing
+    assert d.offset == 0.1
+    d.action("set", {"offset_delta": 0.05})
+    s = d.status()["settings"]
+    assert (s["offset_s"], s["music_offset_s"]) == (0.2, 0.1)
+    d.action("set", {"music_offset_s": 0.25})
+    s = d.status()["settings"]
+    assert (s["offset_s"], s["music_offset_s"]) == (0.2, 0.25)
+
+
+def test_tuning_films_while_music_shares_the_offset_leaves_music_where_it_was(remote):
+    d = remote.d
+    d.cfg.set("sync.offset_s", -0.1)
+    d.cfg.set("sync.music_offset_s", None)        # sharing the film offset
+    d.action("set", {"offset_s": 0.3})
+    s = d.status()["settings"]
+    assert (s["offset_s"], s["music_offset_s"]) == (0.3, -0.1)
