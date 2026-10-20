@@ -66,6 +66,27 @@ def test_the_winner_is_held_briefly_so_the_app_is_not_restarted_every_few_second
     assert s.poll(30.0).binding["id"] == "game"        # after the hold, it wins
 
 
+def test_a_parked_paused_song_does_not_outrank_a_browser_that_plays():
+    # a phone keeps its session open on a paused song long after the music
+    # stopped; once the daemon parked it, the source below it gets the lights
+    class _M:
+        paused = True
+
+    class _Obs:
+        model = _M()
+
+    song = Activity(binding={"id": "phone", "rank": 0}, seen=True, playing=True,
+                    needs_ghost=True, obs=_Obs(), item_key="song")
+    s = SourceSet([Fake("jellyfin", [song]), Fake("pc", [act("browser", 5)])], hold_s=20.0)
+    assert s.poll(0.0).binding["id"] == "phone"        # not parked yet: list order rules
+    s.parked = "song"
+    assert s.poll(1.0).binding["id"] == "browser"      # no anti-flap wait for a parked one
+    _M.paused = False
+    s.parked = "song"
+    s.sources[0]._next_poll = s.sources[1]._next_poll = 0.0
+    assert s.poll(30.0).binding["id"] == "phone"       # it plays again: it wins again
+
+
 def test_each_source_polls_at_its_own_rate():
     tv = Fake("jellyfin", [act("atv", 0)], interval=0.5)
     pc = Fake("pc", [act("game", 1)], interval=2.0)
