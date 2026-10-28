@@ -24,7 +24,8 @@ import time
 from collections import deque
 
 from . import __version__
-from .config import Config, INTENSITIES, KEEP_AWAKE_MODES, MODES, _deep_merge, app_data_dir, source_root
+from .config import (Config, INTENSITIES, KEEP_AWAKE_MODES, MODES, _deep_merge, _on_off,
+                     app_data_dir, source_root)
 from .control import ControlServer
 from .engines import Engine, build_engine
 from .ghost import GhostPlayer, mpv_args
@@ -64,15 +65,6 @@ def _get(d: dict, dotted: str):
             return None
         d = d[p]
     return d
-
-
-def _tri_state(v) -> bool | None:
-    """None / "" / "auto" = leave it to the app; anything else is a bool."""
-    if v is None or (isinstance(v, str) and v.strip().lower() in ("", "auto", "app", "none")):
-        return None
-    if isinstance(v, str):
-        return v.strip().lower() in ("1", "true", "yes", "on")
-    return bool(v)
 
 
 def audio_endpoint_present(endpoint_id: str) -> bool:
@@ -1171,11 +1163,7 @@ class Daemon:
     def set_binding_enabled(self, key: str, on: bool) -> dict:
         """Turn one binding on or off by id (or by name, for convenience)."""
         binds = self.cfg.bindings()
-        want = str(key or "").strip().lower()
-        hit = next((b for b in binds if b["id"].lower() == want), None) or \
-            next((b for b in binds if (b["name"] or "").lower() == want), None)
-        if hit is None:
-            raise ValueError("no binding %r (have: %s)" % (key, ", ".join(b["id"] for b in binds)))
+        hit = self._find_binding(binds, key)
         if bool(hit["enabled"]) != bool(on):
             hit["enabled"] = bool(on)
             self.cfg.set_bindings(binds)
@@ -1225,7 +1213,7 @@ class Daemon:
                     raise ValueError("%s must be one of %s, or empty" % (field, ", ".join(allowed)))
                 hit[field] = v
         if "use_audio" in fields:
-            hit["use_audio"] = _tri_state(fields["use_audio"])
+            hit["use_audio"] = _on_off(fields["use_audio"])
         self.cfg.set_bindings(binds)
         if self.cfg.path:
             try:
@@ -1657,7 +1645,7 @@ class Daemon:
                 raise ValueError("mode must be one of " + ", ".join(MODES))
             changed = self._set_look("mode", mode) or changed
         if "use_audio" in p:
-            self.cfg.set("engine.huesync.use_audio", _tri_state(p["use_audio"]))
+            self.cfg.set("engine.huesync.use_audio", _on_off(p["use_audio"]))
             changed = True
         if "manage_area" in p:
             self.cfg.set("engine.huesync.manage_area", bool(p["manage_area"]))

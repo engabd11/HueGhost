@@ -672,13 +672,6 @@ def hue_sync_with_audio(mode: str = "video") -> bool | None:
     return hue_sync_app_config()["with_audio"].get((mode or "").lower())
 
 
-def hue_sync_write_with_audio(mode: str, enabled: bool) -> bool:
-    """Set "use audio for light effects" for ``mode`` in the *stopped* app's
-    config (it reads the file at start-up and would overwrite it on exit).
-    Returns True when the file changed."""
-    return hue_sync_patch(with_audio=((mode or "").lower(), enabled))
-
-
 # -- the two settings the app only reads at start-up: capture display, audio in --
 def _preferred_monitor_span(raw: str) -> tuple[int, int] | None:
     """Span of the string *inside* ``App.PreferredMonitor: [ "..." ]``."""
@@ -696,16 +689,6 @@ def _core_str_span(raw: str, key: str) -> tuple[int, int] | None:
 def _core_bool_span(raw: str, key: str) -> tuple[int, int] | None:
     core = _json_object_span(raw, "Core")
     return _member_span(raw, key, core[0], core[1], _BOOL_AFTER_KEY) if core else None
-
-
-def hue_sync_preferred_monitor() -> str | None:
-    """Monitor DeviceID the Hue Sync app captures, or None when unreadable."""
-    return hue_sync_app_config()["monitor"]
-
-
-def hue_sync_audio_device() -> str | None:
-    """Render endpoint the Hue Sync app listens to in music mode."""
-    return hue_sync_app_config()["audio_device"]
 
 
 def _read_config_raw() -> str | None:
@@ -753,16 +736,7 @@ def hue_sync_app_config() -> dict:
 AUTO = "auto"       # "let the app choose again", as opposed to pinning a value
 
 
-def _audio_pairs(with_audio) -> list[tuple[str, bool]]:
-    """``{"video": True, "games": True}`` or the older ``("video", True)``."""
-    if with_audio is None:
-        return []
-    if isinstance(with_audio, dict):
-        return list(with_audio.items())
-    return [with_audio]
-
-
-def hue_sync_patch(*, with_audio: dict[str, bool] | tuple[str, bool] | None = None,
+def hue_sync_patch(*, with_audio: dict[str, bool] | None = None,
                    monitor: str | None = None, audio_device: str | None = None) -> bool:
     """Apply every start-up-only setting the app has in **one** read, one write
     and one digest rewrite - a sync session restarts the app at most once, so it
@@ -778,7 +752,7 @@ def hue_sync_patch(*, with_audio: dict[str, bool] | tuple[str, bool] | None = No
     def edit(raw: str) -> str | None:
         edits: list[tuple[tuple[int, int], str]] = []
 
-        for mode, on in _audio_pairs(with_audio):
+        for mode, on in (with_audio or {}).items():
             if mode.lower() not in AUDIO_MODES:
                 raise ValueError("only %s have an audio switch" % " and ".join(AUDIO_MODES))
             span = _with_audio_span(raw, mode.lower())
@@ -812,21 +786,6 @@ def hue_sync_patch(*, with_audio: dict[str, bool] | tuple[str, bool] | None = No
         return _replace_spans(raw, edits) if edits else None
 
     return _patch_app_config(edit)
-
-
-def hue_sync_write_preferred_monitor(monitor_id: str) -> bool:
-    """Point the *stopped* app's capture at another display."""
-    if not monitor_id:
-        raise ValueError("monitor_id is empty")
-    return hue_sync_patch(monitor=monitor_id)
-
-
-def hue_sync_write_audio_device(endpoint_id: str) -> bool:
-    """Point the *stopped* app's music mode at a render endpoint (what the ghost
-    plays remote music into)."""
-    if not endpoint_id:
-        raise ValueError("endpoint_id is empty")
-    return hue_sync_patch(audio_device=endpoint_id)
 
 
 def _overwrite(path: str, text: str) -> None:
