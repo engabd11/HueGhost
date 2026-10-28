@@ -994,3 +994,26 @@ def test_a_film_paused_past_its_limit_with_nothing_else_keeps_its_ghost(world):
     assert world.ghost is g and d.status()["ghost"]["standby"] == "paused"
     world.step(1.0, playing(101.0, world.t))
     assert world.ghost is g and world.engine_on and len(world.launched) == 1
+
+
+def test_a_source_edited_mid_film_keeps_its_ghost_and_its_timeline(world):
+    """Changing the playing source's intensity (the Sources page, Home
+    Assistant) used to close its ghost, or read the film as a new item: a
+    relaunch or a seek, and the time lock lost."""
+    world.step(3.0, playing(100.0, 0.5))
+    g, m = world.ghost, world.d.watcher.model
+    b = world.d.cfg.bindings()[0]
+    world.d.apply_config({"sources": [dict(b, intensity="subtle")]})     # the Sources page
+    world.step(1.0)
+    world.d.set_binding_fields(b["id"], {"mode": "games"})               # Home Assistant
+    world.step(1.0)
+    assert world.ghost is g and len(world.launched) == 1
+    assert world.d.watcher.model is m, "the film playing is not read as a new item"
+    assert world.d.last_act.plan.intensity == "subtle" and world.d.last_act.plan.mode == "games"
+
+
+def test_a_source_moved_to_another_device_closes_its_ghost(world):
+    world.step(3.0, playing(100.0, 0.5))
+    b = world.d.cfg.bindings()[0]
+    world.d.apply_config({"sources": [dict(b, device_id="another-device")]})
+    assert world.ghost is None

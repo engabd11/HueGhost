@@ -2,6 +2,19 @@
 
 All notable changes to Hue Ghost. The newest release is first.
 
+- **2.13.4** - **Three fixes.**
+  - *Hue Sync always comes back after a settings change.* To change the room, display or
+    music input, Hue Ghost closes Hue Sync, edits its files and starts it again. If the edit
+    failed (a setting missing from Hue Sync's config, such as a capture display never picked),
+    Hue Sync was left closed and the lights stayed dark. It now always restarts; the setting
+    is retried a minute later.
+  - *Each music source plays into its own output.* With two music sources on two different
+    outputs, the ghost played into the first source's output while Hue Sync listened to the
+    playing source's, so the lights did not react. Both now use the source that plays.
+  - *Editing a source mid-film keeps the ghost.* Changing the area, mode or intensity of the
+    source that is playing (on the Sources page) closed its ghost and relaunched it; from Home
+    Assistant it cost a seek and the time lock. The ghost now plays on and the new settings
+    apply at once. A source moved to another device still restarts it.
 - **2.13.3** - **Web pages can no longer reach the control API.** With no token set (the
   default), any web page open in a browser on this PC could call the API on port 8787: run a
   program through the mpv check, change the ghost's mpv path, or send the saved Jellyfin API
