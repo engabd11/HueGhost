@@ -90,6 +90,22 @@ class ControlServer:
                     return True
                 return query.get("token", [""])[0] == outer.token
 
+            def _from_browser_page(self) -> bool:
+                """Without a token, any web page could drive this API through the
+                viewer's own browser (an <img> GET or a form POST needs no CORS) -
+                and /api/mpv, /api/config and /api/sessions run programs or hand
+                out the Jellyfin key. Home Assistant and curl send neither header;
+                a page from another site does. A DNS-rebound name gets past both,
+                so a loopback server also wants a loopback Host."""
+                if outer.token:
+                    return False
+                site = self.headers.get("Sec-Fetch-Site")
+                if self.headers.get("Origin") or (site and site not in ("none", "same-origin")):
+                    return True
+                host = (self.headers.get("Host") or "").rsplit(":", 1)[0].strip("[]").lower()
+                return outer.bind in ("127.0.0.1", "localhost") and \
+                    host not in ("127.0.0.1", "localhost", "::1")
+
             def _body(self) -> dict:
                 n = int(self.headers.get("Content-Length") or 0)
                 if n <= 0:
@@ -110,6 +126,9 @@ class ControlServer:
                 if method == "GET" and path == "/":
                     return self._send(200, {"app": "hue-ghost", "version": __version__,
                                             "hint": "settings live in the Hue Ghost app; API under /api/"})
+                if self._from_browser_page():
+                    return self._send(403, {"error": "requests from web pages are refused; "
+                                                     "set control.token to call this API from a browser"})
                 if not self._authed({k: [v] for k, v in query.items()}):
                     return self._send(401, {"error": "unauthorized"})
                 try:
