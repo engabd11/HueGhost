@@ -213,7 +213,7 @@ def test_a_patch_that_fails_still_brings_the_app_back():
         eng.start()
         assert wait(lambda: "launch" in eng.ops, 8.0)
         assert eng.ops == ["kill", "patch-failed", "launch"]
-        assert "restart failed" in (eng.state().error or "")
+        assert wait(lambda: eng.state().syncing, 8.0), "the app is back and syncs"
     finally:
         eng.close()
         app.close()
