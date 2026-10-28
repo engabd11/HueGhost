@@ -377,12 +377,17 @@ class HueSyncEngine(Engine):
                 pass
             self._kill_app()
             time.sleep(1.0)
-            if area_id:
-                self._write_area(area_id)          # bridge.json: a different file, no digest
-            if audio_modes or monitor or audio_device:
-                self._write_app_config(with_audio=audio_modes or None,
-                                       monitor=monitor, audio_device=audio_device)
-            if not self._launch_app():
+            try:
+                if area_id:
+                    self._write_area(area_id)          # bridge.json: a different file, no digest
+                if audio_modes or monitor or audio_device:
+                    self._write_app_config(with_audio=audio_modes or None,
+                                           monitor=monitor, audio_device=audio_device)
+            finally:
+                # a patch that fails (a key the app's config does not have) must
+                # not leave the app closed: it comes back on its own settings
+                launched = self._launch_app()
+            if not launched:
                 raise RuntimeError("Hue Sync executable not found - set engine.huesync.launch_exe")
             self._last_launch = time.monotonic()
             self._refresh_app_state()

@@ -78,7 +78,7 @@ class JellyfinSource(Source):
             kind=kind,
             needs_ghost=True,
             plan=self._plan(binding, kind),
-            ghost=self._ghost_spec(m, kind) if m is not None else None,
+            ghost=self._ghost_spec(m, kind, binding) if m is not None else None,
             obs=obs,
             event=obs.event,
             item_key=m.item_id if m is not None else "",
@@ -102,14 +102,14 @@ class JellyfinSource(Source):
                     intensity=(b.get("intensity")
                                or self.cfg.get("engine.huesync.intensity") or None))
 
-    def _ghost_spec(self, m, kind: str) -> GhostSpec:
+    def _ghost_spec(self, m, kind: str, binding: dict | None) -> GhostSpec:
         # kind is only passed for music, so every existing caller of the
         # two-argument stream_url keeps working unchanged
         dev = ""
         if kind == "music":
             url = self.client.stream_url(m.item_id, m.media_source_id, kind="music")
-            b = next((x for x in self._bindings if x.get("audio_device")), None)
-            dev = _audio_output((b or {}).get("audio_device") or self.cfg.get("ghost.audio_device", ""))
+            # the PLAYING binding's output - the one _plan points Hue Sync at
+            dev = _audio_output(self.cfg.music_output(binding))
         else:
             url = self.client.stream_url(m.item_id, m.media_source_id)
         return GhostSpec(url=url, http_header=self.client.auth_header_for_mpv(), item_id=m.item_id,

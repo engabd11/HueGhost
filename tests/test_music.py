@@ -73,6 +73,20 @@ def test_music_asks_for_music_mode_and_pins_the_output_it_plays_into():
     assert "/Audio/track1/stream" in a.ghost.url
 
 
+def test_the_ghost_plays_into_the_output_of_the_source_that_plays():
+    """Two music sources on two outputs: the ghost used to take the FIRST
+    binding's output while Hue Sync was pointed at the playing one's."""
+    phone, panel = "{0.0.0.00000000}.{phone}", "{0.0.0.00000000}.{panel}"
+    cfg = cfg_for_music(sources=[
+        {"source": "jellyfin", "device_id": "phone-id", "kinds": ["music"], "audio_device": phone},
+        {"source": "jellyfin", "device_id": DEV, "kinds": ["music"], "audio_device": panel}])
+    src = build_sources(cfg).sources[0]
+    w = SessionWatcher(PlayerSet.from_players(src.bindings()))
+    a = src.activity(w.observe([music_session()], LOCAL0 + 5, LOCAL0 + 5, MONO0 + 5))
+    assert a.binding["device_id"] == DEV
+    assert a.plan.audio_device == panel and a.ghost.audio_device == panel
+
+
 MOVED = "{0.0.0.00000000}.{8f48dd79-cd09-4920-9ed0-08933c3fa47a}"
 
 
