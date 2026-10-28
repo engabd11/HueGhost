@@ -146,7 +146,8 @@ def test_set_mode_and_audio_switch_round_trip(daemon, tmp_path):
     assert daemon.status()["mode"] == "music"
 
     # "use audio for light effects": on / off / leave it to the app
-    for sent, stored in ((True, True), (False, False), (None, None), ("auto", None), ("on", True)):
+    for sent, stored in ((True, True), (False, False), (None, None), ("auto", None), ("default", None),
+                         ("on", True)):
         api.handle("POST", "/api/set", {"use_audio": sent}, {})
         assert daemon.cfg.get("engine.huesync.use_audio") is stored, sent
     assert daemon.status()["use_audio"] is True
