@@ -11,6 +11,11 @@ All notable changes to Hue Ghost. The newest release is first.
   - *No blackout while something plays on this PC.* Screen care blacked out every display
     but the ghost's after a minute without the mouse - including the one a film was being
     watched on, while a TV or phone also had a ghost running.
+  - *A paused player is no longer the "active" source.* When nothing played, the first player
+    still sitting on a paused song (CAMusic linux) was reported `active` - Home Assistant's
+    Active source - although the lights waited for it. An automation that slept the PC monitor
+    when CAMusic linux synced fired during YouTube films. `active` is now the source the lights
+    were set up for, and nothing while they are off.
   - *`/status` says which sync offset is in use* (was PR #32). The `music` block carries
     `in_use`: true while a music copy plays, when the top-level `offset_s` is the music offset.
     CAMusic linux guessed from Hue Sync's mode, so its Timing control could set the wrong one.

@@ -860,8 +860,12 @@ def test_a_client_found_paused_does_not_light_up_until_it_plays(world):
     assert world.ghost is None and not world.engine_on
     world.step(5.0)
     assert world.ghost is None and not world.engine_on
+    # ... and it is not the active source either: Home Assistant keys
+    # automations on that (one put the PC's monitor to sleep mid-film)
+    assert not any(b["active"] for b in world.d.status()["bindings"])
     world.step(1.0, playing(100.0, world.t))
     assert world.ghost is not None and world.engine_on
+    assert [b["active"] for b in world.d.status()["bindings"]] == [True]
 
 
 def test_a_tv_left_paused_hands_the_lights_to_a_phone_that_plays(world):

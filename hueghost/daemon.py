@@ -185,6 +185,7 @@ class Daemon:
         # the Plan the engine was last pointed at, and which binding the live
         # ghost belongs to: both are how a change of winner gets noticed
         self._plan_applied = None
+        self._plan_binding: str | None = None    # ... the binding it was applied for
         self._ghost_binding: str | None = None
         self._parked_since: float | None = None  # ... and since when another one has the lights
         self._pause_stopped: str | None = None   # item stopped for sitting paused
@@ -583,9 +584,10 @@ class Daemon:
 
         A mode or intensity changed by hand mid-session is not undone here:
         ``act.plan`` only changes when the binding or its settings do."""
+        b = act.binding or {}
+        self._plan_binding = b.get("id")    # two bindings can share one plan
         if act.plan == self._plan_applied:
             return
-        b = act.binding or {}
         log.info("'%s' drives the lights: %s, %s%s", _asc(b.get("name") or b.get("id") or "?"),
                  act.plan.mode or "the app's own mode",
                  act.plan.intensity or "the app's own intensity",
@@ -1175,8 +1177,11 @@ class Daemon:
     def _binding_status(self) -> list[dict]:
         """Every binding, whether it is on, and which one is driving the lights.
         Home Assistant turns this into a switch each."""
-        act = self.last_act
-        live = (act.binding or {}).get("id") if act.playing else None
+        # the binding the lights were set up for - not merely the top of the
+        # list: a paused player left there (lights waiting for it to play) read
+        # as "active" whenever nothing else played, and a Home Assistant
+        # automation keyed on it put this PC's monitor to sleep mid-film
+        live = self._plan_binding if self._plan_applied is not None else None
         out = []
         for b in self.cfg.bindings():
             probs = self.cfg.binding_problems(b)
