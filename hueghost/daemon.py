@@ -1341,6 +1341,10 @@ class Daemon:
                 },
                 "music": {
                     "offset_s": self.cfg.get("sync.music_offset_s"),
+                    # which offset the top-level offset_s is: the music one while a
+                    # music ghost plays, whatever Hue Sync's mode - a remote that
+                    # guessed from the mode set the offset not in use
+                    "in_use": self._ghost_audio_only,
                     "swap_latency_s": self._swap_latency,
                     "seek_lead_s": self._seek_lead,
                 },

@@ -2,6 +2,11 @@
 
 All notable changes to Hue Ghost. The newest release is first.
 
+- **2.13.3** - **`/status` says which sync offset is in use.** The `music` block now carries
+  `in_use`: true while a music copy plays, when the top-level `offset_s` is the music offset
+  and `music_offset_s` is the one to set; false when it is the film offset. Hue Sync's mode
+  does not tell: a concert film in Music mode still uses the film offset. CAMusic linux
+  guessed from the mode, so its Timing control could set the offset that was not in use.
 - **2.13.2** - **A paused source no longer blocks the ones below it.** A player left paused
   after its sync had stopped (music after 15 s, a film after its pause limit turned the lights
   off) still counted as playing, so it kept first place in the list: CAMusic linux sitting
