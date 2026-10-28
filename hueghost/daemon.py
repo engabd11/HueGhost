@@ -31,10 +31,10 @@ from .engines import Engine, build_engine
 from .ghost import GhostPlayer, mpv_args
 from .jellyfin import JellyfinClient, JellyfinError
 from .lockstep import GhostObs, Params, Pause, Resume, Seek, decide
-from .screencare import ScreenCare
+from .screencare import ScreenCare, ghost_display
 from .sources import IDLE as IDLE_ACTIVITY, build_sources
 from .watcher import Observation, PlayerSet, SessionWatcher
-from .winutil import desktop_locked, keep_awake, wake_display
+from .winutil import desktop_locked, keep_awake, list_displays, wake_display
 
 log = logging.getLogger("hue-ghost")
 
@@ -42,6 +42,7 @@ IDLE, GHOSTING, SYNCING, STANDBY = "idle", "ghosting", "syncing", "standby"
 TICK_S = 0.25
 ENGINE_STOP_WAIT_S = 2.0
 SLOW_STEP_S = 2.0          # a loop step holding the lock longer than this is logged
+GHOST_PLACE_RETRY_S = 3.0  # a ghost window moved back to its display gets this long to arrive
 BINDING_FIELDS = ("area_id", "mode", "intensity", "use_audio")  # what /set may change per source
 MUSIC_SEEK_COOLDOWN_S = 2.0
 MUSIC_SEEK_CHECK_S = 1.0    # a music seek is judged this long after it was sent
@@ -373,7 +374,11 @@ class Daemon:
             captured = self.engine.state().monitor_id
             if captured:
                 spare.add(captured)
-        self.care.tick(now, video, spare)
+        # a film or a game on this PC means somebody is watching it - no mouse
+        # moves for a minute, and the blackout covered the screen they watch
+        pc = self._pc
+        acts = (pc.last if isinstance(pc.last, list) else [pc.last]) if pc is not None else []
+        self.care.tick(now, video, spare, watched=any(a.playing for a in acts))
 
     def stop(self) -> None:
         self._stop.set()
@@ -906,6 +911,27 @@ class Daemon:
         else:
             self._locked_warned = False
 
+    def _keep_on_display(self, g, now: float) -> None:
+        """mpv places its window by display *index*. The Alienware's DisplayPort
+        drops out of Windows while it sleeps, so the index shifts, and a ghost
+        launched as it wakes went fullscreen on the wrong screen: Hue Sync
+        captured an empty desktop (one dim colour) until sync was toggled.
+        mpv says where its window is; put it back whenever that is wrong."""
+        seen = getattr(g, "displays", None)
+        if seen and g.placing:
+            g.finish_place()
+            return
+        if self._ghost_audio_only or not seen or seen == g.checked_on \
+                or not self.cfg.get("ghost.fullscreen", True) \
+                or now - g.placed_mono < GHOST_PLACE_RETRY_S:
+            return
+        d = ghost_display(self.cfg, list_displays())
+        if d is None or d.name.lower() in (n.lower() for n in seen):
+            g.checked_on = seen
+            return
+        log.warning("ghost window is on %s, not %s -> moving it back", ", ".join(seen), d.name)
+        g.place(d.index, now)
+
     # -- lockstep tick ------------------------------------------------------------
     def _tick(self, now: float) -> None:
         g = self.ghost
@@ -952,6 +978,7 @@ class Daemon:
             self._idle_since = None
             return
 
+        self._keep_on_display(g, now)
         obs = self.last_obs
         m = obs.model if obs else None
         if self._standby is not None:
@@ -1339,6 +1366,10 @@ class Daemon:
                 },
                 "music": {
                     "offset_s": self.cfg.get("sync.music_offset_s"),
+                    # which offset the top-level offset_s is: the music one while a
+                    # music ghost plays, whatever Hue Sync's mode - a remote that
+                    # guessed from the mode set the offset not in use
+                    "in_use": self._ghost_audio_only,
                     "swap_latency_s": self._swap_latency,
                     "seek_lead_s": self._seek_lead,
                 },

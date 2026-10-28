@@ -31,6 +31,7 @@ OBSERVED = {
     4: "paused-for-cache",
     5: "eof-reached",
     6: "core-idle",
+    7: "display-names",
 }
 
 
@@ -265,6 +266,10 @@ class GhostPlayer:
         self.user_quit = False
         self.end_reason: str | None = None
         self.ended = False          # the file is over and mpv sits idle (music: --idle)
+        self.displays: list[str] | None = None   # the displays mpv's window is on (\\.\DISPLAY5)
+        self.checked_on: list[str] | None = None  # ... last confirmed to be the ghost display
+        self.placed_mono = float("-inf")
+        self.placing = False        # left fullscreen to move; back in on the next tick
         self.last_seek_mono = float("-inf")
         self.seeks = 0
         self.nudges = 0
@@ -343,6 +348,8 @@ class GhostPlayer:
                 self.eof = bool(data)
             elif name == "core-idle":
                 self.core_idle = bool(data)
+            elif name == "display-names" and isinstance(data, list):
+                self.displays = [str(n) for n in data]
         elif ev == "end-file":
             self.end_reason = msg.get("reason")
             # "stop" is the old file making way for a loadfile: not an end
@@ -436,6 +443,21 @@ class GhostPlayer:
         self.seeks = 0
         self.nudges = 0
         return ok
+
+    def place(self, index: int, now_mono: float) -> None:
+        """Move the window to display ``index``. mpv only re-reads ``fs-screen``
+        when it enters fullscreen, so it leaves fullscreen here and
+        ``finish_place`` re-enters it on a later tick: sent together, mpv
+        applies both at once and the window never moves (verified live, 0.41)."""
+        self.ipc.send("set_property", "screen", index)
+        self.ipc.send("set_property", "fs-screen", index)
+        self.ipc.send("set_property", "fullscreen", False)
+        self.placing = True
+        self.placed_mono = now_mono
+
+    def finish_place(self) -> None:
+        self.ipc.send("set_property", "fullscreen", True)
+        self.placing = False
 
     def toggle_fullscreen(self) -> None:
         self.ipc.send("cycle", "fullscreen")

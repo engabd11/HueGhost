@@ -122,8 +122,8 @@ def test_a_shorter_interval_applies_without_waiting_out_the_old_one():
 
 
 # -- black out -------------------------------------------------------------------------
-def test_blackout_is_off_by_default_and_never_even_asks_for_idle_time():
-    r = Rig()
+def test_blackout_at_zero_never_even_asks_for_idle_time():
+    r = Rig(blackout_idle_min=0)
     r.idle = 10 * 3600
     for t in range(5):
         r.care.tick(float(t), Ghost())
@@ -156,6 +156,19 @@ def test_any_input_brings_the_displays_back_and_the_next_idle_stretch_covers_aga
     r.idle = 5 * MIN
     r.care.tick(300.0, g)
     assert len(r.launched) == 4 and r.covered_screens() == [0, 1]
+
+
+def test_nothing_is_blacked_out_while_something_plays_on_this_pc():
+    """A film in a browser on the OLED while the TV's ghost runs: nobody moves
+    the mouse during a film, and the blackout covered the screen being watched."""
+    r = Rig(blackout_idle_min=1)
+    r.idle = 2 * MIN
+    r.care.tick(0.0, Ghost(), watched=True)
+    assert r.launched == []
+    r.care.tick(0.25, Ghost())
+    assert r.covered_screens() == [0, 1]
+    r.care.tick(0.5, Ghost(), watched=True)     # it starts while the screens are black
+    assert r.care.covers == {}
 
 
 def test_closing_the_ghost_uncovers():
@@ -282,7 +295,7 @@ class AliveGhost(Ghost):
 
 def test_daemon_cares_for_a_video_ghost_only(daemon):
     seen = []
-    daemon.care.tick = lambda now, ghost, spare=frozenset(): seen.append((ghost, set(spare)))
+    daemon.care.tick = lambda now, ghost, spare=frozenset(), watched=False: seen.append((ghost, set(spare)))
     daemon._screen_care(0.0)
     g = AliveGhost()
     daemon.ghost = g
@@ -294,7 +307,7 @@ def test_daemon_cares_for_a_video_ghost_only(daemon):
 
 def test_daemon_spares_the_display_hue_sync_reports_capturing(daemon):
     seen = []
-    daemon.care.tick = lambda now, ghost, spare=frozenset(): seen.append(set(spare))
+    daemon.care.tick = lambda now, ghost, spare=frozenset(), watched=False: seen.append(set(spare))
     real_state = daemon.engine.state
 
     def state():
@@ -308,6 +321,45 @@ def test_daemon_spares_the_display_hue_sync_reports_capturing(daemon):
     assert seen == [{GHOST.monitor_id}]
 
 
+def test_daemon_tells_screen_care_when_this_pc_plays(daemon):
+    from types import SimpleNamespace
+    seen = []
+    daemon.care.tick = lambda now, ghost, spare=frozenset(), watched=False: seen.append(watched)
+    pc = SimpleNamespace(id="pc", last=[SimpleNamespace(playing=False)])
+    daemon.sources.sources.append(pc)
+    daemon._screen_care(0.0)
+    pc.last = [SimpleNamespace(playing=False), SimpleNamespace(playing=True)]
+    daemon._screen_care(1.0)
+    assert seen == [False, True]
+
+
+def test_a_ghost_window_on_the_wrong_display_is_moved_back(daemon, monkeypatch):
+    """The Alienware's DisplayPort drops out of Windows while it sleeps, so the
+    index the ghost was launched with can point at another screen by the time
+    mpv opens its window. Hue Sync then captured an empty desktop."""
+    from hueghost import daemon as dm
+    from hueghost.ghost import GhostPlayer
+    monkeypatch.setattr(dm, "list_displays", lambda: [MAIN, SIDE, GHOST])
+    daemon.cfg.set("ghost.screen_name", GHOST.name)
+    g = GhostPlayer.__new__(GhostPlayer)
+    g.displays, g.checked_on, g.placed_mono, g.placing, g.placed = None, None, float("-inf"), False, []
+    g.place = lambda index, now: (g.placed.append(index), setattr(g, "placed_mono", now),
+                                  setattr(g, "placing", True))
+    g.finish_place = lambda: (g.placed.append("fullscreen"), setattr(g, "placing", False))
+    daemon._keep_on_display(g, 0.0)
+    assert g.placed == []                       # mpv has not said yet
+    g.displays = [MAIN.name]
+    daemon._keep_on_display(g, 1.0)
+    daemon._keep_on_display(g, 2.0)             # gave it time to get there
+    assert g.placed == [GHOST.index, "fullscreen"], "out of fullscreen, then back in on the next tick"
+    daemon._keep_on_display(g, 4.5)
+    daemon._keep_on_display(g, 4.75)
+    assert g.placed == [GHOST.index, "fullscreen"] * 2, "still not there: try again"
+    g.displays = [GHOST.name.lower()]
+    daemon._keep_on_display(g, 9.0)
+    assert len(g.placed) == 4 and g.checked_on == g.displays
+
+
 def test_screen_care_settings_are_live_and_reported(daemon):
     daemon.action("set", {"pixel_shift_min": 2, "blackout_idle_min": 12.5})
     care = daemon.status()["system"]["screen_care"]
@@ -319,9 +371,9 @@ def test_screen_care_settings_are_live_and_reported(daemon):
         daemon.action("set", {"pixel_shift_min": "often"})
 
 
-def test_defaults_shift_on_blackout_off():
+def test_defaults_shift_off_blackout_after_a_minute():
     care = ScreenCare(Config({}), idle=lambda: None, displays=list, launch=Proc)
-    assert care.shift_every_s == 3 * MIN and care.blackout_after_s == 0.0
+    assert care.shift_every_s == 0.0 and care.blackout_after_s == 1 * MIN
 
 
 def test_a_bad_value_in_the_file_falls_back_rather_than_crashing_the_loop():

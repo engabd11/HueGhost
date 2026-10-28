@@ -106,7 +106,8 @@ def world(monkeypatch, tmp_path):
                      "poll_interval_s": POLL},
         "engine": {"type": "none"},
         "control": {"port": 0},
-        "sync": {"lights_off_delay_s": 1.5, "idle_stop_delay_s": 10.0, "offset_s": 0.0},
+        "sync": {"lights_off_delay_s": 1.5, "idle_stop_delay_s": 10.0, "offset_s": 0.0,
+                 "music_offset_s": None, "time_lock_release_s": 0.02},
         "ghost": {"keep_awake": "playing"},
     }, str(tmp_path / "config.json"))
     power = Power()

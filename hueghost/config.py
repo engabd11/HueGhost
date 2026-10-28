@@ -49,7 +49,7 @@ DEFAULTS: dict[str, Any] = {
         "start_confirm_s": 1.0,      # ignore anything shorter (alt-tab, a notification chime)
     },
     "sync": {
-        "offset_s": 1.5,             # ghost runs this far AHEAD of the followed client
+        "offset_s": 0.2,             # ghost runs this far AHEAD of the followed client
         "seek_threshold_s": 1.0,     # beyond this drift -> hard seek
         "deadband_s": 0.05,          # within this -> leave speed at 1.0
         "converge_s": 5.0,           # proportional controller time constant
@@ -62,10 +62,10 @@ DEFAULTS: dict[str, Any] = {
         # disagree by more than time_lock_release_s release it. On by default
         # since 2.11 (see MIGRATIONS).
         "time_lock": True,
-        "time_lock_release_s": 0.02,
+        "time_lock_release_s": 0.08,
         "lights_off_delay_s": 1.5,   # lights stop this long after the client stops (ghost stays on standby)
         "idle_stop_delay_s": 10.0,   # ... and the ghost mpv closes after this long
-        "pause_stop_min": 0.0,       # stop syncing after the client is paused this
+        "pause_stop_min": 1.0,       # stop syncing after the client is paused this
                                      # many minutes (0 = never); resumes on play
         # Music needs its own, far shorter limit. A phone that stops a track
         # usually leaves the session open in the background rather than closing
@@ -75,7 +75,7 @@ DEFAULTS: dict[str, Any] = {
         "stall_estimates": {},       # learned client buffering after seek/start/resume (auto-saved)
         # Music (an audio-only ghost) - see watcher.ReportProfile. Nothing here
         # needs tuning: profiles and latencies are learned and saved as they go.
-        "music_offset_s": None,      # None = offset_s; Hue Sync's own music latency, if it ever needs one
+        "music_offset_s": -1.85,     # None = offset_s; music's own offset (Hue Sync's music latency differs)
         "pin": "",                   # a binding id picked to sync now: it wins whenever it plays ("" = list order)
         "music_seek_s": 0.04,        # music corrects by exact seeks beyond this drift, never by tempo
         "player_profiles": {},       # learned per player: how its reports err (auto-saved)
@@ -93,8 +93,8 @@ DEFAULTS: dict[str, Any] = {
         "keep_awake": "playing",     # off | playing | always: hold the displays awake (Windows idle timeout
                                      # switches the virtual ghost display off -> Hue Sync captures nothing)
         # Screen care, for OLEDs kept awake by the above (0 = off for both):
-        "pixel_shift_min": 3.0,      # every N minutes move the ghost picture a few pixels
-        "blackout_idle_min": 0.0,    # after N minutes with no mouse/keyboard, cover every display
+        "pixel_shift_min": 0.0,      # every N minutes move the ghost picture a few pixels
+        "blackout_idle_min": 1.0,    # after N minutes with no mouse/keyboard, cover every display
                                      # Hue Sync does not capture with black; any input brings them back
         "audio_device": "",          # render endpoint a music ghost plays into, and that Hue Sync
                                      # listens to in music mode: pick one you cannot hear
@@ -109,8 +109,8 @@ DEFAULTS: dict[str, Any] = {
             "host": "127.0.0.1",
             "port": 24851,
             "mode": "video",         # video | music | games (what Hue Sync reacts to)
-            "intensity": "high",     # subtle | moderate | high | extreme
-            "use_audio": None,       # "use audio for light effects" in video/games mode:
+            "intensity": "extreme",  # subtle | moderate | high | extreme
+            "use_audio": False,      # "use audio for light effects" in video/games mode:
                                      # None = leave the app's own setting alone, True/False = enforce
             "manage_area": True,     # False -> never take the app's entertainment area over
             "manage_monitor": True,  # False -> never change which display it captures

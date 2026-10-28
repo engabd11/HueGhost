@@ -2,6 +2,23 @@
 
 All notable changes to Hue Ghost. The newest release is first.
 
+- **2.13.5** - **The film lights no longer get stuck on one dim colour, and the screen you watch on stays on.**
+  - *The ghost stays on the ghost display.* mpv places its window by display number. The
+    Alienware's DisplayPort drops out of Windows while it sleeps, which renumbers the displays,
+    so a ghost opened as it woke could go fullscreen on the wrong screen. Hue Sync then
+    captured an empty desktop: one dim colour until sync was switched off and on. mpv now
+    reports which display its window is on, and Hue Ghost moves it back when it is wrong.
+  - *No blackout while something plays on this PC.* Screen care blacked out every display
+    but the ghost's after a minute without the mouse - including the one a film was being
+    watched on, while a TV or phone also had a ghost running.
+  - *`/status` says which sync offset is in use* (was PR #32). The `music` block carries
+    `in_use`: true while a music copy plays, when the top-level `offset_s` is the music offset.
+    CAMusic linux guessed from Hue Sync's mode, so its Timing control could set the wrong one.
+  - *New defaults* (only for settings a config file does not already have): film offset 0.2 s,
+    music offset -1.85 s, intensity extreme, audio for light effects off, sync stops after a
+    1 min pause, time lock releases at 0.08 s, pixel shift off, blackout after 1 min idle.
+  - 2.13.4 (PR #30) was merged into 2.13.3's branch after that had landed, so it never
+    reached `main`; it ships here.
 - **2.13.4** - **Three fixes.**
   - *Hue Sync always comes back after a settings change.* To change the room, display or
     music input, Hue Ghost closes Hue Sync, edits its files and starts it again. If the edit
