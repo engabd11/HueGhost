@@ -265,19 +265,29 @@ class Daemon:
 
     def _rebuild_sources(self, keep_client: bool = True) -> None:
         """Rebuild after a config change, carrying the learned client buffering
-        over - it is expensive to relearn and has nothing to do with bindings."""
-        stalls = getattr(self.watcher, "stalls", None)
-        profiles = getattr(self.watcher, "profiles", None)
+        and report profiles over - expensive to relearn, nothing to do with bindings.
+
+        On the same server the whole watcher carries over, with only its
+        players swapped for the new bindings': a fresh one read the item
+        playing as new, so an area or intensity changed mid-film cost a seek
+        and the time lock."""
         old = self._jelly
         self.sources.close()
         self.sources = build_sources(self.cfg,
                                      jf_client=(old.client if (old and keep_client) else None))
         self._bindings_snapshot = self.cfg.bindings()
         s = self._jelly
-        if s is not None and stalls is not None:
-            s.watcher.stalls = stalls
-        if s is not None and profiles:
-            s.watcher.profiles.update(profiles)
+        if s is None or old is None:
+            return
+        w, fresh = old.watcher, s.watcher
+        if keep_client:
+            w.players, w.matcher = fresh.players, fresh.matcher
+            w.jitter_tol, w.poll_interval = fresh.jitter_tol, fresh.poll_interval
+            w.precise_timing = fresh.precise_timing
+            s.watcher = w
+        else:
+            fresh.stalls = w.stalls
+            fresh.profiles.update(w.profiles)
 
     def _start_control(self) -> None:
         c = self.cfg.section("control")
@@ -1430,7 +1440,10 @@ class Daemon:
                 self.jf_ok = False
             if server_moved or changed("jellyfin.poll_interval_s", "pc") \
                     or self.cfg.bindings() != self._bindings_snapshot:
-                if self.ghost is not None:
+                # only when the ghost's own source now follows something else:
+                # an area or intensity changed on the Sources page mid-film
+                # used to close the ghost and relaunch it
+                if self.ghost is not None and (server_moved or self._ghost_source_moved()):
                     self._stop_ghost("followed client changed")
                 self._rebuild_sources(keep_client=not server_moved)
                 self.last_obs = None
@@ -1461,6 +1474,15 @@ class Daemon:
             log.info("config updated%s", (" (restart needed: %s)" % ", ".join(self.restart_required))
                      if self.restart_required else "")
             return {"ok": True, "problems": problems, "restart_required": list(self.restart_required)}
+
+    def _ghost_source_moved(self) -> bool:
+        """Whether the binding the live ghost belongs to is gone, switched off,
+        or follows another device, user or kind of media than it did."""
+        def find(binds):
+            return next((b for b in binds if b["id"] == self._ghost_binding), None)
+        was, now = find(self._bindings_snapshot), find(self.cfg.enabled_bindings())
+        keys = ("source", "device_id", "device_name_contains", "client", "user", "kinds")
+        return was is None or now is None or any(was[k] != now[k] for k in keys)
 
     def test_ghost(self, screen_name: str | None = None, seconds: int = 8) -> dict:
         """Show a colour test pattern on the ghost display (no media needed)."""
