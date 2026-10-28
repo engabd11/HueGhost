@@ -2,6 +2,12 @@
 
 All notable changes to Hue Ghost. The newest release is first.
 
+- **2.13.3** - **Web pages can no longer reach the control API.** With no token set (the
+  default), any web page open in a browser on this PC could call the API on port 8787: run a
+  program through the mpv check, change the ghost's mpv path, or send the saved Jellyfin API
+  key to another server. Requests sent from a web page, and requests for another host name
+  (DNS rebinding), are now refused with 403. Home Assistant, curl and the desktop app work as
+  before; a browser that should reach the API needs `control.token`.
 - **2.13.2** - **A paused source no longer blocks the ones below it.** A player left paused
   after its sync had stopped (music after 15 s, a film after its pause limit turned the lights
   off) still counted as playing, so it kept first place in the list: CAMusic linux sitting

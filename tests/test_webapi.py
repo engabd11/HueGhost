@@ -103,6 +103,39 @@ def test_api_served_over_http_with_token(tmp_path):
     finally:
         d.control.stop()
         d.engine.close()
+
+
+def test_without_a_token_web_pages_are_refused(tmp_path):
+    """No token is the default: a page in the user's browser must not reach
+    /api/mpv (runs a program) or /api/config, while curl and HA still do."""
+    import socket
+    s = socket.socket()
+    s.bind(("127.0.0.1", 0))
+    port = s.getsockname()[1]
+    s.close()
+    cfg = Config({"jellyfin": {"url": "http://127.0.0.1:1", "api_key": "k", "follow": {"device_name_contains": "tv"}},
+                  "engine": {"type": "none"}, "control": {"port": port}}, str(tmp_path / "c.json"))
+    d = Daemon(cfg)
+    d._start_control()
+    url = "http://127.0.0.1:%d/api/system" % port
+
+    def code(headers):
+        try:
+            with urllib.request.urlopen(urllib.request.Request(url, headers=headers), timeout=3) as r:
+                return r.status
+        except urllib.error.HTTPError as e:
+            return e.code
+    try:
+        assert code({}) == 200                                       # curl, Home Assistant
+        assert code({"Sec-Fetch-Site": "none"}) == 200               # typed into the address bar
+        assert code({"Sec-Fetch-Site": "cross-site"}) == 403         # <img src=...> on another site
+        assert code({"Origin": "https://evil.example"}) == 403       # a form or fetch POST
+        assert code({"Host": "evil.example:%d" % port}) == 403       # DNS rebinding
+    finally:
+        d.control.stop()
+        d.engine.close()
+
+
 def test_set_mode_and_audio_switch_round_trip(daemon, tmp_path):
     api = WebApi(daemon)
     api.handle("POST", "/api/set", {"mode": "music", "intensity": "subtle"}, {})
