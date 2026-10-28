@@ -31,10 +31,10 @@ from .engines import Engine, build_engine
 from .ghost import GhostPlayer, mpv_args
 from .jellyfin import JellyfinClient, JellyfinError
 from .lockstep import GhostObs, Params, Pause, Resume, Seek, decide
-from .screencare import ScreenCare
+from .screencare import ScreenCare, ghost_display
 from .sources import IDLE as IDLE_ACTIVITY, build_sources
 from .watcher import Observation, PlayerSet, SessionWatcher
-from .winutil import desktop_locked, keep_awake, wake_display
+from .winutil import desktop_locked, keep_awake, list_displays, wake_display
 
 log = logging.getLogger("hue-ghost")
 
@@ -42,6 +42,7 @@ IDLE, GHOSTING, SYNCING, STANDBY = "idle", "ghosting", "syncing", "standby"
 TICK_S = 0.25
 ENGINE_STOP_WAIT_S = 2.0
 SLOW_STEP_S = 2.0          # a loop step holding the lock longer than this is logged
+GHOST_PLACE_RETRY_S = 3.0  # a ghost window moved back to its display gets this long to arrive
 BINDING_FIELDS = ("area_id", "mode", "intensity", "use_audio")  # what /set may change per source
 MUSIC_SEEK_COOLDOWN_S = 2.0
 MUSIC_SEEK_CHECK_S = 1.0    # a music seek is judged this long after it was sent
@@ -184,6 +185,7 @@ class Daemon:
         # the Plan the engine was last pointed at, and which binding the live
         # ghost belongs to: both are how a change of winner gets noticed
         self._plan_applied = None
+        self._plan_binding: str | None = None    # ... the binding it was applied for
         self._ghost_binding: str | None = None
         self._parked_since: float | None = None  # ... and since when another one has the lights
         self._pause_stopped: str | None = None   # item stopped for sitting paused
@@ -257,19 +259,29 @@ class Daemon:
 
     def _rebuild_sources(self, keep_client: bool = True) -> None:
         """Rebuild after a config change, carrying the learned client buffering
-        over - it is expensive to relearn and has nothing to do with bindings."""
-        stalls = getattr(self.watcher, "stalls", None)
-        profiles = getattr(self.watcher, "profiles", None)
+        and report profiles over - expensive to relearn, nothing to do with bindings.
+
+        On the same server the whole watcher carries over, with only its
+        players swapped for the new bindings': a fresh one read the item
+        playing as new, so an area or intensity changed mid-film cost a seek
+        and the time lock."""
         old = self._jelly
         self.sources.close()
         self.sources = build_sources(self.cfg,
                                      jf_client=(old.client if (old and keep_client) else None))
         self._bindings_snapshot = self.cfg.bindings()
         s = self._jelly
-        if s is not None and stalls is not None:
-            s.watcher.stalls = stalls
-        if s is not None and profiles:
-            s.watcher.profiles.update(profiles)
+        if s is None or old is None:
+            return
+        w, fresh = old.watcher, s.watcher
+        if keep_client:
+            w.players, w.matcher = fresh.players, fresh.matcher
+            w.jitter_tol, w.poll_interval = fresh.jitter_tol, fresh.poll_interval
+            w.precise_timing = fresh.precise_timing
+            s.watcher = w
+        else:
+            fresh.stalls = w.stalls
+            fresh.profiles.update(w.profiles)
 
     def _start_control(self) -> None:
         c = self.cfg.section("control")
@@ -363,7 +375,11 @@ class Daemon:
             captured = self.engine.state().monitor_id
             if captured:
                 spare.add(captured)
-        self.care.tick(now, video, spare)
+        # a film or a game on this PC means somebody is watching it - no mouse
+        # moves for a minute, and the blackout covered the screen they watch
+        pc = self._pc
+        acts = (pc.last if isinstance(pc.last, list) else [pc.last]) if pc is not None else []
+        self.care.tick(now, video, spare, watched=any(a.playing for a in acts))
 
     def stop(self) -> None:
         self._stop.set()
@@ -568,9 +584,10 @@ class Daemon:
 
         A mode or intensity changed by hand mid-session is not undone here:
         ``act.plan`` only changes when the binding or its settings do."""
+        b = act.binding or {}
+        self._plan_binding = b.get("id")    # two bindings can share one plan
         if act.plan == self._plan_applied:
             return
-        b = act.binding or {}
         log.info("'%s' drives the lights: %s, %s%s", _asc(b.get("name") or b.get("id") or "?"),
                  act.plan.mode or "the app's own mode",
                  act.plan.intensity or "the app's own intensity",
@@ -896,6 +913,27 @@ class Daemon:
         else:
             self._locked_warned = False
 
+    def _keep_on_display(self, g, now: float) -> None:
+        """mpv places its window by display *index*. The Alienware's DisplayPort
+        drops out of Windows while it sleeps, so the index shifts, and a ghost
+        launched as it wakes went fullscreen on the wrong screen: Hue Sync
+        captured an empty desktop (one dim colour) until sync was toggled.
+        mpv says where its window is; put it back whenever that is wrong."""
+        seen = getattr(g, "displays", None)
+        if seen and g.placing:
+            g.finish_place()
+            return
+        if self._ghost_audio_only or not seen or seen == g.checked_on \
+                or not self.cfg.get("ghost.fullscreen", True) \
+                or now - g.placed_mono < GHOST_PLACE_RETRY_S:
+            return
+        d = ghost_display(self.cfg, list_displays())
+        if d is None or d.name.lower() in (n.lower() for n in seen):
+            g.checked_on = seen
+            return
+        log.warning("ghost window is on %s, not %s -> moving it back", ", ".join(seen), d.name)
+        g.place(d.index, now)
+
     # -- lockstep tick ------------------------------------------------------------
     def _tick(self, now: float) -> None:
         g = self.ghost
@@ -942,6 +980,7 @@ class Daemon:
             self._idle_since = None
             return
 
+        self._keep_on_display(g, now)
         obs = self.last_obs
         m = obs.model if obs else None
         if self._standby is not None:
@@ -1138,8 +1177,11 @@ class Daemon:
     def _binding_status(self) -> list[dict]:
         """Every binding, whether it is on, and which one is driving the lights.
         Home Assistant turns this into a switch each."""
-        act = self.last_act
-        live = (act.binding or {}).get("id") if act.playing else None
+        # the binding the lights were set up for - not merely the top of the
+        # list: a paused player left there (lights waiting for it to play) read
+        # as "active" whenever nothing else played, and a Home Assistant
+        # automation keyed on it put this PC's monitor to sleep mid-film
+        live = self._plan_binding if self._plan_applied is not None else None
         out = []
         for b in self.cfg.bindings():
             probs = self.cfg.binding_problems(b)
@@ -1329,6 +1371,10 @@ class Daemon:
                 },
                 "music": {
                     "offset_s": self.cfg.get("sync.music_offset_s"),
+                    # which offset the top-level offset_s is: the music one while a
+                    # music ghost plays, whatever Hue Sync's mode - a remote that
+                    # guessed from the mode set the offset not in use
+                    "in_use": self._ghost_audio_only,
                     "swap_latency_s": self._swap_latency,
                     "seek_lead_s": self._seek_lead,
                 },
@@ -1418,7 +1464,10 @@ class Daemon:
                 self.jf_ok = False
             if server_moved or changed("jellyfin.poll_interval_s", "pc") \
                     or self.cfg.bindings() != self._bindings_snapshot:
-                if self.ghost is not None:
+                # only when the ghost's own source now follows something else:
+                # an area or intensity changed on the Sources page mid-film
+                # used to close the ghost and relaunch it
+                if self.ghost is not None and (server_moved or self._ghost_source_moved()):
                     self._stop_ghost("followed client changed")
                 self._rebuild_sources(keep_client=not server_moved)
                 self.last_obs = None
@@ -1449,6 +1498,15 @@ class Daemon:
             log.info("config updated%s", (" (restart needed: %s)" % ", ".join(self.restart_required))
                      if self.restart_required else "")
             return {"ok": True, "problems": problems, "restart_required": list(self.restart_required)}
+
+    def _ghost_source_moved(self) -> bool:
+        """Whether the binding the live ghost belongs to is gone, switched off,
+        or follows another device, user or kind of media than it did."""
+        def find(binds):
+            return next((b for b in binds if b["id"] == self._ghost_binding), None)
+        was, now = find(self._bindings_snapshot), find(self.cfg.enabled_bindings())
+        keys = ("source", "device_id", "device_name_contains", "client", "user", "kinds")
+        return was is None or now is None or any(was[k] != now[k] for k in keys)
 
     def test_ghost(self, screen_name: str | None = None, seconds: int = 8) -> dict:
         """Show a colour test pattern on the ghost display (no media needed)."""

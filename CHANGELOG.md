@@ -2,6 +2,41 @@
 
 All notable changes to Hue Ghost. The newest release is first.
 
+- **2.13.5** - **The film lights no longer get stuck on one dim colour, and the screen you watch on stays on.**
+  - *The ghost stays on the ghost display.* mpv places its window by display number. The
+    Alienware's DisplayPort drops out of Windows while it sleeps, which renumbers the displays,
+    so a ghost opened as it woke could go fullscreen on the wrong screen. Hue Sync then
+    captured an empty desktop: one dim colour until sync was switched off and on. mpv now
+    reports which display its window is on, and Hue Ghost moves it back when it is wrong.
+  - *No blackout while something plays on this PC.* Screen care blacked out every display
+    but the ghost's after a minute without the mouse - including the one a film was being
+    watched on, while a TV or phone also had a ghost running.
+  - *A paused player is no longer the "active" source.* When nothing played, the first player
+    still sitting on a paused song (CAMusic linux) was reported `active` - Home Assistant's
+    Active source - although the lights waited for it. An automation that slept the PC monitor
+    when CAMusic linux synced fired during YouTube films. `active` is now the source the lights
+    were set up for, and nothing while they are off.
+  - *`/status` says which sync offset is in use* (was PR #32). The `music` block carries
+    `in_use`: true while a music copy plays, when the top-level `offset_s` is the music offset.
+    CAMusic linux guessed from Hue Sync's mode, so its Timing control could set the wrong one.
+  - *New defaults* (only for settings a config file does not already have): film offset 0.2 s,
+    music offset -1.85 s, intensity extreme, audio for light effects off, sync stops after a
+    1 min pause, time lock releases at 0.08 s, pixel shift off, blackout after 1 min idle.
+  - 2.13.4 (PR #30) was merged into 2.13.3's branch after that had landed, so it never
+    reached `main`; it ships here.
+- **2.13.4** - **Three fixes.**
+  - *Hue Sync always comes back after a settings change.* To change the room, display or
+    music input, Hue Ghost closes Hue Sync, edits its files and starts it again. If the edit
+    failed (a setting missing from Hue Sync's config, such as a capture display never picked),
+    Hue Sync was left closed and the lights stayed dark. It now always restarts; the setting
+    is retried a minute later.
+  - *Each music source plays into its own output.* With two music sources on two different
+    outputs, the ghost played into the first source's output while Hue Sync listened to the
+    playing source's, so the lights did not react. Both now use the source that plays.
+  - *Editing a source mid-film keeps the ghost.* Changing the area, mode or intensity of the
+    source that is playing (on the Sources page) closed its ghost and relaunched it; from Home
+    Assistant it cost a seek and the time lock. The ghost now plays on and the new settings
+    apply at once. A source moved to another device still restarts it.
 - **2.13.3** - **Web pages can no longer reach the control API.** With no token set (the
   default), any web page open in a browser on this PC could call the API on port 8787: run a
   program through the mpv check, change the ghost's mpv path, or send the saved Jellyfin API

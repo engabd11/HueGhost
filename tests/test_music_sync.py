@@ -259,9 +259,11 @@ def test_music_offset_applies_to_music_only(music):
     d = music.d
     d.cfg.set("sync.offset_s", -0.1)
     assert d.offset == -0.1                     # nothing playing: the film offset
+    assert d.status()["music"]["in_use"] is False
     d.cfg.set("sync.music_offset_s", 0.15)
     _song(music, 30.0, 3.0)
     assert d.offset == 0.15
+    assert d.status()["music"]["in_use"] is True and d.status()["offset_s"] == 0.15
     d.cfg.set("sync.music_offset_s", None)
     assert d.offset == -0.1                     # None: music shares the film offset
 

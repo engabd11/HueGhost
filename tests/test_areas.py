@@ -194,6 +194,31 @@ def test_engine_switches_area_then_syncs():
         app.close()
 
 
+def test_a_patch_that_fails_still_brings_the_app_back():
+    """The app is killed before its files are patched: a patch that raises
+    (a key its config.json does not have) used to skip the relaunch and leave
+    Hue Sync closed for good."""
+    from hueghost.engines import Plan
+
+    class NoMonitorKey(SwitchableEngine):
+        def _write_app_config(self, **kw):
+            self.ops.append("patch-failed")
+            raise RuntimeError("App.PreferredMonitor not found in config.json")
+
+    app = MockHueSync()
+    eng = NoMonitorKey(app, area="area-office")
+    try:
+        assert wait(lambda: eng.state().connected)
+        eng.apply_plan(Plan(area_id="area-office", mode="video", monitor="MONITOR\\REAL\\0001"))
+        eng.start()
+        assert wait(lambda: "launch" in eng.ops, 8.0)
+        assert eng.ops == ["kill", "patch-failed", "launch"]
+        assert wait(lambda: eng.state().syncing, 8.0), "the app is back and syncs"
+    finally:
+        eng.close()
+        app.close()
+
+
 def test_every_startup_only_setting_lands_in_one_restart():
     from hueghost.engines import Plan
     app = MockHueSync()

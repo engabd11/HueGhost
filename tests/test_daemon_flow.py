@@ -106,7 +106,8 @@ def world(monkeypatch, tmp_path):
                      "poll_interval_s": POLL},
         "engine": {"type": "none"},
         "control": {"port": 0},
-        "sync": {"lights_off_delay_s": 1.5, "idle_stop_delay_s": 10.0, "offset_s": 0.0},
+        "sync": {"lights_off_delay_s": 1.5, "idle_stop_delay_s": 10.0, "offset_s": 0.0,
+                 "music_offset_s": None, "time_lock_release_s": 0.02},
         "ghost": {"keep_awake": "playing"},
     }, str(tmp_path / "config.json"))
     power = Power()
@@ -859,8 +860,12 @@ def test_a_client_found_paused_does_not_light_up_until_it_plays(world):
     assert world.ghost is None and not world.engine_on
     world.step(5.0)
     assert world.ghost is None and not world.engine_on
+    # ... and it is not the active source either: Home Assistant keys
+    # automations on that (one put the PC's monitor to sleep mid-film)
+    assert not any(b["active"] for b in world.d.status()["bindings"])
     world.step(1.0, playing(100.0, world.t))
     assert world.ghost is not None and world.engine_on
+    assert [b["active"] for b in world.d.status()["bindings"]] == [True]
 
 
 def test_a_tv_left_paused_hands_the_lights_to_a_phone_that_plays(world):
@@ -994,3 +999,26 @@ def test_a_film_paused_past_its_limit_with_nothing_else_keeps_its_ghost(world):
     assert world.ghost is g and d.status()["ghost"]["standby"] == "paused"
     world.step(1.0, playing(101.0, world.t))
     assert world.ghost is g and world.engine_on and len(world.launched) == 1
+
+
+def test_a_source_edited_mid_film_keeps_its_ghost_and_its_timeline(world):
+    """Changing the playing source's intensity (the Sources page, Home
+    Assistant) used to close its ghost, or read the film as a new item: a
+    relaunch or a seek, and the time lock lost."""
+    world.step(3.0, playing(100.0, 0.5))
+    g, m = world.ghost, world.d.watcher.model
+    b = world.d.cfg.bindings()[0]
+    world.d.apply_config({"sources": [dict(b, intensity="subtle")]})     # the Sources page
+    world.step(1.0)
+    world.d.set_binding_fields(b["id"], {"mode": "games"})               # Home Assistant
+    world.step(1.0)
+    assert world.ghost is g and len(world.launched) == 1
+    assert world.d.watcher.model is m, "the film playing is not read as a new item"
+    assert world.d.last_act.plan.intensity == "subtle" and world.d.last_act.plan.mode == "games"
+
+
+def test_a_source_moved_to_another_device_closes_its_ghost(world):
+    world.step(3.0, playing(100.0, 0.5))
+    b = world.d.cfg.bindings()[0]
+    world.d.apply_config({"sources": [dict(b, device_id="another-device")]})
+    assert world.ghost is None

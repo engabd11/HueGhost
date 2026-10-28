@@ -106,12 +106,14 @@ class ScreenCare:
     def blackout_after_s(self) -> float:
         return _minutes(self.cfg, "ghost.blackout_idle_min", 0.0) * 60.0
 
-    def tick(self, now: float, ghost, spare: set[str] | frozenset = frozenset()) -> None:
+    def tick(self, now: float, ghost, spare: set[str] | frozenset = frozenset(),
+             watched: bool = False) -> None:
         """``ghost`` is the live *video* ghost (None when there is none, or it
         is music). ``spare`` holds monitor DeviceIDs never to cover besides the
-        ghost's own display: the one the Hue Sync app says it captures."""
+        ghost's own display: the one the Hue Sync app says it captures.
+        ``watched``: something plays on this PC itself, so nothing is blacked out."""
         self._shift(now, ghost)
-        self._blackout(ghost is not None, spare)
+        self._blackout(ghost is not None, spare, watched)
 
     # -- pixel shift -------------------------------------------------------------
     def _shift(self, now: float, ghost) -> None:
@@ -148,13 +150,14 @@ class ScreenCare:
         log.debug("pixel shift: ghost picture at (%+.4f, %+.4f)", *pan)
 
     # -- black out ---------------------------------------------------------------
-    def _blackout(self, video_ghost: bool, spare) -> None:
+    def _blackout(self, video_ghost: bool, spare, watched: bool = False) -> None:
         after = self.blackout_after_s
-        idle = self._idle() if (video_ghost and after) else None
+        idle = self._idle() if (video_ghost and after and not watched) else None
         if idle is None or idle < after:
             if self.covers:
                 log.info("screen care: %s -> other displays back",
-                         "ghost closed" if not video_ghost else "input again" if after else "switched off")
+                         "ghost closed" if not video_ghost else "playing on this PC" if watched
+                         else "input again" if after else "switched off")
             self.uncover()
             self._covered = False
             return
