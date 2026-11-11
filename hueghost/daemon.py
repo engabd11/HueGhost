@@ -300,6 +300,7 @@ class Daemon:
     # -- main loop --------------------------------------------------------------
     def run(self) -> None:
         self._start_control()
+        self.areas()                 # also brings the saved area names up to date
         binds = self.cfg.enabled_bindings()
         log.info("hue-ghost %s following %s (engine=%s, poll %.2fs, offset %+.2fs)",
                  __version__,
@@ -541,6 +542,8 @@ class Daemon:
                 self._stop_ghost("track replayed")
         swapped = False
         if self.ghost is not None and self.ghost.item_id != m.item_id:
+            if self._swap_waits(now, act, m):
+                return
             swapped = self._swap_ghost(now, act, m)
             if not swapped:
                 log.info("followed client switched to '%s' -> relaunching ghost", _asc(m.name))
@@ -592,6 +595,17 @@ class Daemon:
         self.engine.apply_plan(act.plan)
         self._plan_applied = act.plan
 
+    def _swap_waits(self, now: float, act, m) -> bool:
+        """The music ghost runs behind its player (a negative music offset), so
+        the next song begins that much later for it. Until then the old song
+        plays out: swapping at once started every song early (live: 1.2-1.5 s
+        ahead, and five seconds of seeks to settle)."""
+        g = self.ghost
+        return (self._ghost_audio_only and not m.paused and g.alive() and not g.paused
+                and not getattr(g, "ended", False)
+                and self._ghost_binding == ((act.binding or {}).get("id") or None)
+                and m.position_at(now) + self.offset + self._swap_latency < 0.0)
+
     def _swap_ghost(self, now: float, act, m) -> bool:
         """A music source moved on to the next track: swap the file the live
         ghost plays instead of tearing the whole session down.
@@ -609,8 +623,10 @@ class Daemon:
             return False              # a different binding won: give it a fresh ghost
         # open the new file where the client is by the time it plays: no
         # process to start, only a loadfile - whose latency is learned
-        held = m.paused or m.frozen(now)
-        start = m.position_at(now) + self.offset + (0.0 if held else self._swap_latency)
+        start = m.position_at(now) + self.offset
+        # start < 0: the song has not begun for the ghost yet - the tick holds it at 0
+        held = m.paused or m.frozen(now) or start + self._swap_latency < 0.0
+        start += 0.0 if held else self._swap_latency
         if m.runtime_s:
             start = min(start, max(0.0, m.runtime_s - 1.0))
         if not g.alive() or not g.swap(spec.url, start=max(0.0, start)):
@@ -821,7 +837,7 @@ class Daemon:
             return
         if not cooldown_ok:
             return
-        held = m.paused or m.frozen(now)
+        held = m.paused or m.frozen(now) or target < 0.0    # < 0: not begun for the ghost yet
         start = target + (0.0 if held else self._startup_latency)
         if runtime:
             start = min(start, max(0.0, runtime - 1.0))   # never start past the end
@@ -984,6 +1000,8 @@ class Daemon:
             self.state = STANDBY
         if m is None:
             return
+        if g.item_id != m.item_id:
+            return                      # the old song plays out (see _swap_waits)
 
         if g.has_position and not self._engine_started and self._standby is None:
             lat = now - self._launch_mono
@@ -1025,6 +1043,17 @@ class Daemon:
 
         target = m.position_at(now) + self.offset
         target_held = m.paused or m.frozen(now)     # client paused, or on a still frame after a seek
+        # A ghost that runs behind its player (negative offset) has not reached
+        # the start of the file yet: it waits there. mpv cannot sit before 0, so
+        # it used to play from 0 at once - every song began early.
+        # a player that says "paused" seconds late has gone silent: wait where it
+        # most likely stopped. Its next report - the pause, or play - decides.
+        quiet = not target_held and self.jf_ok and m.quiet(now)
+        if quiet:
+            target, target_held = m.quiet_pos() + self.offset, True
+        early = target < 0.0 and not target_held
+        if early:
+            target, target_held = 0.0, True
         gobs = GhostObs(pos=g.pos, paused=g.paused, buffering=(g.buffering or g.stalled),
                         speed=g.speed, last_seek_mono=g.last_seek_mono)
         if self._ghost_audio_only and getattr(g, "core_idle", False) and not g.paused:
@@ -1060,6 +1089,9 @@ class Daemon:
                     self.stats.seeks += 1
                 elif isinstance(a, Pause):
                     log.info("%s -> ghost holds at %.1fs", "followed client paused" if m.paused
+                             else "the ghost runs %.2fs behind the player" % -self.offset if early
+                             else "no report from the player, which tells of a pause %.1fs late"
+                             % m.profile.pause_late_s if quiet
                              else "client buffering after seek", target)
                 elif isinstance(a, Resume):
                     log.info("client playing again -> ghost resumes at %.1fs", target)
@@ -1087,9 +1119,11 @@ class Daemon:
             self._swap_opened = None
             if steady and now - opened[0] < 5.0:
                 miss = gobs.pos - target        # < 0: it plays behind - the loadfile took longer
-                if abs(miss) < 2.0:
-                    self._swap_latency = round(min(max(
-                        0.7 * self._swap_latency + 0.3 * (self._swap_latency - miss), 0.0), 3.0), 3)
+                if abs(miss) < 2.5:
+                    # far off (a new server, a first run): take most of it at once,
+                    # or five songs in a row start late while it creeps up
+                    gain = 0.3 if abs(miss) < 0.3 else 0.7
+                    self._swap_latency = round(min(max(self._swap_latency - gain * miss, 0.0), 3.0), 3)
                     self._music_learned = True
         if self._seek_check is not None and now >= self._seek_check:
             self._seek_check = None
@@ -1295,7 +1329,28 @@ class Daemon:
             except Exception:
                 self._areas_cache = self._areas_cache or []
             self._areas_read = now
+            self._refresh_area_names()
         return list(self._areas_cache)
+
+    def _refresh_area_names(self) -> None:
+        """An area renamed in the Hue app keeps its id: show its name of today."""
+        names = {a["id"]: a["name"] for a in self._areas_cache or []}
+        with self._lock:
+            binds = self.cfg.bindings()
+            stale = [b for b in binds if names.get(b["area_id"], b["area_name"]) != b["area_name"]]
+            if not stale:
+                return
+            for b in stale:
+                log.info("area '%s' is now called '%s' (%s)", _asc(b["area_name"]), _asc(names[b["area_id"]]),
+                         _asc(b["name"] or b["id"]))
+                b["area_name"] = names[b["area_id"]]
+            self.cfg.set_bindings(binds)
+            if self.cfg.path:
+                try:
+                    self.cfg.save()
+                except OSError as e:
+                    log.warning("could not persist bindings: %s", e)
+            self._rebuild_sources()
 
     def settings(self) -> dict:
         """Every tunable a remote control (Home Assistant) shows, as it is now."""
@@ -1357,6 +1412,7 @@ class Daemon:
                     "paused_for_s": (round(now - self._paused_since, 1)
                                      if (m and m.paused and self._paused_since is not None) else None),
                     "buffering": m.frozen(now) if m else None,
+                    "binding": (obs.player.binding_id if obs and obs.player else None),
                     "area_id": (obs.player.area_id if obs and obs.player else None),
                     "area_name": (obs.player.area_name if obs and obs.player else None),
                     "reports": m.reports if m else 0,

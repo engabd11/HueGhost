@@ -238,6 +238,9 @@ BIG_STEP_S = 0.05
 SAWTOOTH_RATIO = 12.0      # envelope depth over the per-report change, for a sawtooth
 NOISE_RATIO = 8.0          # ... and below this, plain symmetric noise
 PROFILE_VOTES = 2          # agreeing looks that settle (or flip) a player's kind
+PAUSE_LATE_S = 1.0         # a player whose pauses arrive later than this is watched for silence
+PAUSE_LATE_MAX_S = 12.0    # ... and beyond this it was a seek, not a late report
+QUIET_SLACK_S = 0.6        # a report is this late before it counts as missing (one poll, and a bit)
 
 
 def despike(ys: list[float]) -> list[float]:
@@ -278,6 +281,13 @@ class ReportProfile:
     noise_s: float = 0.0           # median change between two steady timed reports
     lag_depth_s: float = 0.0       # mean gap under the envelope (lagging)
     interval_s: float = 0.0        # report cadence
+    gap_s: float = 0.0             # time between two reports of any kind, while it plays
+    # How late this player says it paused (learned at every pause): Moonfin on
+    # tvOS stops reporting when paused and only says so at its next 5 s
+    # check-in, so the ghost - and the lights - ran on for up to 5 s (live,
+    # 2026-11-11: 5.6 s; a phone told us in 0.3 s). Nothing here names a
+    # player: one that is fixed unlearns it over its next few pauses.
+    pause_late_s: float = 0.0
     votes: int = 0                 # > 0 leans lagging, < 0 symmetric
     changed: bool = False
 
@@ -288,14 +298,22 @@ class ReportProfile:
             if d.get("kind") in ("symmetric", "lagging"):
                 p.kind = d["kind"]
                 p.votes = PROFILE_VOTES if p.kind == "lagging" else -PROFILE_VOTES
-            for k in ("noise_s", "lag_depth_s", "interval_s"):
-                if isinstance(d.get(k), (int, float)):
+            for k in ("noise_s", "lag_depth_s", "interval_s", "gap_s", "pause_late_s"):
+                if isinstance(d.get(k), (int, float)) and not isinstance(d[k], bool):
                     setattr(p, k, min(max(float(d[k]), 0.0), 5.0))
         return p
 
     def to_dict(self) -> dict:
         return {"kind": self.kind, "noise_s": round(self.noise_s, 4),
-                "lag_depth_s": round(self.lag_depth_s, 3), "interval_s": round(self.interval_s, 2)}
+                "lag_depth_s": round(self.lag_depth_s, 3), "interval_s": round(self.interval_s, 2),
+                "gap_s": round(self.gap_s, 2), "pause_late_s": round(self.pause_late_s, 2)}
+
+    def saw_pause(self, late: float) -> None:
+        """A pause arrived ``late`` s after the player really stopped."""
+        if -0.5 <= late <= PAUSE_LATE_MAX_S:
+            was = self.pause_late_s
+            self.pause_late_s = round(0.7 * was + 0.3 * max(late, 0.0), 2)
+            self.changed = self.changed or abs(self.pause_late_s - was) > 0.1
 
     def look(self, pts: list[tuple[float, float]]) -> None:
         """One look at a steady stretch of ``(report_mono, raw)`` - ``raw`` is
@@ -419,6 +437,19 @@ class PlaybackModel:
     def frozen(self, now_mono: float) -> bool:
         """Playing, but the client is (predicted to be) on a still frame."""
         return (not self.paused) and now_mono < self.anchor_mono
+
+    def quiet(self, now_mono: float) -> bool:
+        """Probably paused, though the player has not said so: it is known to
+        say it late (``ReportProfile.pause_late_s``), and a report that was due
+        has not come."""
+        p = self.profile
+        return (p is not None and p.pause_late_s >= PAUSE_LATE_S and p.gap_s > 0.0
+                and not self.paused and self.stall_kind is None
+                and now_mono - self.last_report_mono > 1.5 * p.gap_s + QUIET_SLACK_S)
+
+    def quiet_pos(self) -> float:
+        """Where it most likely stopped: between its last report and the missing one."""
+        return self.position_at(self.last_report_mono + 0.5 * self.profile.gap_s)
 
     # -- internals -------------------------------------------------------------------
     def _anchor(self, pos: float, mono: float) -> None:
@@ -564,13 +595,22 @@ class PlaybackModel:
             return None
         self.last_key = r.key
         self.reports += 1
-        self.last_report_mono = report_mono
+        gap, self.last_report_mono = report_mono - self.last_report_mono, report_mono
         self.name = r.name
         if r.media_source_id:
             self.media_source_id = r.media_source_id
         pred = self.position_at(report_mono)
         delta = r.pos - pred
         event: str | None = None
+
+        p = self.profile
+        if p is not None and r.paused and not self.paused:
+            # Not a "pause" on the frame it started from: Moonfin says playing,
+            # buffers for 5 s, then reports paused where it began - it never played.
+            if r.pos > self.stall_pos + 0.5:
+                p.saw_pause(pred - r.pos)   # the timeline ran on this long after the real pause
+        elif p is not None and not (r.paused or self.paused or self.stall_kind)                 and 0.0 < gap < 15.0 and abs(delta) <= jitter_tol:
+            p.gap_s = round(0.8 * p.gap_s + 0.2 * gap, 2) if p.gap_s else round(gap, 2)
 
         if r.paused and not self.paused:
             self.paused = True

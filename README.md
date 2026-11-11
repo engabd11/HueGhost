@@ -142,7 +142,7 @@ Every setting is in the app and saved in `%APPDATA%\hue-ghost\config.json`. The 
 |---|---|
 | **Status pill and Sync switch** (top right) | The state in one word, and the master on/off. Off means Hue Ghost leaves the lights alone. |
 | **Banner** (*Idle*, *Syncing*) | The state in a sentence: which player it is waiting for, or which room Hue Sync is streaming to. |
-| **Now playing on the TV** | The title, the player and its app, the room it lights (the chip with the arrow) and the progress. |
+| **Now playing on ...** (the source's name; *Now playing on the TV* in the screenshots) | The title, the player and its app, the room it lights (the chip with the arrow) and the progress. |
 | **Ghost lockstep** | Live drift between the ghost and the TV. The green zone is within 0.15 s; *locked* means Time lock is holding it. The chips show the ghost's position, speed, seeks and nudges. |
 | **Hue Sync app** | What Hue Sync is really doing: its state, area, mode, intensity and audio. The four controls below are in this card. |
 | &nbsp;&nbsp;*Mode* | Video, Music or Games: what Hue Sync reacts to. Changes live, with no restart. |

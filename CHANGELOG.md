@@ -17,6 +17,16 @@ All notable changes to Hue Ghost. The newest release is first.
     app cannot use is refused and the old settings stay.
   - *Hue Sync's files are replaced in one step,* never emptied and rewritten.
   - *`hue-ghost setup` stores its pick where the app reads it* (first in the sources).
+  - *Songs no longer start early.* With a negative music offset the ghost runs behind the
+    player, so each song begins that much later for it - but mpv played from 0 at once, 1.2 to
+    1.5 s ahead, and seeked for five seconds to settle. The ghost now waits at the start, and
+    at a track change the old song plays out until the new one is due.
+  - *A player that says "paused" late is learned.* Moonfin on the Apple TV reported a pause up
+    to 5 s late, and the lights ran on. Hue Ghost learns per player how late its pauses come;
+    for one that is late, a missing report holds the ghost where the reports stopped. A player
+    that is fixed unlearns it over its next few pauses.
+  - *An area renamed in the Hue app shows its new name* on Home, in the log and in Home Assistant.
+  - *Home says what is playing where:* "Now playing on Android S23", not always "on the TV".
   - *Film offset default is 0.4 s* (was 0.2 s), for settings a config file does not already have.
   - *Finer steps on the Sync page.* Lights off after the TV stops, Converge time and Seek
     cooldown move in 0.1 s steps, not 0.5 s.

@@ -103,7 +103,8 @@ def test_profiles_round_trip_and_ignore_rubbish():
     w.profiles[DEV].changed = True
     assert w.profiles_changed()
     dump = w.dump_profiles()
-    assert dump[DEV] == {"kind": "lagging", "noise_s": 0.0025, "lag_depth_s": 0.093, "interval_s": 0.0}
+    assert dump[DEV] == {"kind": "lagging", "noise_s": 0.0025, "lag_depth_s": 0.093, "interval_s": 0.0,
+                         "gap_s": 0.0, "pause_late_s": 0.0}
     assert "x" not in dump and not w.profiles_changed()
     assert ReportProfile.from_dict(None).kind == "unknown"
 

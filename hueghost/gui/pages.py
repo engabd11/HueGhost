@@ -163,7 +163,7 @@ class HomePage(Page):
         self.lay.addWidget(grid)
 
         # now playing
-        np_card = Card("Now playing on the TV")
+        np_card = self.np_card = Card("Now playing")
         nrow = QHBoxLayout()
         nrow.setSpacing(16)
         self.poster = Poster(132, 132)
@@ -368,6 +368,9 @@ class HomePage(Page):
                 key, glyph = "error", "warn"
         self._set_hero(key, glyph, txt, sub)
 
+        # the source's own name: a phone is not "the TV"
+        on = next((b["name"] for b in st.get("bindings") or [] if b["id"] == f.get("binding")), "")
+        self.np_card.title.setText(("Now playing on %s" % on if f.get("playing") and on else "Now playing").upper())
         if f.get("playing"):
             self.np_title.setText(f.get("item") or "?")
             self.np_device.setText(f.get("device") or "")
