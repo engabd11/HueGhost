@@ -25,7 +25,8 @@ class JellyfinSource(Source):
         self.cfg = cfg
         self._bindings = list(bindings)
         self.interval_s = float(cfg.get("jellyfin.poll_interval_s", 0.5))
-        self.client = client or JellyfinClient(cfg.get("jellyfin.url"), cfg.get("jellyfin.api_key"))
+        # polled under the daemon's lock: a server that is off must not hold it for long
+        self.client = client or JellyfinClient(cfg.get("jellyfin.url"), cfg.get("jellyfin.api_key"), timeout=3.0)
         self.watcher = self._make_watcher()
         self._warned_no_output = None
 

@@ -3,7 +3,7 @@
 [![Latest release](https://img.shields.io/github/v/release/engabd11/HueGhost?logo=github)](https://github.com/engabd11/HueGhost/releases/latest)
 [![Downloads](https://img.shields.io/github/downloads/engabd11/HueGhost/total?logo=github&color=brightgreen)](https://github.com/engabd11/HueGhost/releases)
 
-**Philips Hue light sync for Jellyfin, PC games streamed to the TV.**
+**Philips Hue light sync for Jellyfin, PC apps and games.**
 
 Press play on any Jellyfin client (Apple TV, Android TV, a phone and more), or start a game or video on your PC, and the Hue lights in the room follow the picture. Hue Ghost does it with the free Hue Sync desktop app, and your TV keeps playing its own stream, so 4K, HDR and Dolby Vision work as usual.
 
@@ -52,9 +52,9 @@ Put them all in one list. If two play at once, the one nearest the top wins.
 | **PC** | Windows 10 or 11 (64-bit), left on while you watch, with sleep switched off |
 | **Lights** | A Hue Bridge (v2) with an **entertainment area** set up in the Hue app |
 | **Hue Sync** | The free [Hue Sync desktop app](https://www.philips-hue.com/en-us/explore-hue/propositions/entertainment/sync-with-pc), paired with your bridge |
-| **For TV sync** | A Jellyfin server (10.9 or newer) on your network, and a Jellyfin API key |
-| **For TV sync** | A spare display for the ghost: the installer adds a **virtual display**, or use an HDMI dummy plug |
-| **For Jellyfin music** *(optional)* | A spare audio output reserved for the ghost, such as an unused optical port or a virtual output (virtual audio cable, Steam Streaming Speakers); not a monitor's own audio, which goes away when the screen sleeps |
+| **Jellyfin** *(for TV sync)* | A Jellyfin server (10.9 or newer) on your network, and a Jellyfin API key |
+| **Ghost display** *(for TV sync)* | A spare display for the ghost: the installer adds a **virtual display**, or use an HDMI dummy plug |
+| **Spare audio output** *(for Jellyfin music, optional)* | A spare audio output reserved for the ghost, such as an unused optical port or a virtual output (virtual audio cable, Steam Streaming Speakers); not a monitor's own audio, which goes away when the screen sleeps |
 
 Syncing apps and games on the PC only? You need just the PC, the bridge and Hue Sync.
 
@@ -70,14 +70,14 @@ The ghost plays the original file, so the graphics card should decode your films
 Open **Hue Ghost** from the Start menu. The first run opens on **Sources**.
 
 1. **Sources**: add what the lights should follow.
-   - *A TV or phone:* enter your Jellyfin URL and API key (Jellyfin Dashboard > API Keys > +), click *Test connection*, play something on the TV, select it and click *Add selected player*.
+   - *A TV or phone:* enter your Jellyfin URL and API key (Jellyfin Dashboard > API Keys > +), click *Test and list players*, play something on the TV, select it and click *Add selected player*.
    - *An app or game on this PC:* use **Quick add** (for example *Any game* or *Web browsers*), pick it from the list of running apps, or type its `.exe`.
    - Give each one its **mode** (Video, Music or Games), **intensity** and **room** (entertainment area), then **Save sources**.
-2. **Display**: pick the ghost display (the virtual display) and click *Show test pattern* to check it is the right one. (TV sync only.)
+2. **Display**: pick the ghost display (the virtual display) and click *Show test pattern for 8 s* to check it is the right one. (TV sync only.)
 3. **Hue Sync**: in the Hue Sync app, once, switch *Settings > Allow public control* **on** and *Start syncing when Hue Sync launches* **off**. The page checks this for you.
 4. **Home**: press play on the TV and watch the state go from *idle* to *ghost playing* to *syncing*.
 
-Closing the window leaves Hue Ghost running in the tray. The tray icon shows the state: grey idle, blue ghost playing, green syncing, red when Hue Sync is unreachable.
+Closing the window leaves Hue Ghost running in the tray. The tray icon shows the state: grey idle, blue ghost playing, green syncing, red when Jellyfin cannot be reached.
 
 ## What you can sync
 
@@ -106,7 +106,9 @@ Closing the window leaves Hue Ghost running in the tray. The tray icon shows the
 | **On/off switch** | Ignore the source for now without deleting it. |
 | **Name** | Edit it to whatever you like (*S23 music*). Phones all arrive from Jellyfin as plain "Android", so naming them helps. |
 | **Up / down arrows** | Priority. The playing source nearest the top gets the lights. |
-| **Mode** | *Video* reacts to the picture, *Music* to the sound, *Games* to a game. *Automatic* (Jellyfin clients only) uses music mode for a song and video for anything else. |
+| **Bin** | Removes the source. |
+| **Line under the name** | What the row matches: *this exact device* for a Jellyfin player, or *on this PC* and the app's `.exe`. |
+| **Mode** | *Video* reacts to the picture, *Music* to the sound, *Game* to a game. *Automatic* (Jellyfin clients only) uses music mode for a song and video for anything else. |
 | **Intensity** | How strongly the lights react: Subtle, Moderate, High or Extreme. *Default* uses the one on Home. |
 | **Detect** *(PC apps only)* | How Hue Ghost knows the app is playing: *Sound* (it is making some), *Fullscreen* (it fills the screen) or *Either*. Video defaults to sound, games to fullscreen. |
 | **Audio** | Hue Sync's *use audio for light effects* while this source plays. *On* for a game so explosions flash, *Off* for a film. *Default* uses the setting on Home. |
@@ -119,7 +121,7 @@ Leave a field on *Automatic*, *Default* or *Current area* and Hue Ghost does not
 - **Automatic on and off.** Lights start when playback starts and stop about 1.5 s after it stops. Pauses and next episodes are handled for you.
 - **Frame-accurate TV sync.** The ghost follows the TV to within about 0.1 to 0.2 s, and follows seeks within about a second.
 - **Time lock** (on by default). Once the ghost matches the TV, Hue Ghost holds it steady instead of correcting on every report, which makes the lights noticeably smoother. It lets go on a seek, pause or buffering, and locks again straight after.
-- **Offset tuning from the couch.** If the lights change *late* on a hard cut, press **+0.25** on Home. If *early*, press **-0.25**. Typical values are 1.0 to 2.0 s.
+- **Offset tuning from the couch.** If the lights change *late* on a hard cut, press **+0.25** on Home. If *early*, press **-0.25**. See [Tuning the timing](#tuning-the-timing).
 - **Several rooms.** Each source can light its own entertainment area.
 - **Displays kept awake.** Hue Ghost holds the displays awake while something plays, so Hue Sync always has a picture to watch.
 - **OLED care.** The ghost picture shifts a few pixels now and then, and other screens can go black while you are away from the PC.
@@ -134,47 +136,67 @@ Every setting is in the app and saved in `%APPDATA%\hue-ghost\config.json`. The 
 
 ![Home while idle, with mode, intensity, audio, brightness and the timing offset](docs/images/home-idle.png)
 
-| Control | What it does |
+*Home while idle. The screenshot at the top of this page is the same page while syncing.*
+
+| On the page | What it shows or does |
 |---|---|
-| **Sync switch** (top right) | Master on/off. Off means Hue Ghost leaves the lights alone. |
-| **Mode** | Video, Music or Games: what Hue Sync reacts to. Changes live, with no restart. |
-| **Intensity** | Subtle, Moderate, High or Extreme. Changes live. |
-| **Use audio for effects** | *On*, *Off* or *App's own*. Lets the lights react to the soundtrack as well as the picture (video and games). Hue Sync only reads it at start-up, so changing it restarts Hue Sync for about 3 s. |
-| **Brightness** | The level Hue Sync runs the area at. |
-| **Timing offset** | How far the ghost runs ahead of the TV. See [Tuning the timing](#tuning-the-timing). |
-| **Ghost lockstep** | Live drift between the ghost and the TV. Green is within 0.15 s. |
+| **Status pill and Sync switch** (top right) | The state in one word, and the master on/off. Off means Hue Ghost leaves the lights alone. |
+| **Banner** (*Idle*, *Syncing*) | The state in a sentence: which player it is waiting for, or which room Hue Sync is streaming to. |
+| **Now playing on ...** (the source's name; *Now playing on the TV* in the screenshots) | The title, the player and its app, the room it lights (the chip with the arrow) and the progress. |
+| **Ghost lockstep** | Live drift between the ghost and the TV. The green zone is within 0.15 s; *locked* means Time lock is holding it. The chips show the ghost's position, speed, seeks and nudges. |
+| **Hue Sync app** | What Hue Sync is really doing: its state, area, mode, intensity and audio. The four controls below are in this card. |
+| &nbsp;&nbsp;*Mode* | Video, Music or Games: what Hue Sync reacts to. Changes live, with no restart. |
+| &nbsp;&nbsp;*Intensity* | Subtle, Moderate, High or Extreme. Changes live. |
+| &nbsp;&nbsp;*Use audio for effects* | *On*, *Off* or *App's own*. Lets the lights react to the soundtrack as well as the picture (video and games). Hue Sync only reads it at start-up, so changing it restarts Hue Sync for about 3 s. |
+| &nbsp;&nbsp;*Brightness* | The level Hue Sync runs the area at: drag the slider or press -10 / +10. |
+| **Timing** | The film offset: how far the ghost runs ahead of the TV, with the -0.25, -0.05, +0.05 and +0.25 buttons. See [Tuning the timing](#tuning-the-timing). The bottom line is the last minute's sync quality. |
 
 These controls always show what Hue Sync is really doing. If you change the mode in the Hue Sync app, they follow. Mode and intensity here are the **defaults**; a source with its own setting overrides them while it plays.
 
 ### Tuning the timing
 
-Watch a hard cut in a film. If the lights change **late**, press **+0.25** on Home (or raise the number). If they change **early**, press **-0.25**. Then refine in 0.05 s steps. It applies at once and is saved. Typical values are 1.0 to 2.0 s. Music has its own offset because the lights listen to the sound rather than watch a picture: lights after the beat? Raise it.
+Watch a hard cut in a film. If the lights change **late**, press **+0.25** in the *Timing* card on Home (or raise the number on the Sync page). If they change **early**, press **-0.25**. Then refine in 0.05 s steps. It applies at once and is saved.
+
+Music has its own offset, because the lights listen to the sound rather than watch a picture. Lights after the beat? Raise it. The desktop app has no control for it: set it under *Timings > Music sync offset* on the [Home Assistant card](#what-the-card-does), or with `/set {"music_offset_s": -1.85}` over the API.
 
 ### Sync page
 
 ![The Sync page: advanced lockstep tuning and learned TV buffering](docs/images/sync-settings.png)
 
-| Setting | What it does |
-|---|---|
-| **Lights off after the TV stops** (1.5 s) | How long after playback stops before the lights stop. Short brings the room back at once; a little longer rides out a player that stops and restarts. |
-| **Close the ghost after** (10 s) | How long the hidden copy of the film stays ready on standby. Press play again inside this time and it continues without reloading. |
-| **Lights off when paused for** | Minutes a film may stay paused before the lights stop. 0 means never. |
-| **Music pause limit** (15 s) | Music is different: a paused song is not coming back soon, so the lights stop after this long. 0 means never. |
-| **Gap allowed between songs** (10 s) | How long music may stop between tracks before the lights stop. |
-| **Time lock** (on) | Once the ghost matches the TV, hold it steady instead of nudging it on every report. Smoother lights. Seeks, pauses and new episodes release it, and it locks again. Re-check your offset after switching it on or off. |
-| **Release when the TV is off by** (0.02 s) | How far the TV can drift from the locked timeline before Time lock lets go. |
-| **Advanced lockstep tuning** | Hard-seek beyond, deadband, converge time, max speed change, seek detection, seek cooldown and Jellyfin poll. The defaults are tuned for a 0.5 s Jellyfin poll. Change with care. |
-| **Learned TV buffering** | What Hue Ghost has learned about how long your TV sits on a still frame after a seek, start and resume. *Reset learned values* starts again. |
+*The lower half of the Sync page. Above it are the Offset, What Hue Sync does with the ghost, Stopping and Time lock cards.*
+
+The settings are listed in the order of the page, under the names the app shows. The third column is the name of the same setting on the Home Assistant card.
+
+| Card | Setting | On the Home Assistant card | What it does |
+|---|---|---|---|
+| **Offset** | slider, number and nudge buttons | *Timings > Film sync offset* | The film offset, the same value as *Timing* on Home. |
+| **What Hue Sync does with the ghost** | Mode, Intensity, Use audio for effects | *Intensity*, *Mode* | The same three controls as on Home. |
+| **Stopping** | Lights off after the TV stops | *Timings > Lights off after video stops* | How long after playback stops before the lights stop. Short brings the room back at once; a little longer rides out a player that stops and restarts. |
+| | Close the ghost after | *Timings > Standby after a film stops* | How long the hidden copy of the film stays ready on standby. Press play again inside this time and it continues without reloading. |
+| | Films: lights off when paused for | *Timings > Film pause limit* | Minutes a film may stay paused before the lights stop. 0 means never. |
+| | Music: lights off when paused for | *Timings > Music pause limit* | Seconds a song may stay paused before the lights stop. A paused song is not coming back soon, so this is short. 0 means never. |
+| | Music: gap between songs | *Timings > Gap allowed between songs* | How long music may stop between tracks before the lights stop. |
+| **Time lock** | Time lock | *More > Time lock* | Once the ghost matches the TV, hold it steady instead of nudging it on every report. Smoother lights. Seeks, pauses and new episodes release it, and it locks again. Re-check your offset after switching it on or off. |
+| | Release when the TV is off by | - | How far the TV can drift from the locked timeline before Time lock lets go. |
+| **Advanced lockstep tuning** | Hard-seek beyond, Deadband, Converge time, Max speed change, Seek detection, Seek cooldown, Jellyfin poll | - | The defaults are tuned for a 0.5 s Jellyfin poll. Change with care. |
+| **Learned TV buffering** | *Reset learned values* | - | What Hue Ghost has learned about how long your TV sits on a still frame after a seek, start and resume. The button starts again. |
+
+Changes on this page apply when you click **Save sync settings**. The default of every setting is in [docs/settings.md](docs/settings.md#defaults).
 
 ### Display page
 
-| Setting | What it does |
-|---|---|
-| **Ghost display** | The screen the ghost plays on and Hue Sync captures: the virtual display, or an HDMI dummy plug. *Show test pattern* checks it is the right one. |
-| **Ghost audio output** | For Jellyfin music only. A spare output nobody listens to (an unused optical port, or a virtual audio cable), which Hue Sync's music mode listens to. Avoid a monitor's own audio, which disappears when the screen sleeps. |
-| **Keep displays awake** | *Off*, *While the ghost plays* (default) or *Always*. A sleeping display gives Hue Sync nothing to watch, so the lights sit on one dim colour. Turn the PC's own sleep timeout off. |
-| **Screen care: shift the ghost picture** (3 min) | For OLEDs. Moves the ghost picture a few pixels every few minutes. The lights cannot tell. 0 is off. |
-| **Screen care: black out other displays** (off) | For OLEDs. Covers the screens Hue Sync is not capturing in black after this many idle minutes. Any mouse or keyboard input brings them back. 0 is off. |
+This page has no screenshot. The cards, top to bottom:
+
+| Card | Setting | On the Home Assistant card | What it does |
+|---|---|---|---|
+| **Ghost display** | the display list, *Show test pattern for 8 s* | - | The screen the ghost plays on and Hue Sync captures: the virtual display, or an HDMI dummy plug. The test pattern checks it is the right one. |
+| **Keep displays awake** | *Off*, *While the ghost plays* or *Always* | *More > Keep displays awake* (there: *While a film syncs*) | A sleeping display gives Hue Sync nothing to watch, so the lights sit on one dim colour. Turn the PC's own sleep timeout off. |
+| **Screen care** | Shift the ghost picture every | *Timings > Screen care: pixel shift every* | For OLEDs. Moves the ghost picture a few pixels every few minutes. The lights cannot tell. 0 is off. |
+| | Black out the other displays after | *Timings > Screen care: black out idle screens after* | For OLEDs. Covers the screens Hue Sync is not capturing in black after this many idle minutes. Any mouse or keyboard input brings them back. 0 is off. |
+| **Ghost audio output** | Play music into, Ghost volume on it | - | For Jellyfin music only. A spare output nobody listens to (an unused optical port, or a virtual audio cable), which Hue Sync's music mode listens to. Avoid a monitor's own audio, which disappears when the screen sleeps. |
+| **mpv player** | mpv path, Hardware decoding | - | Which mpv plays the ghost. Leave the path alone to use the one the installer added. |
+
+Click **Save display settings** to apply.
 
 ### Hue Sync page
 
@@ -215,11 +237,11 @@ That is the whole config: it finds the Hue Ghost device by itself. Optional `tit
 - **Sync source**: *Automatic (first one playing)*, or pick one to put it first whenever it plays.
 - **Source tiles**: one per source. A tile switches that source on or off, and the one playing is ringed in gold.
 
-Expand **Each source**, **Timings** and **More** at the bottom of the card for the rest, which mirrors the desktop app:
+Expand **Each source**, **Timings** and **More** at the bottom of the card for the rest. It mirrors the desktop app under slightly different names; the [Sync page](#sync-page) and [Display page](#display-page) tables give both.
 
 | ![Each source: room, mode and intensity](docs/images/ha-card-each-source.png) | ![Timings](docs/images/ha-card-timings.png) | ![More: Time lock, keep displays awake, restart](docs/images/ha-card-more.png) |
 |---|---|---|
-| **Each source**: the room, mode and intensity for each one | **Timings**: film and music offsets, lights-off delay, standby, pause limits, screen care | **More**: Time lock, keep displays awake, restart Hue Ghost on the PC |
+| **Each source**: the room, mode and intensity for each one | **Timings**: film and music offsets, lights-off delay, standby, gap between songs, pause limits, screen care | **More**: Time lock, keep displays awake, restart Hue Ghost on the PC |
 
 ### Entities you get
 
@@ -236,6 +258,12 @@ Expand **Each source**, **Timings** and **More** at the bottom of the card for t
 
 Hue Synco and Hue Ghost versions: mode, intensity and audio need Hue Ghost 2.3.0, the brightness light and source switches 2.4.0, and the remote-control entities 2.13. Every entity has a `description` attribute that explains it. All of it is described in the [Hue Synco movie mode docs](https://github.com/engabd11/syncoV2/blob/main/docs/movie-mode.md).
 
+### Automation ideas
+
+- Movie mode on at sunset, off at bedtime.
+- Dim the other lights while `sensor.hue_ghost_sync_status` is `syncing`.
+- A wall or phone button that toggles `light.hue_ghost_global_sync`.
+- Trigger a scene in the room named by `sensor.hue_ghost_sync_area`.
 
 ### Without Hue Synco: the REST API
 

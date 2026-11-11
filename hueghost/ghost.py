@@ -18,7 +18,7 @@ import time
 from typing import Any, Callable
 
 from .lockstep import Action, Pause, Resume, Seek, Speed
-from .winutil import mpv_audio_device
+from .winutil import find_mpv, mpv_audio_device
 
 log = logging.getLogger("hue-ghost.ghost")
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -208,7 +208,9 @@ def mpv_args(cfg, title: str, audio_only: bool = False, audio_device: str = "") 
     whole point, so it is played (at full volume) into a device you cannot
     hear, which is the device Hue Sync's music mode listens to."""
     g = cfg.section("ghost")
-    args = [g.get("mpv_path") or "mpv", "--no-config", "--no-border",
+    # find_mpv: "mpv" alone misses the copy the installer puts in {app}\mpv
+    mpv = g.get("mpv_path") or "mpv"
+    args = [find_mpv(mpv) or mpv, "--no-config", "--no-border",
             "--osd-level=0", "--osc=no",
             "--sub-visibility=no", "--sub-auto=no", "--audio-file-auto=no",
             "--hwdec=" + str(g.get("hwdec") or "auto"),
@@ -458,6 +460,3 @@ class GhostPlayer:
     def finish_place(self) -> None:
         self.ipc.send("set_property", "fullscreen", True)
         self.placing = False
-
-    def toggle_fullscreen(self) -> None:
-        self.ipc.send("cycle", "fullscreen")

@@ -13,8 +13,8 @@ starts, so it no longer depends on what the app was last left on:
 - **Intensity** - Subtle / Moderate / High / Extreme.
 - **Use audio for effects** - the app's own switch for video and games mode:
   the lights react to the soundtrack as well as the picture. Leave it on
-  *App's own* and Hue Ghost never touches it. This is the default: each source
-  can override it with its own **Audio** setting on the Sources page.
+  *App's own* and Hue Ghost never touches it. Each source can override it
+  with its own **Audio** setting on the Sources page.
 
 Mode and intensity go over the Public Control socket and apply live,
 mid-movie: switching from Video to Music or Games costs one message and never
@@ -58,7 +58,7 @@ The one thing that is yours to tune is the **offset** - how far ahead of the
 TV the ghost runs, to cancel the capture -> bridge -> lamp latency and your
 TV's own display lag. On **Home** or **Sync**: watch a hard cut; if the lights
 change *late*, press **+0.25**; if *early*, **-0.25**; then refine in 0.05 s
-steps. It applies instantly and is saved. Typical values: 1.0-2.0 s.
+steps. It applies instantly and is saved. The default is 0.4 s.
 
 Everything else is automatic: Hue Ghost anchors on the TV's progress reports,
 learns how long your TV buffers after a seek (shown under *Sync > Learned TV
@@ -71,7 +71,7 @@ ghost is always correcting. With *Time lock* on, once the drift reaches 0.0 s
 the timeline is held and the ghost simply plays at 1.0x; Home shows
 *drift +0.00 s · locked*. Seeking, pausing, buffering - or the TV's
 precisely timed reports drifting more than *Release when the TV is off by*
-(0.02 s) from the locked timeline - releases it, the usual corrections take
+(0.08 s) from the locked timeline - releases it, the usual corrections take
 over, and it locks again once playback has settled. It also stops steering by
 reports Jellyfin did not time: Moonfin on the Apple TV sends its position
 every second but Jellyfin times only every fifth, which otherwise leaves the
@@ -97,14 +97,47 @@ for a whole film means hours of one unchanging picture - the desktop on the
 screens nobody is looking at, the frame the ghost is paused on - and an OLED
 burns that in. Two remedies, both live, both only while the ghost plays:
 
-- *Shift the ghost picture every* N minutes (default **3**, 0 = off) moves the
+- *Shift the ghost picture every* N minutes (default **off**; try 3) moves the
   ghost's picture a few pixels round a slow orbit. Invisible, and the lights
   cannot tell - Hue Sync averages much larger areas of the screen.
-- *Black out the other displays after* N minutes (default **off**) covers
+- *Black out the other displays after* N minutes (default **1**, 0 = off) covers
   every display Hue Sync is *not* capturing in black once nobody has touched
   the mouse or keyboard for that long - a black OLED pixel is switched off.
   Any input brings them straight back. The ghost display, and whichever one
   Hue Sync reports capturing, is never covered, so the lights carry on.
+
+## Defaults
+
+What a fresh install starts with. A setting you have changed keeps your value
+through updates. The names are the ones the app shows; `tests/test_docs.py`
+checks this table against the code.
+
+| Setting | Page | Key in `config.json` | Default |
+|---|---|---|---|
+| Timing / Offset (film) | Home, Sync | `sync.offset_s` | `0.4` |
+| Music sync offset | Home Assistant card | `sync.music_offset_s` | `-1.85` |
+| Mode | Home, Sync | `engine.huesync.mode` | `"video"` |
+| Intensity | Home, Sync | `engine.huesync.intensity` | `"extreme"` |
+| Use audio for effects (`false` = Off) | Home, Sync | `engine.huesync.use_audio` | `false` |
+| Lights off after the TV stops (s) | Sync | `sync.lights_off_delay_s` | `1.5` |
+| Close the ghost after (s) | Sync | `sync.idle_stop_delay_s` | `10.0` |
+| Films: lights off when paused for (min) | Sync | `sync.pause_stop_min` | `1.0` |
+| Music: lights off when paused for (s) | Sync | `sync.music_pause_stop_s` | `15.0` |
+| Music: gap between songs (s) | Sync | `sync.music_gap_s` | `10.0` |
+| Time lock | Sync | `sync.time_lock` | `true` |
+| Release when the TV is off by (s) | Sync | `sync.time_lock_release_s` | `0.08` |
+| Hard-seek beyond (s) | Sync | `sync.seek_threshold_s` | `1.0` |
+| Deadband (s) | Sync | `sync.deadband_s` | `0.05` |
+| Converge time (s) | Sync | `sync.converge_s` | `5.0` |
+| Max speed change | Sync | `sync.max_speed_delta` | `0.04` |
+| Seek detection (s) | Sync | `sync.jitter_tolerance_s` | `1.5` |
+| Seek cooldown (s) | Sync | `sync.seek_cooldown_s` | `3.0` |
+| Jellyfin poll (s) | Sync | `jellyfin.poll_interval_s` | `0.5` |
+| Keep displays awake (`"playing"` = While the ghost plays) | Display | `ghost.keep_awake` | `"playing"` |
+| Shift the ghost picture every (min, 0 = off) | Display | `ghost.pixel_shift_min` | `0.0` |
+| Black out the other displays after (min, 0 = off) | Display | `ghost.blackout_idle_min` | `1.0` |
+| Ghost volume on it | Display | `ghost.music_volume` | `100` |
+| Port | Home Assistant | `control.port` | `8787` |
 
 ## Home Assistant
 

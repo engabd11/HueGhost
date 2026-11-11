@@ -49,7 +49,7 @@ DEFAULTS: dict[str, Any] = {
         "start_confirm_s": 1.0,      # ignore anything shorter (alt-tab, a notification chime)
     },
     "sync": {
-        "offset_s": 0.2,             # ghost runs this far AHEAD of the followed client
+        "offset_s": 0.4,             # ghost runs this far AHEAD of the followed client
         "seek_threshold_s": 1.0,     # beyond this drift -> hard seek
         "deadband_s": 0.05,          # within this -> leave speed at 1.0
         "converge_s": 5.0,           # proportional controller time constant
@@ -385,6 +385,7 @@ class Config:
             # a new config starts on today's defaults: nothing to migrate from
             self.data["_migrations"] = [name for name, _ in MIGRATIONS]
         self.migrated = False
+        self.load_error: str | None = None   # set by load(recover=True); cleared by the next save
 
     # -- access -----------------------------------------------------------
     def get(self, dotted: str, default: Any = None) -> Any:
@@ -401,12 +402,26 @@ class Config:
 
     # -- persistence ------------------------------------------------------
     @classmethod
-    def load(cls, path: str | None = None) -> "Config":
+    def load(cls, path: str | None = None, recover: bool = False) -> "Config":
+        """``recover`` (app start-up): a file that is not valid JSON is moved
+        aside as ``config.json.bad`` and the defaults are used, with the reason
+        in ``problems()`` - the windowed app has no console to die on."""
         path = resolve_config_path(path)
         if not os.path.exists(path):
             return cls({}, path)
-        with open(path, "r", encoding="utf-8") as f:
-            raw = json.load(f)
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                raw = json.load(f)
+            if not isinstance(raw, dict):
+                raise ValueError("not a JSON object")
+        except ValueError as e:
+            if not recover:
+                raise
+            os.replace(path, path + ".bad")
+            cfg = cls({}, path)
+            cfg.load_error = "%s could not be read (%s) - it was kept as %s and the defaults are in use" % (
+                os.path.basename(path), e, os.path.basename(path) + ".bad")
+            return cfg
         if is_legacy(raw):
             cfg = cls(migrate_legacy(raw), path)
             cfg.migrated = True
@@ -429,6 +444,7 @@ class Config:
             f.write("\n")
         os.replace(tmp, path)
         self.path = path
+        self.load_error = None
         return path
 
     def exists(self) -> bool:
@@ -542,7 +558,7 @@ class Config:
         """What stops the daemon running at all. A Jellyfin server that is not
         set up is only fatal when something actually follows it - a PC-only
         install is a perfectly good setup."""
-        out = []
+        out = [self.load_error] if self.load_error else []
         binds = self.enabled_bindings()
         jelly = [b for b in binds if b.get("source") == "jellyfin"]
         if jelly:

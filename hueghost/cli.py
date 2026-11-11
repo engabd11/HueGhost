@@ -108,7 +108,7 @@ def _claim_instance(show: bool = False):
 
 
 def cmd_run(args) -> int:
-    cfg = Config.load(args.config)
+    cfg = Config.load(args.config, recover=True)
     setup_logging(cfg.get("log_level", "INFO"))
     inst = _claim_instance()
     if inst is None:
@@ -130,20 +130,6 @@ def cmd_run(args) -> int:
     inst.release()
     _relaunch_if_requested(d)
     return 0
-
-
-def cmd_tray(args) -> int:
-    cfg = Config.load(args.config)
-    setup_logging(cfg.get("log_level", "INFO"))
-    try:
-        from .tray import run_tray
-    except ImportError as e:
-        log.error("tray needs the optional dependencies: pip install \"hue-ghost[tray]\" (%s)", e)
-        return 2
-    inst = _claim_instance()
-    if inst is None:
-        return 1
-    return run_tray(cfg)
 
 
 def cmd_status(args) -> int:
@@ -297,12 +283,12 @@ def cmd_doctor(args) -> int:
             if ghost is not None and d.name == ghost.name:
                 mark = "  <- ghost (chosen automatically)" if auto else "  <- ghost"
             print("         display %d: %s%s" % (d.index, d.label(), mark))
-        if want and not any(d.name == want for d in disps):
-            row("FAIL", "ghost display", "%s not present" % want)
-        elif not want and (idx is None or idx == ""):
-            row("WARN", "ghost display", "none chosen: ghost goes fullscreen on the current display")
+        if ghost is None:
+            row("WARN", "ghost display", "only the primary display: the ghost plays over your screen")
+        elif auto:
+            row("WARN", "ghost display", "%s (chosen automatically; pick one on the Display page)" % ghost.name)
         else:
-            row("PASS", "ghost display", want or ("index %s" % idx))
+            row("PASS", "ghost display", ghost.name)
     else:
         row("WARN", "displays", "enumeration unavailable on this platform")
 
@@ -406,13 +392,15 @@ def cmd_setup(args) -> int:
         # the id alone: it is unique per app install, so it picks out this one
         # app on this one phone. Storing the device *name* as well would follow
         # every other handset Jellyfin also calls "Android".
-        cfg.set("jellyfin.follow.device_id", s.get("DeviceId"))
-        cfg.set("jellyfin.follow.device_name_contains", "")
-        cfg.set("jellyfin.follow.client", s.get("Client") or "")
+        pick = {"device_id": s.get("DeviceId") or "", "client": s.get("Client") or ""}
     else:
-        cfg.set("jellyfin.follow.device_id", "")
-        cfg.set("jellyfin.follow.device_name_contains",
-                _ask("Device name contains", cfg.get("jellyfin.follow.device_name_contains") or "Apple TV"))
+        pick = {"device_name_contains":
+                _ask("Device name contains", cfg.get("jellyfin.follow.device_name_contains") or "Apple TV")}
+    # first in the sources list, which is what the app reads (jellyfin.follow is
+    # only its mirror); a source already there for this device keeps its settings
+    binds = cfg.bindings()
+    same = next((b for b in binds if b["source"] == "jellyfin" and all(b[k] == v for k, v in pick.items())), None)
+    cfg.set_bindings([same or dict(pick, source="jellyfin")] + [b for b in binds if b is not same])
 
     # 3. mpv
     mpv = find_mpv(cfg.get("ghost.mpv_path"))
@@ -459,7 +447,10 @@ def cmd_setup(args) -> int:
     aud = _ask("Use audio for light effects (on/off/app = leave it to the Hue Sync app)",
                {True: "on", False: "off"}.get(cfg.get("engine.huesync.use_audio"), "app"))
     cfg.set("engine.huesync.use_audio", {"on": True, "off": False}.get((aud or "").strip().lower()))
-    cfg.set("sync.offset_s", float(_ask("Sync offset in seconds (ghost runs ahead by this)", str(cfg.get("sync.offset_s")))))
+    try:
+        cfg.set("sync.offset_s", float(_ask("Sync offset in seconds (ghost runs ahead by this)", str(cfg.get("sync.offset_s")))))
+    except ValueError:
+        print("  not a number - keeping %s" % cfg.get("sync.offset_s"))
 
     # 6. control API
     if _ask_yn("\nExpose the control API to your LAN for Home Assistant?", cfg.get("control.bind") == "0.0.0.0"):
@@ -475,29 +466,24 @@ def cmd_setup(args) -> int:
     print("\nsaved %s" % path)
     if _ask_yn("Start hue-ghost at login (tray icon)?", True):
         try:
-            print("  " + install_autostart(_tray_command()))
+            print("  " + install_autostart(tray_command()))
         except Exception as e:
             print("  could not install autostart: %s" % e)
-    print("done. Run: hue-ghost doctor   then   hue-ghost run  (or hue-ghost tray)")
+    print("done. Run: hue-ghost doctor   then   hue-ghost run  (or hue-ghost gui)")
     return 0
-
-
-def _tray_command() -> list[str]:
-    return tray_command()
 
 
 def _relaunch_if_requested(daemon) -> None:
     if getattr(daemon, "restart_requested", False):
         import subprocess
-        cmd = tray_command() if getattr(sys, "frozen", False) or daemon.cfg.get("_mode") == "tray" \
-            else [sys.executable, "-m", "hueghost", "run"]
+        cmd = tray_command() if getattr(sys, "frozen", False) else [sys.executable, "-m", "hueghost", "run"]
         log.info("relaunching: %s", " ".join(cmd))
         time.sleep(1.0)
         subprocess.Popen(cmd, close_fds=True)
 
 
 def cmd_gui(args) -> int:
-    cfg = Config.load(args.config)
+    cfg = Config.load(args.config, recover=True)
     setup_logging(cfg.get("log_level", "INFO"))
     try:
         from .gui.app import run_gui
@@ -514,7 +500,7 @@ def cmd_gui(args) -> int:
 
 
 def cmd_install_autostart(args) -> int:
-    print(install_autostart(_tray_command()))
+    print(install_autostart(tray_command()))
     return 0
 
 
@@ -566,7 +552,6 @@ def build_parser() -> argparse.ArgumentParser:
     s = sub.add_parser("gui", help="the desktop app (daemon + control panel + tray icon)")
     s.add_argument("--minimized", action="store_true", help="start in the tray without showing the window")
     s.set_defaults(fn=cmd_gui)
-    sub.add_parser("tray", help="lightweight tray icon without the desktop app (pystray)").set_defaults(fn=cmd_tray)
     sub.add_parser("setup", help="interactive setup wizard").set_defaults(fn=cmd_setup)
     sub.add_parser("doctor", help="check Jellyfin, mpv, displays and Hue Sync").set_defaults(fn=cmd_doctor)
     s = sub.add_parser("status", help="show the running daemon's state")
@@ -605,16 +590,11 @@ def main(argv: list[str] | None = None) -> int:
     p = build_parser()
     args = p.parse_args(argv)
     if not getattr(args, "fn", None):
-        # double-click / no args: the desktop app if available, else tray, else run
+        # double-click / no args: the desktop app if available, else run
         try:
             import PySide6  # noqa: F401
-            args.minimized = False
-            return cmd_gui(args)
-        except ImportError:
-            pass
-        try:
-            import pystray  # noqa: F401
-            return cmd_tray(args)
         except ImportError:
             return cmd_run(args)
+        args.minimized = False
+        return cmd_gui(args)
     return args.fn(args)

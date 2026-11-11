@@ -286,43 +286,31 @@ _exe_cache: dict[int, tuple[str, float]] = {}
 _EXE_TTL_S = 60.0          # pids are recycled; do not trust one forever
 
 
-def exe_of(pid: int) -> str:
-    """Basename of a pid's executable, cached. Steady state costs no syscall."""
+def _cached(cache: dict, pid: int, fn) -> str:
+    """``fn(pid)``, remembered for a minute. Steady state costs no syscall."""
     if pid <= 0:
         return ""
     now = time.monotonic()
-    hit = _exe_cache.get(pid)
+    hit = cache.get(pid)
     if hit and now - hit[1] < _EXE_TTL_S:
         return hit[0]
+    val = fn(pid)
+    cache[pid] = (val, now)
+    if len(cache) > 512:
+        for k in [k for k, v in cache.items() if now - v[1] > _EXE_TTL_S]:
+            cache.pop(k, None)
+    return val
+
+
+def exe_of(pid: int) -> str:
+    """Basename of a pid's executable, cached."""
     # a protected process (some anti-cheat games) refuses OpenProcess; the
     # process list still has its name
-    name = _query_exe(pid) or _snapshot().get(pid, (0, ""))[1]
-    _exe_cache[pid] = (name, now)
-    if len(_exe_cache) > 512:
-        for k in [k for k, v in _exe_cache.items() if now - v[1] > _EXE_TTL_S]:
-            _exe_cache.pop(k, None)
-    return name
+    return _cached(_exe_cache, pid, lambda p: _query_exe(p) or _snapshot().get(p, (0, ""))[1])
 
 
 def _query_exe(pid: int) -> str:
-    if sys.platform != "win32":
-        return ""
-    import ctypes
-    from ctypes import wintypes
-
-    k32 = ctypes.windll.kernel32
-    PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
-    h = k32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, int(pid))
-    if not h:
-        return ""                       # protected process: not ours to look at
-    try:
-        buf = ctypes.create_unicode_buffer(32768)
-        n = wintypes.DWORD(32768)
-        if not k32.QueryFullProcessImageNameW(h, 0, buf, ctypes.byref(n)):
-            return ""
-        return buf.value.rsplit("\\", 1)[-1].lower()
-    finally:
-        k32.CloseHandle(h)
+    return exe_path_of(pid).rsplit("\\", 1)[-1].lower()
 
 
 def exe_path_of(pid: int) -> str:
@@ -351,18 +339,7 @@ _path_cache: dict[int, tuple[str, float]] = {}
 
 def path_of(pid: int) -> str:
     """``exe_path_of``, cached like ``exe_of`` - the poll loop asks every second."""
-    if pid <= 0:
-        return ""
-    now = time.monotonic()
-    hit = _path_cache.get(pid)
-    if hit and now - hit[1] < _EXE_TTL_S:
-        return hit[0]
-    path = exe_path_of(pid)
-    _path_cache[pid] = (path, now)
-    if len(_path_cache) > 512:
-        for k in [k for k, v in _path_cache.items() if now - v[1] > _EXE_TTL_S]:
-            _path_cache.pop(k, None)
-    return path
+    return _cached(_path_cache, pid, exe_path_of)
 
 
 _snap: tuple[float, dict[int, tuple[int, str]]] = (-1e9, {})
@@ -434,18 +411,7 @@ def launcher_in(pid: int, procs: dict[int, tuple[int, str]]) -> str:
 
 def launcher_of(pid: int) -> str:
     """``launcher_in`` against the live process list, cached per pid."""
-    if pid <= 0:
-        return ""
-    now = time.monotonic()
-    hit = _launcher_cache.get(pid)
-    if hit and now - hit[1] < _EXE_TTL_S:
-        return hit[0]
-    name = launcher_in(pid, _snapshot())
-    _launcher_cache[pid] = (name, now)
-    if len(_launcher_cache) > 512:
-        for k in [k for k, v in _launcher_cache.items() if now - v[1] > _EXE_TTL_S]:
-            _launcher_cache.pop(k, None)
-    return name
+    return _cached(_launcher_cache, pid, lambda p: launcher_in(p, _snapshot()))
 
 
 # -- where the games are ---------------------------------------------------------
@@ -748,33 +714,9 @@ def list_processes() -> list[dict]:
     from the poll loop - only by the UI."""
     if sys.platform != "win32":
         return []
-    import ctypes
-    from ctypes import wintypes
-
-    k32 = ctypes.windll.kernel32
-
-    class PROCESSENTRY32W(ctypes.Structure):
-        _fields_ = [("dwSize", wintypes.DWORD), ("cntUsage", wintypes.DWORD),
-                    ("th32ProcessID", wintypes.DWORD), ("th32DefaultHeapID", ctypes.POINTER(ctypes.c_ulong)),
-                    ("th32ModuleID", wintypes.DWORD), ("cntThreads", wintypes.DWORD),
-                    ("th32ParentProcessID", wintypes.DWORD), ("pcPriClassBase", ctypes.c_long),
-                    ("dwFlags", wintypes.DWORD), ("szExeFile", wintypes.WCHAR * 260)]
-
-    snap = k32.CreateToolhelp32Snapshot(0x2, 0)     # TH32CS_SNAPPROCESS
-    if snap == -1:
-        return []
     out: dict[str, dict] = {}
-    try:
-        e = PROCESSENTRY32W()
-        e.dwSize = ctypes.sizeof(e)
-        ok = k32.Process32FirstW(snap, ctypes.byref(e))
-        while ok:
-            name = e.szExeFile.lower()
-            out.setdefault(name, {"exe": name, "pid": e.th32ProcessID, "count": 0})
-            out[name]["count"] += 1
-            ok = k32.Process32NextW(snap, ctypes.byref(e))
-    finally:
-        k32.CloseHandle(snap)
+    for pid, (_parent, name) in _read_snapshot().items():
+        out.setdefault(name, {"exe": name, "pid": pid, "count": 0})["count"] += 1
     fg = foreground_window()
     # an open session with a flat meter is not playing anything
     loud = {a.exe for a in audio_sessions(None) if a.peak > 0.0}

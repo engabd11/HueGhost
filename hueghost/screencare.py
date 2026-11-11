@@ -25,7 +25,7 @@ import subprocess
 import sys
 from typing import Callable
 
-from .winutil import Display, idle_seconds, kill_on_exit, list_displays, pick_ghost_display
+from .winutil import Display, find_mpv, idle_seconds, kill_on_exit, list_displays, pick_ghost_display
 
 log = logging.getLogger("hue-ghost.screen")
 INPUT_CONF = os.path.join(os.path.dirname(os.path.abspath(__file__)), "cover_input.conf")
@@ -62,7 +62,8 @@ def cover_args(cfg, index: int) -> list[str]:
     headless daemon gets it exactly like the app does. It never takes focus
     and hides the cursor; a click (or Esc) closes it, the one way out should
     Hue Ghost not be there to take it away."""
-    return [cfg.get("ghost.mpv_path") or "mpv", "--no-config", "--no-border", "--ontop",
+    mpv = cfg.get("ghost.mpv_path") or "mpv"
+    return [find_mpv(mpv) or mpv, "--no-config", "--no-border", "--ontop",
             "--force-window=yes", "--screen=%d" % index, "--fs-screen=%d" % index, "--fullscreen=yes",
             "--osd-level=0", "--osc=no", "--cursor-autohide=always", "--focus-on=never",
             "--input-default-bindings=no", "--input-conf=" + INPUT_CONF,

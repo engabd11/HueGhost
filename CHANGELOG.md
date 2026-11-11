@@ -2,6 +2,36 @@
 
 All notable changes to Hue Ghost. The newest release is first.
 
+- **2.13.6** - **Fixes from a whole-code audit.**
+  - *`hue-ghost doctor` works again.* It crashed at the display check on every PC with a display.
+  - *A Jellyfin server that is down, or a wrong API key, is reported.* `/status` said
+    `jellyfin.ok: true` whatever happened. A server that does not answer is now asked every
+    5 s instead of every 0.5 s, so the window, the API and PC sources no longer wait on it.
+  - *The mpv that comes with the installer is used.* The ghost and the black covers ran plain
+    `mpv`, which Windows does not find in Hue Ghost's own `mpv` folder; only the Display page
+    looked there. A PC with no other mpv got no ghost.
+  - *No token, no network.* With `control.bind` open to the network and an empty token, the
+    API now listens on this PC only and the log says why.
+  - *A broken `config.json` no longer stops the app.* At start it is set aside as
+    `config.json.bad` and the app opens on defaults, saying so. A change over the API that the
+    app cannot use is refused and the old settings stay.
+  - *Hue Sync's files are replaced in one step,* never emptied and rewritten.
+  - *`hue-ghost setup` stores its pick where the app reads it* (first in the sources).
+  - *Songs no longer start early.* With a negative music offset the ghost runs behind the
+    player, so each song begins that much later for it - but mpv played from 0 at once, 1.2 to
+    1.5 s ahead, and seeked for five seconds to settle. The ghost now waits at the start, and
+    at a track change the old song plays out until the new one is due.
+  - *A player that says "paused" late is learned.* Moonfin on the Apple TV reported a pause up
+    to 5 s late, and the lights ran on. Hue Ghost learns per player how late its pauses come;
+    for one that is late, a missing report holds the ghost where the reports stopped. A player
+    that is fixed unlearns it over its next few pauses.
+  - *An area renamed in the Hue app shows its new name* on Home, in the log and in Home Assistant.
+  - *Home says what is playing where:* "Now playing on Android S23", not always "on the TV".
+  - *Film offset default is 0.4 s* (was 0.2 s), for settings a config file does not already have.
+  - *Finer steps on the Sync page.* Lights off after the TV stops, Converge time and Seek
+    cooldown move in 0.1 s steps, not 0.5 s.
+  - *The pystray tray is gone* (`hue-ghost tray`, the `tray` extra). The desktop app has the
+    tray icon; `hue-ghost run` is the mode with no window.
 - **2.13.5** - **The film lights no longer get stuck on one dim colour, and the screen you watch on stays on.**
   - *The ghost stays on the ghost display.* mpv places its window by display number. The
     Alienware's DisplayPort drops out of Windows while it sleeps, which renumbers the displays,

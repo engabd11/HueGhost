@@ -50,7 +50,7 @@ class EngineState:
         return d
 
 
-AUTO = "auto"      # "let the app choose again", as opposed to pinning a value
+from ..winutil import AUTO  # noqa: E402,F401  "let the app choose again", as opposed to pinning a value
 
 
 @dataclass(frozen=True)

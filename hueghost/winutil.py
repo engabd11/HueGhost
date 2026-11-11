@@ -132,17 +132,6 @@ def _monitor_ids() -> dict[str, tuple[str, str]]:
     return out
 
 
-def monitor_id_at(left: int, top: int, right: int, bottom: int) -> str:
-    """The monitor DeviceID a window rectangle sits on (largest overlap)."""
-    best, best_area = "", 0
-    for d in list_displays():
-        w = min(right, d.left + d.width) - max(left, d.left)
-        h = min(bottom, d.top + d.height) - max(top, d.top)
-        if w > 0 and h > 0 and w * h > best_area:
-            best, best_area = d.monitor_id, w * h
-    return best
-
-
 # -- mpv -------------------------------------------------------------------------
 MPV_CANDIDATES_WIN = [
     r"C:\Program Files\MPV Player\mpv.exe",
@@ -276,8 +265,16 @@ def hue_sync_write_selected_area(area_id: str) -> None:
     new, n = re.subn(r'("SelectedGroup"\s*:\s*")[^"]*(")', lambda m: m.group(1) + area_id + m.group(2), raw, count=1)
     if n != 1:
         raise RuntimeError("SelectedGroup not found in bridge.json")
-    with open(p, "w", encoding="utf-8", newline="") as f:
-        f.write(new)
+    _write_atomic(p, new)
+
+
+def _write_atomic(path: str, text: str) -> None:
+    """Never leave the Hue Sync app a half-written file: bridge.json holds its
+    bridge pairing, and a crash between truncate and write would lose it."""
+    tmp = path + ".hueghost.tmp"
+    with open(tmp, "w", encoding="utf-8", newline="") as f:
+        f.write(text)
+    os.replace(tmp, path)
 
 
 AUDIO_MODES = ("video", "games")      # the app modes that have a "use audio" switch
@@ -628,15 +625,13 @@ def _patch_app_config(edit) -> bool:
                 f.write(raw)
         except OSError:
             pass                    # a backup we cannot write must not stop the patch
-    with open(p, "w", encoding="utf-8", newline="") as f:
-        f.write(new)
+    _write_atomic(p, new)
     h = hue_sync_hash_file()
     if h:
         try:
             _overwrite(h, str(_fnv1a64(new.encode("utf-8"))))
         except OSError:
-            with open(p, "w", encoding="utf-8", newline="") as f:
-                f.write(raw)        # a config the digest disowns is worse than no change
+            _write_atomic(p, raw)   # a config the digest disowns is worse than no change
             raise
     return True
 

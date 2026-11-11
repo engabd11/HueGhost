@@ -201,13 +201,14 @@ class WebApi:
 
     def reset_stalls(self, p: dict, q: dict) -> dict:
         from .watcher import STALL_PRIORS
-        st = self.d.watcher.stalls
-        st.est = dict(STALL_PRIORS)
-        st.changed = True
-        self.d.cfg.set("sync.stall_estimates", {})
-        if self.d.cfg.path:
-            self.d.cfg.save()
-        return {"stall_estimates": dict(st.est)}
+        with self.d._lock:      # the daemon loop saves the config too; two saves share one .tmp file
+            st = self.d.watcher.stalls
+            st.est = dict(STALL_PRIORS)
+            st.changed = True
+            self.d.cfg.set("sync.stall_estimates", {})
+            if self.d.cfg.path:
+                self.d.cfg.save()
+            return {"stall_estimates": dict(st.est)}
 
     def system(self, p: dict, q: dict) -> dict:
         return {

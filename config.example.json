@@ -66,7 +66,7 @@
   },
 
   "sync": {
-    "offset_s": 1.5,
+    "offset_s": 0.4,
     "seek_threshold_s": 1.0,
     "deadband_s": 0.05,
     "converge_s": 5.0,
@@ -74,10 +74,10 @@
     "seek_cooldown_s": 3.0,
     "jitter_tolerance_s": 1.5,
     "time_lock": true,
-    "time_lock_release_s": 0.02,
+    "time_lock_release_s": 0.08,
     "lights_off_delay_s": 1.5,
     "idle_stop_delay_s": 10.0,
-    "pause_stop_min": 0,
+    "pause_stop_min": 1.0,
     "music_pause_stop_s": 15.0
   },
 
@@ -90,8 +90,8 @@
     "ipc": "",
     "hwdec": "auto",
     "keep_awake": "playing",
-    "pixel_shift_min": 3.0,
-    "blackout_idle_min": 0.0,
+    "pixel_shift_min": 0.0,
+    "blackout_idle_min": 1.0,
     "audio_device": "",
     "music_volume": 100,
     "relaunch_cooldown_s": 5.0,
@@ -105,8 +105,8 @@
       "host": "127.0.0.1",
       "port": 24851,
       "mode": "video",
-      "intensity": "high",
-      "use_audio": null,
+      "intensity": "extreme",
+      "use_audio": false,
       "manage_area": true,
       "manage_monitor": true,
       "manage_audio_device": true,
