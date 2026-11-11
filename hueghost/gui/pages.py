@@ -510,7 +510,7 @@ class SyncPage(Page):
         c3 = Card("Stopping", "what happens when the TV stops or pauses")
         self.fields: dict[str, QDoubleSpinBox] = {}
         stop_specs = [
-            ("sync.lights_off_delay_s", "Lights off after the TV stops", 0.5, 30.0, 0.5, " s",
+            ("sync.lights_off_delay_s", "Lights off after the TV stops", 0.5, 30.0, 0.1, " s",
              "The lights switch off this long after playback stops. Short enough to feel instant, long enough "
              "to ride out a client that briefly drops its session while seeking."),
             ("sync.idle_stop_delay_s", "Close the ghost after", 2.0, 120.0, 1.0, " s",
@@ -545,7 +545,7 @@ class SyncPage(Page):
         self.fields["sync.time_lock_release_s"] = sp
         ex.form("Release when the TV is off by", sp,
                 "The median gap between the TV's timed reports and the locked timeline that hands back to "
-                "the corrections. Those reports agree to a few ms, so 0.02 s follows the TV closely while "
+                "the corrections. Those reports agree to a few ms, so a small value (0.02 s) follows the TV closely while "
                 "still holding still; larger holds a small offset for longer.")
         self.lay.addWidget(ex)
 
@@ -553,10 +553,10 @@ class SyncPage(Page):
         specs = [
             ("sync.seek_threshold_s", "Hard-seek beyond", 0.3, 5.0, 0.1, " s", "Drift larger than this jumps the ghost instead of nudging speed."),
             ("sync.deadband_s", "Deadband", 0.0, 0.5, 0.01, " s", "Drift inside this is ignored."),
-            ("sync.converge_s", "Converge time", 1.0, 30.0, 0.5, " s", "How quickly small drift is removed by bending speed."),
+            ("sync.converge_s", "Converge time", 1.0, 30.0, 0.1, " s", "How quickly small drift is removed by bending speed."),
             ("sync.max_speed_delta", "Max speed change", 0.01, 0.15, 0.01, "", "+/- playback speed used for nudging (0.04 = 4 %)."),
             ("sync.jitter_tolerance_s", "Seek detection", 0.5, 5.0, 0.1, " s", "Position jumps larger than this count as a real seek."),
-            ("sync.seek_cooldown_s", "Seek cooldown", 1.0, 15.0, 0.5, " s", "Minimum time between drift-seeks."),
+            ("sync.seek_cooldown_s", "Seek cooldown", 1.0, 15.0, 0.1, " s", "Minimum time between drift-seeks."),
             ("jellyfin.poll_interval_s", "Jellyfin poll", 0.25, 5.0, 0.25, " s", "How often the TV's position is read from Jellyfin."),
         ]
         g = QGridLayout()

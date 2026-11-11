@@ -17,6 +17,9 @@ All notable changes to Hue Ghost. The newest release is first.
     app cannot use is refused and the old settings stay.
   - *Hue Sync's files are replaced in one step,* never emptied and rewritten.
   - *`hue-ghost setup` stores its pick where the app reads it* (first in the sources).
+  - *Film offset default is 0.4 s* (was 0.2 s), for settings a config file does not already have.
+  - *Finer steps on the Sync page.* Lights off after the TV stops, Converge time and Seek
+    cooldown move in 0.1 s steps, not 0.5 s.
   - *The pystray tray is gone* (`hue-ghost tray`, the `tray` extra). The desktop app has the
     tray icon; `hue-ghost run` is the mode with no window.
 - **2.13.5** - **The film lights no longer get stuck on one dim colour, and the screen you watch on stays on.**
