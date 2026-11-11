@@ -34,6 +34,7 @@ class GhostSpec:
 
 
 IDLE_PLAN = Plan()
+FAILED_POLL_S = 5.0
 
 
 @dataclass
@@ -120,13 +121,15 @@ class SourceSet:
         acts: list[Activity] = []
         for s in self.sources:
             if now >= s._next_poll:
+                s.ok, s.error = True, None       # before the poll: a source may report its own failure
                 try:
                     s.last = s.poll(now)
-                    s.ok, s.error = True, None
                 except Exception as e:           # a source must never kill the loop
                     s.ok, s.error = False, str(e)
                     log.debug("source %s failed: %s", s.id, e, exc_info=True)
-                s._next_poll = now + s.interval_s
+                # a server that is down costs a whole timeout per poll, under the
+                # daemon's lock: ask it less often until it answers again
+                s._next_poll = now + (s.interval_s if s.ok else max(s.interval_s, FAILED_POLL_S))
             acts.extend(s.last if isinstance(s.last, list) else [s.last])
         # the user's order across *all* bindings, not the order of the sources:
         # a game listed above the TV beats the TV

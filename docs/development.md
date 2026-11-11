@@ -10,7 +10,7 @@ python -m hueghost doctor
 powershell -File scripts\build_installer.ps1   # dist\installer\HueGhost-Setup-<ver>.exe
 ```
 
-The optional extras in `pyproject.toml` are `gui` (PySide6), `tray` (pystray and Pillow), `dev` (pytest) and `build` (PyInstaller plus the GUI and tray packages).
+The optional extras in `pyproject.toml` are `gui` (PySide6), `dev` (pytest) and `build` (PyInstaller, PySide6, and Pillow for the icon script).
 
 ## Code layout
 

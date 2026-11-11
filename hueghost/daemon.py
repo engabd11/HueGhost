@@ -24,7 +24,7 @@ import time
 from collections import deque
 
 from . import __version__
-from .config import (Config, INTENSITIES, KEEP_AWAKE_MODES, MODES, _deep_merge, _on_off,
+from .config import (Config, INTENSITIES, KEEP_AWAKE_MODES, MODES, _deep_merge, _get_path, _on_off,
                      app_data_dir, source_root)
 from .control import ControlServer
 from .engines import Engine, build_engine
@@ -58,14 +58,6 @@ LOCK_AGREE_S = 0.02     # ... and its recent timed reports agree with the timeli
 
 def _asc(s) -> str:
     return (s or "").encode("ascii", "replace").decode("ascii")
-
-
-def _get(d: dict, dotted: str):
-    for p in dotted.split("."):
-        if not isinstance(d, dict) or p not in d:
-            return None
-        d = d[p]
-    return d
 
 
 def audio_endpoint_present(endpoint_id: str) -> bool:
@@ -288,11 +280,16 @@ class Daemon:
         port = int(c.get("port") or 0)
         if not port:
             return
+        bind, token = c.get("bind") or "127.0.0.1", c.get("token") or ""
+        if not token and bind not in ("127.0.0.1", "localhost", "::1"):
+            # this API hands out the Jellyfin key and starts programs
+            log.error("control.bind is %s but control.token is empty - listening on 127.0.0.1 only "
+                      "(set a token on the Home Assistant page to open it to the network)", bind)
+            bind = "127.0.0.1"
         try:
             from .webapi import WebApi
             api = WebApi(self)
-            self.control = ControlServer(c.get("bind", "127.0.0.1"), port, c.get("token", ""),
-                                         self.status, self.action, api.handle)
+            self.control = ControlServer(bind, port, token, self.status, self.action, api.handle)
             self.control.start()
             self.restart_required = []
         except OSError as e:
@@ -1447,7 +1444,22 @@ class Daemon:
 
     def apply_config(self, partial: dict) -> dict:
         """Merge a partial nested config in, save it and apply it live where
-        possible. Returns what still needs a restart."""
+        possible. Returns what still needs a restart.
+
+        A value the app cannot use (a word where a number goes) is refused and
+        the previous settings are put back, on disk too: left there, it stopped
+        the daemon now and at every start after."""
+        with self._lock:
+            old = copy.deepcopy(self.cfg.data)
+            try:
+                return self._apply_config(partial)
+            except Exception as e:
+                log.error("config change refused (%s) - keeping the previous settings", e)
+                self.cfg.data = old
+                self._apply_config({})
+                raise ValueError("config change refused: %s" % e) from e
+
+    def _apply_config(self, partial: dict) -> dict:
         with self._lock:
             old = copy.deepcopy(self.cfg.data)
             self.cfg.data = _deep_merge(self.cfg.data, partial)
@@ -1457,7 +1469,7 @@ class Daemon:
                 self.cfg.save()
 
             def changed(*keys):
-                return any(self.cfg.get(k) != _get(old, k) for k in keys)
+                return any(self.cfg.get(k) != _get_path(old, k) for k in keys)
 
             server_moved = changed("jellyfin.url", "jellyfin.api_key")
             if server_moved:

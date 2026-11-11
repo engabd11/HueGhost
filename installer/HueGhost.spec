@@ -10,7 +10,7 @@ ROOT = os.path.abspath(os.path.join(os.path.dirname(SPEC), ".."))
 ENTRY = os.path.join(ROOT, "scripts", "hueghost_entry.py")
 ICON = os.path.join(ROOT, "installer", "hueghost.ico")
 
-hidden = collect_submodules("hueghost") + ["pystray._win32", "PIL.Image"]
+hidden = collect_submodules("hueghost")
 excludes = [
     "PySide6.QtWebEngineCore", "PySide6.QtWebEngineWidgets", "PySide6.QtWebEngineQuick", "PySide6.QtWebView",
     "PySide6.Qt3DCore", "PySide6.Qt3DRender", "PySide6.Qt3DInput", "PySide6.Qt3DLogic", "PySide6.Qt3DAnimation",

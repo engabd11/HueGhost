@@ -2,6 +2,23 @@
 
 All notable changes to Hue Ghost. The newest release is first.
 
+- **2.13.6** - **Fixes from a whole-code audit.**
+  - *`hue-ghost doctor` works again.* It crashed at the display check on every PC with a display.
+  - *A Jellyfin server that is down, or a wrong API key, is reported.* `/status` said
+    `jellyfin.ok: true` whatever happened. A server that does not answer is now asked every
+    5 s instead of every 0.5 s, so the window, the API and PC sources no longer wait on it.
+  - *The mpv that comes with the installer is used.* The ghost and the black covers ran plain
+    `mpv`, which Windows does not find in Hue Ghost's own `mpv` folder; only the Display page
+    looked there. A PC with no other mpv got no ghost.
+  - *No token, no network.* With `control.bind` open to the network and an empty token, the
+    API now listens on this PC only and the log says why.
+  - *A broken `config.json` no longer stops the app.* At start it is set aside as
+    `config.json.bad` and the app opens on defaults, saying so. A change over the API that the
+    app cannot use is refused and the old settings stay.
+  - *Hue Sync's files are replaced in one step,* never emptied and rewritten.
+  - *`hue-ghost setup` stores its pick where the app reads it* (first in the sources).
+  - *The pystray tray is gone* (`hue-ghost tray`, the `tray` extra). The desktop app has the
+    tray icon; `hue-ghost run` is the mode with no window.
 - **2.13.5** - **The film lights no longer get stuck on one dim colour, and the screen you watch on stays on.**
   - *The ghost stays on the ghost display.* mpv places its window by display number. The
     Alienware's DisplayPort drops out of Windows while it sleeps, which renumbers the displays,
