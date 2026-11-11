@@ -4,7 +4,7 @@ Quick answers and fixes. For every setting see [settings.md](settings.md), and f
 
 ## The lights change a little late or early
 
-Adjust the offset on **Home**. Press **+0.25** if the lights change late on a hard cut, or **-0.25** if they change early. Typical values are 1.0 to 2.0 s. If you switch Time lock on or off, check the offset again.
+Adjust the offset on **Home**. Press **+0.25** if the lights change late on a hard cut, or **-0.25** if they change early. The default is 0.4 s. If you switch Time lock on or off, check the offset again.
 
 ## The lights sit on one dim colour after the PC was idle
 

@@ -58,7 +58,7 @@ The one thing that is yours to tune is the **offset** - how far ahead of the
 TV the ghost runs, to cancel the capture -> bridge -> lamp latency and your
 TV's own display lag. On **Home** or **Sync**: watch a hard cut; if the lights
 change *late*, press **+0.25**; if *early*, **-0.25**; then refine in 0.05 s
-steps. It applies instantly and is saved. Typical values: 1.0-2.0 s.
+steps. It applies instantly and is saved. The default is 0.4 s.
 
 Everything else is automatic: Hue Ghost anchors on the TV's progress reports,
 learns how long your TV buffers after a seek (shown under *Sync > Learned TV
@@ -71,7 +71,7 @@ ghost is always correcting. With *Time lock* on, once the drift reaches 0.0 s
 the timeline is held and the ghost simply plays at 1.0x; Home shows
 *drift +0.00 s · locked*. Seeking, pausing, buffering - or the TV's
 precisely timed reports drifting more than *Release when the TV is off by*
-(0.02 s) from the locked timeline - releases it, the usual corrections take
+(0.08 s) from the locked timeline - releases it, the usual corrections take
 over, and it locks again once playback has settled. It also stops steering by
 reports Jellyfin did not time: Moonfin on the Apple TV sends its position
 every second but Jellyfin times only every fifth, which otherwise leaves the
@@ -97,10 +97,10 @@ for a whole film means hours of one unchanging picture - the desktop on the
 screens nobody is looking at, the frame the ghost is paused on - and an OLED
 burns that in. Two remedies, both live, both only while the ghost plays:
 
-- *Shift the ghost picture every* N minutes (default **3**, 0 = off) moves the
+- *Shift the ghost picture every* N minutes (default **off**; try 3) moves the
   ghost's picture a few pixels round a slow orbit. Invisible, and the lights
   cannot tell - Hue Sync averages much larger areas of the screen.
-- *Black out the other displays after* N minutes (default **off**) covers
+- *Black out the other displays after* N minutes (default **1**, 0 = off) covers
   every display Hue Sync is *not* capturing in black once nobody has touched
   the mouse or keyboard for that long - a black OLED pixel is switched off.
   Any input brings them straight back. The ghost display, and whichever one
