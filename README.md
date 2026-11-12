@@ -149,13 +149,13 @@ Every setting is in the app and saved in `%APPDATA%\hue-ghost\config.json`. The 
 | &nbsp;&nbsp;*Intensity* | Subtle, Moderate, High or Extreme. Changes live. |
 | &nbsp;&nbsp;*Use audio for effects* | *On*, *Off* or *App's own*. Lets the lights react to the soundtrack as well as the picture (video and games). Hue Sync only reads it at start-up, so changing it restarts Hue Sync for about 3 s. |
 | &nbsp;&nbsp;*Brightness* | The level Hue Sync runs the area at: drag the slider or press -10 / +10. |
-| **Timing** | The film offset: how far the ghost runs ahead of the TV, with the -0.25, -0.05, +0.05 and +0.25 buttons. See [Tuning the timing](#tuning-the-timing). The bottom line is the last minute's sync quality. |
+| **Timing** | The film offset: how far the ghost runs ahead of the TV, with the -0.25, -0.01, +0.01 and +0.25 buttons. See [Tuning the timing](#tuning-the-timing). The bottom line is the last minute's sync quality. |
 
 These controls always show what Hue Sync is really doing. If you change the mode in the Hue Sync app, they follow. Mode and intensity here are the **defaults**; a source with its own setting overrides them while it plays.
 
 ### Tuning the timing
 
-Watch a hard cut in a film. If the lights change **late**, press **+0.25** in the *Timing* card on Home (or raise the number on the Sync page). If they change **early**, press **-0.25**. Then refine in 0.05 s steps. It applies at once and is saved.
+Watch a hard cut in a film. If the lights change **late**, press **+0.25** in the *Timing* card on Home (or raise the number on the Sync page). If they change **early**, press **-0.25**. Then refine in 0.01 s steps. It applies at once and is saved.
 
 Music has its own offset, because the lights listen to the sound rather than watch a picture. Lights after the beat? Raise it. The desktop app has no control for it: set it under *Timings > Music sync offset* on the [Home Assistant card](#what-the-card-does), or with `/set {"music_offset_s": -1.85}` over the API.
 

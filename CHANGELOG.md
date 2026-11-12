@@ -17,6 +17,7 @@ All notable changes to Hue Ghost. The newest release is first.
     app cannot use is refused and the old settings stay.
   - *Hue Sync's files are replaced in one step,* never emptied and rewritten.
   - *`hue-ghost setup` stores its pick where the app reads it* (first in the sources).
+  - *Offsets move in 0.01 s steps.* The nudge buttons on Home and the Sync page are now -0.25, -0.01, +0.01 and +0.25.
   - *Songs no longer start early.* With a negative music offset the ghost runs behind the
     player, so each song begins that much later for it - but mpv played from 0 at once, 1.2 to
     1.5 s ahead, and seeked for five seconds to settle. The ghost now waits at the start, and

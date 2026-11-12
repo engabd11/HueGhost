@@ -57,7 +57,7 @@ TV (green zone = within 0.15 s) and a per-minute quality summary.
 The one thing that is yours to tune is the **offset** - how far ahead of the
 TV the ghost runs, to cancel the capture -> bridge -> lamp latency and your
 TV's own display lag. On **Home** or **Sync**: watch a hard cut; if the lights
-change *late*, press **+0.25**; if *early*, **-0.25**; then refine in 0.05 s
+change *late*, press **+0.25**; if *early*, **-0.25**; then refine in 0.01 s
 steps. It applies instantly and is saved. The default is 0.4 s.
 
 Everything else is automatic: Hue Ghost anchors on the TV's progress reports,

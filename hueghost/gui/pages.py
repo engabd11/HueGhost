@@ -262,7 +262,7 @@ class HomePage(Page):
         self.offset_lbl = label("+0.00 s", "kpi")
         orow.addWidget(self.offset_lbl)
         orow.addStretch(1)
-        for d, t in ((-0.25, "-0.25"), (-0.05, "-0.05"), (0.05, "+0.05"), (0.25, "+0.25")):
+        for d, t in ((-0.25, "-0.25"), (-0.01, "-0.01"), (0.01, "+0.01"), (0.25, "+0.25")):
             orow.addWidget(button(t, "small", lambda _=False, dd=d: self._offset(dd)))
         o_card.body.addLayout(orow)
         o_card.add(label("Lights late on a hard cut? increase. Early? decrease. Applies instantly.", "hint", wrap=True))
@@ -466,10 +466,10 @@ class SyncPage(Page):
         c = Card("Offset", "how far ahead of the TV the ghost runs")
         self.slider = QSlider(Qt.Horizontal)
         self.slider.setRange(-200, 500)      # hundredths of a second
-        self.slider.setSingleStep(5)
+        self.slider.setSingleStep(1)
         self.spin = QDoubleSpinBox()
         self.spin.setRange(-2.0, 5.0)
-        self.spin.setSingleStep(0.05)
+        self.spin.setSingleStep(0.01)
         self.spin.setDecimals(2)
         self.spin.setSuffix(" s")
         self.spin.setFixedWidth(110)
@@ -479,7 +479,7 @@ class SyncPage(Page):
         self.slider.sliderReleased.connect(self._apply_offset)
         c.add_row(self.slider, self.spin)
         row = QHBoxLayout()
-        for d, t in ((-0.25, "-0.25"), (-0.05, "-0.05"), (0.05, "+0.05"), (0.25, "+0.25")):
+        for d, t in ((-0.25, "-0.25"), (-0.01, "-0.01"), (0.01, "+0.01"), (0.25, "+0.25")):
             row.addWidget(button(t, "small", lambda _=False, dd=d: self._nudge(dd)))
         row.addStretch(1)
         c.body.addLayout(row)
