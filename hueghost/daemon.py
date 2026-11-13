@@ -302,7 +302,7 @@ class Daemon:
         self._start_control()
         self.areas()                 # also brings the saved area names up to date
         binds = self.cfg.enabled_bindings()
-        log.info("hue-ghost %s following %s (engine=%s, poll %.2fs, offset %+.2fs)",
+        log.info("hue-ghost %s following %s (engine=%s, poll %.2fs, offset %+.3fs)",
                  __version__,
                  ", ".join("%s -> %s" % (b["name"] or b["id"], b["area_name"] or "current area")
                            for b in binds) or "nothing",
@@ -859,7 +859,7 @@ class Daemon:
                     self._adev_woke = now
                     wake_display()
                 return
-        log.info("'%s' playing on %s -> ghost at %.1fs (offset %+.2fs, startup est %.2fs)",
+        log.info("'%s' playing on %s -> ghost at %.1fs (offset %+.3fs, startup est %.2fs)",
                  _asc(m.name), _asc(obs.report.device_label if obs.report else "?"), start,
                  offset, self._startup_latency)
         extra = {"audio_only": True, "audio_device": spec.audio_device} if spec.audio_only else {}
@@ -1634,7 +1634,7 @@ class Daemon:
         self.watcher.precise_timing = bool(self.cfg.get("sync.time_lock", True))
         self.watcher.poll_interval = float(self.cfg.get("jellyfin.poll_interval_s", 0.5))
         self._push_engine_prefs()
-        log.info("config reloaded (offset %+.2fs, intensity %s)", self.offset,
+        log.info("config reloaded (offset %+.3fs, intensity %s)", self.offset,
                  self.cfg.get("engine.huesync.intensity"))
 
     def _push_engine_prefs(self) -> None:
@@ -1847,7 +1847,7 @@ class Daemon:
                 except OSError as e:
                     log.warning("could not persist settings: %s", e)
             mo = self.cfg.get("sync.music_offset_s")
-            log.info("settings: film offset %+.2fs, music offset %s, intensity %s",
+            log.info("settings: film offset %+.3fs, music offset %s, intensity %s",
                      float(self.cfg.get("sync.offset_s", 0.0)),
-                     "%+.2fs" % mo if isinstance(mo, (int, float)) else "(film)",
+                     "%+.3fs" % mo if isinstance(mo, (int, float)) else "(film)",
                      self.cfg.get("engine.huesync.intensity"))
