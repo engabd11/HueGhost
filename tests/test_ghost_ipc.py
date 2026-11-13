@@ -110,3 +110,66 @@ def test_the_idle_music_ghost_ends_on_eof_but_not_on_a_loadfile_replace():
     assert not g.ended
     g._on_event({"event": "end-file", "reason": "stop"})     # replaced by the next song
     assert not g.ended
+
+
+def _playing_ghost(monkeypatch, clock):
+    from hueghost import ghost as ghost_mod
+    from hueghost.ghost import GhostPlayer
+
+    monkeypatch.setattr(ghost_mod.time, "monotonic", lambda: clock[0])
+    g = GhostPlayer(proc=None, ipc=ipc_with(LivePipe()), item_id="film")
+    g._on_event({"event": "property-change", "name": "core-idle", "data": False})
+    return g
+
+
+def test_the_ghost_position_is_the_median_of_its_reports_not_the_last_one(monkeypatch):
+    """Live 2026-11-13: one time-pos event scatters +/-10 ms (frame steps,
+    vsync, delivery), which made a locked drift flicker 0.00 / +/-0.01 / -0.02."""
+    import random
+
+    rnd = random.Random(1)
+    clock = [100.0]
+    g = _playing_ghost(monkeypatch, clock)
+    errs = []
+    for i in range(300):                                  # 10 s of 30 fps events
+        clock[0] = 100.0 + i / 30.0
+        g._on_event({"event": "property-change", "name": "time-pos",
+                     "data": 50.0 + i / 30.0 + rnd.uniform(-0.012, 0.012)})
+        clock[0] += 0.01                                  # the tick reads between events
+        if i > 30:
+            errs.append(abs(g.pos - (50.0 + i / 30.0 + 0.01)))
+    errs.sort()
+    assert errs[int(0.95 * len(errs))] < 0.004 and errs[-1] < 0.008, (errs[int(0.95 * len(errs))], errs[-1])
+
+
+def test_a_jump_starts_the_position_window_over(monkeypatch):
+    clock = [100.0]
+    g = _playing_ghost(monkeypatch, clock)
+    for i in range(30):
+        clock[0] = 100.0 + i / 30.0
+        g._on_event({"event": "property-change", "name": "time-pos", "data": 50.0 + i / 30.0})
+    clock[0] += 1 / 30.0
+    g._on_event({"event": "property-change", "name": "time-pos", "data": 300.0})   # mpv jumped
+    assert abs(g.pos - 300.0) < 1e-6, "the old line must not outvote the new position"
+
+
+def test_reports_from_before_a_small_seek_do_not_mix_into_the_position(monkeypatch):
+    """Live 2026-11-14, music: a 0.05 s seek is under the jump threshold, and
+    the old line's last reports mixed into the median - every correction
+    overshot and the next one went the other way, every 2 s."""
+    from hueghost.lockstep import Seek
+
+    clock = [100.0]
+    g = _playing_ghost(monkeypatch, clock)
+    for i in range(30):
+        clock[0] = 100.0 + i / 30.0
+        g._on_event({"event": "property-change", "name": "time-pos", "data": 50.0 + i / 30.0})
+    g.apply([Seek(51.0 + 0.05)], clock[0])          # 0.05 s ahead of where it plays
+    for i in range(30, 33):                         # the old line, still coming in
+        clock[0] = 100.0 + i / 30.0
+        g._on_event({"event": "property-change", "name": "time-pos", "data": 50.0 + i / 30.0})
+    g._on_event({"event": "playback-restart"})
+    for i in range(33, 45):                         # the new line
+        clock[0] = 100.0 + i / 30.0
+        g._on_event({"event": "property-change", "name": "time-pos", "data": 50.05 + i / 30.0})
+    assert abs(g.pos - (50.05 + 44 / 30.0)) < 1e-6

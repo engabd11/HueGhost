@@ -54,6 +54,13 @@ MUSIC_NOISY_SETTLE_REPORTS = 6  # ... a noisier one after this many reports agre
 LOCK_WINDOW_S = 0.02
 LOCK_SETTLE_REPORTS = 3
 LOCK_AGREE_S = 0.02     # ... and its recent timed reports agree with the timeline this well
+# while locked the ghost is held on the timeline to the millisecond by speed
+# trims of at most 0.3 % (a muted picture: invisible). A 50 ms deadband there
+# left it sitting 20 ms off for half an hour (live, 2026-11-13).
+FINE_DEADBAND_S = 0.003
+FINE_CONVERGE_S = 8.0
+FINE_MAX_SPEED_DELTA = 0.003
+FINE_SPEED_STEP = 0.0002
 
 
 def _asc(s) -> str:
@@ -1099,15 +1106,18 @@ class Daemon:
         # second after a seek (the jump we just commanded is not "drift")
         if gobs.pos is not None and not target_held and not gobs.buffering and not gobs.paused \
                 and now - g.last_seek_mono > 1.0:
-            self.stats.add(gobs.pos - target, abs(g.speed - 1.0) > 1e-6, m.locked)
+            # the locked hold's fine trims (<= 0.3 %) are not nudging
+            self.stats.add(gobs.pos - target, abs(g.speed - 1.0) > 0.005, m.locked)
         self._maybe_lock(now, m, g, gobs, target, target_held, actions)
         if self.stats.due(now):
             s = self.stats.flush()
             if s:
                 log.info("sync quality (last %ds): mean|drift| %.3fs p95 %.3fs max %.3fs bias %+.3fs "
-                         "seeks %d nudging %d/%d ticks%s", int(self.stats.period), s["mean_abs"],
+                         "seeks %d nudging %d/%d ticks%s%s", int(self.stats.period), s["mean_abs"],
                          s["p95_abs"], s["max_abs"], s["mean"], s["seeks"], s["nudge_ticks"], s["n"],
-                         " locked %d/%d" % (s["locked_ticks"], s["n"]) if self.params.time_lock else "")
+                         " locked %d/%d" % (s["locked_ticks"], s["n"]) if self.params.time_lock else "",
+                         # the TV side: how far its reports sit from the locked timeline
+                         " residual %+.3fs" % m.lock_residual if m.locked and m.lock_residual is not None else "")
 
     def _learn_music_latency(self, now: float, g, gobs: GhostObs, target: float, held: bool) -> None:
         """Where a music swap or seek really landed, against where it was
@@ -1152,7 +1162,8 @@ class Daemon:
             return self.params
         if m.locked:
             m.lock_release_s = self.params.time_lock_release_s   # a changed setting applies at once
-            return self.params
+            return dataclasses.replace(self.params, deadband_s=FINE_DEADBAND_S, converge_s=FINE_CONVERGE_S,
+                                       max_speed_delta=FINE_MAX_SPEED_DELTA, speed_step=FINE_SPEED_STEP)
         return dataclasses.replace(self.params, deadband_s=min(self.params.deadband_s, LOCK_WINDOW_S * 0.75))
 
     def _maybe_lock(self, now: float, m, g, gobs: GhostObs, target: float, target_held: bool,

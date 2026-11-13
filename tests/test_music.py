@@ -167,6 +167,7 @@ def test_the_music_ghost_is_audible_windowless_and_on_the_chosen_device():
     # the video ghost is still the exact opposite
     v = mpv_args(cfg, "t")
     assert "--mute=yes" in v and "--volume=0" in v and "--vid=no" not in v
+    assert "--aid=no" in v and "--aid=no" not in args, "the video ghost runs on the PC clock"
 
 
 def test_music_playing_on_this_pc_needs_no_ghost_and_no_pinned_output():

@@ -2,6 +2,23 @@
 
 All notable changes to Hue Ghost. The newest release is first.
 
+- **2.14.0** - **The time lock holds the drift at 0.00 s.**
+  - *The ghost is held on the timeline while locked.* A 50 ms deadband left it sitting 20 ms
+    off for half an hour. Speed trims of at most 0.3 % (on a muted picture, so they cannot be
+    seen) now keep it within a few milliseconds.
+  - *The film ghost plays with no audio track.* A muted track still made the sound card mpv's
+    clock, and mpv reset its time-stretching on every small speed change: asked for 1.002x, it
+    played 1.00004x. Without audio, mpv times the picture by the PC clock and the trims take
+    effect. Live, the locked bias went from -0.015 s to 0.000 s.
+  - *The ghost's position is measured, not sampled.* Each mpv position report scatters about
+    ±10 ms. The median of the last second of reports is good to about 2 ms, so the drift no
+    longer flickers between 0.00 and ±0.01.
+  - *A locked timeline follows the TV's clock.* With a precise player (Moonfin for tvOS), the
+    timeline moves at most 2 ms per report towards where the player says it is. It no longer
+    waits until the gap reaches the release threshold and then corrects in one step.
+  - *Precise clocks.* The app is built with Python 3.13. On Windows, older versions time
+    everything with a 15.6 ms clock.
+  - The per-minute "sync quality" log line shows the TV side's residual too.
 - **2.13.7** - **The film offset moves in 0.001 s steps.**
   - *Finer offset on the Sync page.* The offset box shows three decimals and its arrows move
     0.001 s; the slider moves 1 ms per arrow key, 50 ms per Page Up/Down. The ±0.05 and ±0.25

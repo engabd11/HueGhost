@@ -62,6 +62,7 @@ class Params:
     # For music, speed is tempo - Hue Sync's beat tracking hears a 4 % nudge
     # for as long as it lasts - and nobody hears the ghost's seeks.
     speed_nudge: bool = True
+    speed_step: float = 0.0015         # a speed change smaller than this is not sent
 
     @classmethod
     def from_config(cls, cfg) -> "Params":
@@ -135,6 +136,6 @@ def decide(target_pos: float, target_paused: bool, ghost: GhostObs, p: Params,
         return actions
 
     want = speed_for(drift, p)
-    if abs(want - ghost.speed) > 0.0015:
+    if abs(want - ghost.speed) > p.speed_step:
         actions.append(Speed(want))
     return actions
