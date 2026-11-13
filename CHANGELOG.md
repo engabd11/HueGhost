@@ -2,6 +2,11 @@
 
 All notable changes to Hue Ghost. The newest release is first.
 
+- **2.13.7** - **The film offset moves in 0.001 s steps.**
+  - *Finer offset on the Sync page.* The offset box shows three decimals and its arrows move
+    0.001 s; the slider moves 1 ms per arrow key, 50 ms per Page Up/Down. The ±0.05 and ±0.25
+    buttons are unchanged.
+  - *Offsets read to the millisecond* on Home, in `hue-ghost status` and in the log.
 - **2.13.6** - **Fixes from a whole-code audit.**
   - *`hue-ghost doctor` works again.* It crashed at the display check on every PC with a display.
   - *A Jellyfin server that is down, or a wrong API key, is reported.* `/status` said
