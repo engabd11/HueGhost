@@ -2,6 +2,13 @@
 
 All notable changes to Hue Ghost. The newest release is first.
 
+- **2.14.1** - **Back on time twice as fast after a seek or resume.**
+  - *The ghost settles in about 10 s instead of about 20 s.* Until the time lock engages, it now
+    corrects twice as fast and on to about 0, instead of stopping 15 ms short and leaving the
+    rest to the slow locked hold. Measured live on an Apple TV: within 0.01 s of the TV after
+    8-13 s (2.14.0: 17-21 s). The speed limit (4 %) and the locked hold are unchanged. Music,
+    and films with the time lock off, are not affected.
+
 - **2.14.0** - **The time lock holds the drift at 0.00 s.**
   - *The ghost is held on the timeline while locked.* A 50 ms deadband left it sitting 20 ms
     off for half an hour. Speed trims of at most 0.3 % (on a muted picture, so they cannot be
