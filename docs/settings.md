@@ -58,7 +58,7 @@ The one thing that is yours to tune is the **offset** - how far ahead of the
 TV the ghost runs, to cancel the capture -> bridge -> lamp latency and your
 TV's own display lag. On **Home** or **Sync**: watch a hard cut; if the lights
 change *late*, press **+0.25**; if *early*, **-0.25**; then refine in 0.05 s
-steps. It applies instantly and is saved. The default is 0.4 s.
+steps. It applies instantly and is saved. The default is 0.34 s.
 
 Everything else is automatic: Hue Ghost anchors on the TV's progress reports,
 learns how long your TV buffers after a seek (shown under *Sync > Learned TV
@@ -114,7 +114,7 @@ checks this table against the code.
 
 | Setting | Page | Key in `config.json` | Default |
 |---|---|---|---|
-| Timing / Offset (film) | Home, Sync | `sync.offset_s` | `0.4` |
+| Timing / Offset (film) | Home, Sync | `sync.offset_s` | `0.34` |
 | Music sync offset | Home Assistant card | `sync.music_offset_s` | `-1.85` |
 | Mode | Home, Sync | `engine.huesync.mode` | `"video"` |
 | Intensity | Home, Sync | `engine.huesync.intensity` | `"extreme"` |

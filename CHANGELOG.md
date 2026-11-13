@@ -19,6 +19,8 @@ All notable changes to Hue Ghost. The newest release is first.
   - *Precise clocks.* The app is built with Python 3.13. On Windows, older versions time
     everything with a 15.6 ms clock.
   - The per-minute "sync quality" log line shows the TV side's residual too.
+  - *The film offset starts at 0.34 s* on a new install (was 0.4 s), the value tuned live on an
+    Apple TV with the drift held at 0. An existing install keeps its own offset.
 - **2.13.7** - **The film offset moves in 0.001 s steps.**
   - *Finer offset on the Sync page.* The offset box shows three decimals and its arrows move
     0.001 s; the slider moves 1 ms per arrow key, 50 ms per Page Up/Down. The ±0.05 and ±0.25

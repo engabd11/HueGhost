@@ -66,7 +66,7 @@
   },
 
   "sync": {
-    "offset_s": 0.4,
+    "offset_s": 0.34,
     "seek_threshold_s": 1.0,
     "deadband_s": 0.05,
     "converge_s": 5.0,
