@@ -61,6 +61,11 @@ FINE_DEADBAND_S = 0.003
 FINE_CONVERGE_S = 8.0
 FINE_MAX_SPEED_DELTA = 0.003
 FINE_SPEED_STEP = 0.0002
+# armed, not yet locked (after a seek or resume): settle twice as fast and on
+# to ~0, not to 15 ms for the slow fine hold to finish. Live, 2.14.0 took
+# 23-26 s from a seek back to 0.00 (5 s converge, then the fine hold).
+ARMED_DEADBAND_S = 0.004
+ARMED_CONVERGE_S = 2.0
 
 
 def _asc(s) -> str:
@@ -1145,8 +1150,8 @@ class Daemon:
 
     def _lock_params(self, m) -> Params:
         """The lockstep parameters for this tick. With the time lock armed but
-        not yet engaged the deadband narrows inside the lock window, so the
-        ghost converges to ~0 instead of stopping at the deadband's edge.
+        not yet engaged the ghost converges faster and on to ~0 (ARMED_*), so
+        the lock starts where the fine hold has nothing left to do.
 
         Music never touches the tempo: exact seeks beyond ``sync.music_seek_s``."""
         if self._ghost_audio_only:
@@ -1164,7 +1169,8 @@ class Daemon:
             m.lock_release_s = self.params.time_lock_release_s   # a changed setting applies at once
             return dataclasses.replace(self.params, deadband_s=FINE_DEADBAND_S, converge_s=FINE_CONVERGE_S,
                                        max_speed_delta=FINE_MAX_SPEED_DELTA, speed_step=FINE_SPEED_STEP)
-        return dataclasses.replace(self.params, deadband_s=min(self.params.deadband_s, LOCK_WINDOW_S * 0.75))
+        return dataclasses.replace(self.params, deadband_s=min(self.params.deadband_s, ARMED_DEADBAND_S),
+                                   converge_s=min(self.params.converge_s, ARMED_CONVERGE_S))
 
     def _maybe_lock(self, now: float, m, g, gobs: GhostObs, target: float, target_held: bool,
                     actions: list) -> None:

@@ -93,3 +93,40 @@ def test_the_locked_hold_pulls_a_few_milliseconds_back_with_an_invisible_trim():
             speed = a.value
         pos += (speed - 1.0) * 0.25
     assert abs(pos - 100.0) <= FINE_DEADBAND_S
+
+
+def _settle(params, start, seconds=40.0, noise=0.002, seed=3):
+    """Closed loop at the daemon's 0.25 s tick: the ghost starts ``start`` off
+    the timeline and is steered by decide(); readings carry ``noise`` (the
+    filtered position, live: ~2 ms). Returns the drift trace."""
+    import random
+    rnd = random.Random(seed)
+    drift, speed, out = start, 1.0, []
+    for _ in range(int(seconds / 0.25)):
+        seen = drift + rnd.uniform(-noise, noise)
+        for a in decide(100.0, False, obs(100.0 + seen, speed=speed), params, 10.0):
+            if isinstance(a, Speed):
+                speed = a.value
+        drift += (speed - 1.0) * 0.25
+        out.append(drift)
+    return out
+
+
+def test_armed_settles_a_seek_in_seconds_without_overshoot():
+    """Live 2.14.0: a seek's 0.1 s timeline step took 23-26 s back to 0.00 -
+    a 5 s converge stopping at 15 ms, then the slow fine hold."""
+    from dataclasses import replace
+
+    from hueghost.daemon import ARMED_CONVERGE_S, ARMED_DEADBAND_S, LOCK_WINDOW_S
+
+    base = Params()
+    armed = replace(base, deadband_s=ARMED_DEADBAND_S, converge_s=ARMED_CONVERGE_S)
+    before = replace(base, deadband_s=LOCK_WINDOW_S * 0.75)
+    for start in (-0.17, -0.1, 0.1):
+        trace = _settle(armed, start)
+        first = next(i for i, d in enumerate(trace) if abs(d) < 0.005) * 0.25
+        assert first <= 8.0, (start, first)
+        assert all(abs(d) < 0.006 for d in trace[int(first / 0.25):]), (start, "overshoot")
+        assert all(d * start >= -0.006 for d in trace), (start, "crossed over")
+    old = _settle(before, -0.1)
+    assert abs(old[int(8.0 / 0.25)]) > 0.01, "the old setting was the slow one"
