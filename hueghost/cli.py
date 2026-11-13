@@ -161,7 +161,7 @@ def cmd_status(args) -> int:
         st.get("mode"), st["intensity"],
         {True: "on", False: "off"}.get(st.get("use_audio"), "app's own"),
         st.get("mode_default"), st.get("intensity_default")))
-    print("  offset   : %+.2fs" % st["offset_s"])
+    print("  offset   : %+.3fs" % st["offset_s"])
     tl = st.get("time_lock") or {}
     if tl.get("enabled"):
         if tl.get("engaged"):

@@ -259,7 +259,7 @@ class HomePage(Page):
         # offset + quality
         o_card = Card("Timing", "the ghost runs this far ahead of the TV to cancel the lamp latency")
         orow = QHBoxLayout()
-        self.offset_lbl = label("+0.00 s", "kpi")
+        self.offset_lbl = label("+0.000 s", "kpi")
         orow.addWidget(self.offset_lbl)
         orow.addStretch(1)
         for d, t in ((-0.25, "-0.25"), (-0.05, "-0.05"), (0.05, "+0.05"), (0.25, "+0.25")):
@@ -430,7 +430,7 @@ class HomePage(Page):
         self.intensity.set_value(st.get("intensity"))
         self.mode.set_value(st.get("mode"))
         self.audio.set_value(st.get("use_audio"), (st.get("engine") or {}).get("use_audio"))
-        self.offset_lbl.setText("%+.2f s" % (st.get("offset_s") or 0.0))
+        self.offset_lbl.setText("%+.3f s" % (st.get("offset_s") or 0.0))
         q = st.get("drift_last_minute")
         if q:
             self.quality.setText("Last minute: mean |drift| %.2f s  ·  p95 %.2f s  ·  max %.2f s  ·  %d seek(s)%s" % (
@@ -465,16 +465,17 @@ class SyncPage(Page):
         super().__init__(ctx)
         c = Card("Offset", "how far ahead of the TV the ghost runs")
         self.slider = QSlider(Qt.Horizontal)
-        self.slider.setRange(-200, 500)      # hundredths of a second
-        self.slider.setSingleStep(5)
+        self.slider.setRange(-2000, 5000)    # milliseconds
+        self.slider.setSingleStep(1)
+        self.slider.setPageStep(50)
         self.spin = QDoubleSpinBox()
         self.spin.setRange(-2.0, 5.0)
-        self.spin.setSingleStep(0.05)
-        self.spin.setDecimals(2)
+        self.spin.setSingleStep(0.001)
+        self.spin.setDecimals(3)
         self.spin.setSuffix(" s")
-        self.spin.setFixedWidth(110)
-        self.slider.valueChanged.connect(lambda v: self.spin.setValue(v / 100.0))
-        self.spin.valueChanged.connect(lambda v: self.slider.setValue(int(round(v * 100))))
+        self.spin.setFixedWidth(120)
+        self.slider.valueChanged.connect(lambda v: self.spin.setValue(v / 1000.0))
+        self.spin.valueChanged.connect(lambda v: self.slider.setValue(int(round(v * 1000))))
         self.spin.editingFinished.connect(self._apply_offset)
         self.slider.sliderReleased.connect(self._apply_offset)
         c.add_row(self.slider, self.spin)
@@ -612,7 +613,7 @@ class SyncPage(Page):
         self.spin.setValue(float(cfg.get("sync.offset_s", 0.0)))
         self.spin.blockSignals(False)
         self.slider.blockSignals(True)
-        self.slider.setValue(int(round(float(cfg.get("sync.offset_s", 0.0)) * 100)))
+        self.slider.setValue(int(round(float(cfg.get("sync.offset_s", 0.0)) * 1000)))
         self.slider.blockSignals(False)
         self.intensity.set_value(cfg.get("engine.huesync.intensity"))
         self.mode.set_value(cfg.get("engine.huesync.mode"))
@@ -629,19 +630,19 @@ class SyncPage(Page):
             (st.get("follow") or {}).get("reports") or 0))
         if not self.spin.hasFocus() and not self.slider.isSliderDown():
             v = float(st.get("offset_s") or 0.0)
-            if abs(v - self.spin.value()) > 0.001:
+            if abs(v - self.spin.value()) > 0.0005:
                 self.spin.blockSignals(True)
                 self.spin.setValue(v)
                 self.spin.blockSignals(False)
                 self.slider.blockSignals(True)
-                self.slider.setValue(int(round(v * 100)))
+                self.slider.setValue(int(round(v * 1000)))
                 self.slider.blockSignals(False)
         self.intensity.set_value(st.get("intensity"))
         self.mode.set_value(st.get("mode"))
         self.audio.set_value(st.get("use_audio"), (st.get("engine") or {}).get("use_audio"))
 
     def _apply_offset(self) -> None:
-        v = round(self.spin.value(), 2)
+        v = round(self.spin.value(), 3)
         run_async(lambda: self.ctx.daemon.action("set", {"offset_s": v}), on_error=lambda e: self.ctx.toast(e, "bad"))
 
     def _nudge(self, d: float) -> None:
