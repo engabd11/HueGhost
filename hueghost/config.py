@@ -49,7 +49,7 @@ DEFAULTS: dict[str, Any] = {
         "start_confirm_s": 1.0,      # ignore anything shorter (alt-tab, a notification chime)
     },
     "sync": {
-        "offset_s": 0.4,             # ghost runs this far AHEAD of the followed client
+        "offset_s": 0.34,            # ghost runs this far AHEAD of the followed client
         "seek_threshold_s": 1.0,     # beyond this drift -> hard seek
         "deadband_s": 0.05,          # within this -> leave speed at 1.0
         "converge_s": 5.0,           # proportional controller time constant

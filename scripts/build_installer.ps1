@@ -12,6 +12,9 @@ $env:HUEGHOST_VERSION = $version
 Write-Host "== Hue Ghost $version =="
 
 if (-not $SkipBuild) {
+  # Python 3.13+ on Windows: time.monotonic()/time.time() are 1 us clocks; before, 15.6 ms (the sync's timestamps)
+  python -c "import sys; sys.exit(sys.version_info < (3, 13))"
+  if ($LASTEXITCODE -ne 0) { throw "build with Python 3.13 or newer (precise clocks for the sync)" }
   python -m pip install --upgrade pip | Out-Null
   python -m pip install -e ".[build]" | Out-Null
   python scripts\make_icon.py

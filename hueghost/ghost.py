@@ -11,6 +11,7 @@ import json
 import logging
 import os
 import socket
+import statistics
 import subprocess
 import sys
 import threading
@@ -23,6 +24,10 @@ from .winutil import find_mpv, mpv_audio_device
 log = logging.getLogger("hue-ghost.ghost")
 HERE = os.path.dirname(os.path.abspath(__file__))
 INPUT_CONF = os.path.join(HERE, "ghost_input.conf")
+# One time-pos event scatters +/-10 ms (frame steps, vsync, delivery); the
+# median of the last second's events is good to ~2 ms (measured live).
+POS_WINDOW_S = 1.0
+POS_JUMP_S = 0.25           # an event this far off the line is a seek or jump: start over
 
 OBSERVED = {
     1: "time-pos",
@@ -233,7 +238,10 @@ def mpv_args(cfg, title: str, audio_only: bool = False, audio_device: str = "") 
         args += list(g.get("extra_args") or [])
         args += ["--input-ipc-server=" + cfg.get("ghost.ipc"), "--title=" + title]
         return args
-    args += ["--mute=yes", "--volume=0"]
+    # no audio at all: a muted track still made the sound card mpv's clock, and
+    # its time-stretch reset on every small speed trim - asked for 1.002x, it
+    # played 1.00004x (live, 2026-11-14). Without audio mpv times by the PC clock.
+    args += ["--mute=yes", "--volume=0", "--aid=no"]
     idx = resolve_screen(g.get("screen_name") or "", g.get("screen_index"))
     if idx is not None:
         args += ["--screen=%d" % idx, "--fs-screen=%d" % idx]
@@ -260,6 +268,12 @@ class GhostPlayer:
         # mirrored state
         self._time_pos: float | None = None
         self._time_pos_mono = 0.0
+        # (recv_mono, time-pos) since the last jump; replaced, never mutated,
+        # because the IPC thread writes it while the tick reads it
+        self._win: list[tuple[float, float]] = []
+        # after a seek mpv still reports the old line for a moment: a small seek
+        # (music: 0.05 s) mixed both into the median - wait for playback-restart
+        self._win_wait = False
         self.paused = False
         self.speed = 1.0
         self.buffering = False
@@ -340,16 +354,21 @@ class GhostPlayer:
                 if isinstance(data, (int, float)):
                     self._time_pos = float(data)
                     self._time_pos_mono = time.monotonic()
+                    if not self._win_wait:
+                        self._add_sample(self._time_pos_mono, self._time_pos)
             elif name == "pause":
                 self.paused = bool(data)
+                self._win = []
             elif name == "speed" and isinstance(data, (int, float)):
                 self.speed = float(data)
             elif name == "paused-for-cache":
                 self.buffering = bool(data)
+                self._win = []
             elif name == "eof-reached":
                 self.eof = bool(data)
             elif name == "core-idle":
                 self.core_idle = bool(data)
+                self._win = []
             elif name == "display-names" and isinstance(data, list):
                 self.displays = [str(n) for n in data]
         elif ev == "end-file":
@@ -357,6 +376,9 @@ class GhostPlayer:
             # "stop" is the old file making way for a loadfile: not an end
             if self.end_reason in ("eof", "error"):
                 self.ended = True
+        elif ev == "playback-restart":
+            self._win = []
+            self._win_wait = False
         elif ev == "start-file":
             self.ended = False
             if self.end_reason == "quit":
@@ -374,13 +396,25 @@ class GhostPlayer:
         return (self.has_position and not self.paused and not self.buffering
                 and time.monotonic() - self._time_pos_mono > 1.5)
 
+    def _add_sample(self, now: float, tp: float) -> None:
+        win = self._win
+        if win:
+            r, p = win[-1]
+            if abs(tp - (p + (now - r) * self.speed)) > POS_JUMP_S:
+                win = []
+        self._win = [s for s in win if now - s[0] <= POS_WINDOW_S] + [(now, tp)]
+
     @property
     def pos(self) -> float | None:
         if self._time_pos is None:
             return None
         if self.paused or self.buffering or self.core_idle:
             return self._time_pos
-        dt = min(time.monotonic() - self._time_pos_mono, 1.0)
+        now = time.monotonic()
+        win = self._win
+        if win and now - win[-1][0] <= 1.0:
+            return statistics.median(p + (now - r) * self.speed for r, p in win)
+        dt = min(now - self._time_pos_mono, 1.0)
         return self._time_pos + dt * self.speed
 
     # -- control -------------------------------------------------------------
@@ -393,17 +427,23 @@ class GhostPlayer:
                 # until mpv reports the new position, assume we landed
                 self._time_pos = max(0.0, a.pos)
                 self._time_pos_mono = now_mono
+                self._win = []
+                self._win_wait = True
             elif isinstance(a, Speed):
                 self.ipc.send("set_property", "speed", round(a.value, 4))
                 if abs(a.value - 1.0) > 1e-6:
                     self.nudges += 1
+                if abs(a.value - self.speed) > 0.01:
+                    self._win = []      # the old samples' line no longer extrapolates
                 self.speed = a.value
             elif isinstance(a, Pause):
                 self.ipc.send("set_property", "pause", True)
                 self.paused = True
+                self._win = []
             elif isinstance(a, Resume):
                 self.ipc.send("set_property", "pause", False)
                 self.paused = False
+                self._win = []
 
     def set_pan(self, x: float, y: float) -> None:
         """Move the picture by a fraction of its own size (screen care's pixel
@@ -434,6 +474,8 @@ class GhostPlayer:
         ok = self.ipc.send("set_property", "pause", False) and ok
         self._time_pos = None
         self._time_pos_mono = 0.0
+        self._win = []
+        self._win_wait = True
         self.paused = False
         self.speed = 1.0
         self.buffering = False

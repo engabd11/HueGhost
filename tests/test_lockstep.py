@@ -73,3 +73,23 @@ def test_buffering_or_unknown_position_holds():
     assert decide(100.0, False, obs(103.0, buffering=True), P, 10.0) == []
     assert decide(100.0, False, obs(103.0, buffering=True, speed=1.04), P, 10.0) == [Speed(1.0)]
     assert decide(100.0, False, obs(None), P, 10.0) == []
+
+
+def test_the_locked_hold_pulls_a_few_milliseconds_back_with_an_invisible_trim():
+    """Live 2026-11-13: locked, the ghost sat 20 ms off the timeline for half an
+    hour - the 50 ms deadband never looked at it."""
+    from hueghost.daemon import FINE_CONVERGE_S, FINE_DEADBAND_S, FINE_MAX_SPEED_DELTA, FINE_SPEED_STEP
+
+    fine = Params(deadband_s=FINE_DEADBAND_S, converge_s=FINE_CONVERGE_S,
+                  max_speed_delta=FINE_MAX_SPEED_DELTA, speed_step=FINE_SPEED_STEP)
+    [s] = decide(100.0, False, obs(100.02), fine, 10.0)
+    assert 0.997 <= s.value < 1.0
+    assert decide(100.0, False, obs(100.002), fine, 10.0) == []              # inside the hold
+    assert decide(100.0, False, obs(100.02, speed=s.value + 0.0001), fine, 10.0) == []   # not worth sending
+    # it converges: simulate 30 s of 0.25 s ticks
+    pos, speed = 100.02, 1.0
+    for _ in range(120):
+        for a in decide(100.0, False, obs(pos, speed=speed), fine, 10.0):
+            speed = a.value
+        pos += (speed - 1.0) * 0.25
+    assert abs(pos - 100.0) <= FINE_DEADBAND_S

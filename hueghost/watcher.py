@@ -224,6 +224,8 @@ RESIDUAL_WINDOW = 6
 RESIDUAL_GAIN = 0.5
 RESIDUAL_MAX_STEP = 0.25
 SHARP_NOISE_S = 0.03       # timed reports this consistent are steered by in full
+LOCK_TRIM_GAIN = 0.1       # a locked timeline follows a precise player's median this much per report
+LOCK_TRIM_MAX_S = 0.002    # ... and never more than this per report (invisible)
 
 
 ENVELOPE_WINDOW_S = 150.0  # a lagging player's envelope is the top of this much of its reports
@@ -686,6 +688,14 @@ class PlaybackModel:
                     # noisy report is not a re-buffer)
                     tol = max(self.lock_release_s, 3.0 * self.jitter)
                     if abs(med) <= tol or (len(self.residuals) < 3 and abs(med) <= 4.0 * tol):
+                        # a precise player (a full window, and its learned noise
+                        # too: three reports' spread can read 0): follow its
+                        # clock's skew a ms at a time, not in one step at tol
+                        if self.precise and self.jitter < SHARP_NOISE_S \
+                                and len(self.residuals) >= RESIDUAL_WINDOW:
+                            trim = max(-LOCK_TRIM_MAX_S, min(LOCK_TRIM_MAX_S, LOCK_TRIM_GAIN * med))
+                            self.anchor_pos += trim
+                            self.residuals = deque((x - trim for x in self.residuals), maxlen=RESIDUAL_WINDOW)
                         self._debug(r, pred, delta, None)
                         return None
                     self.unlock()

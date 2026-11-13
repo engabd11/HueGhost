@@ -357,13 +357,45 @@ def test_time_lock_releases_on_a_rebuffer_the_client_does_not_report():
     assert w.model.locked
 
 
-def test_time_lock_follows_clock_skew_by_releasing_and_relocking():
+def test_time_lock_follows_clock_skew_without_releasing():
+    """A precise player's clock skew is trimmed a ms at a time while locked
+    (2.14.0). Before, the gap grew to the release threshold and was then
+    corrected in one step - visible as the lights jumping."""
     sim = Sim(report_every=5.0, rate=1.0002, seed=7)       # a 200 ppm fast client
     w = precise_watcher()
     res = sim.run(w, 2400.0, hook=lock_when_settled)
-    assert len([ev for (_, _, ev) in res if ev == "unlock"]) >= 2
-    assert max(errs(res, 60, 2400)) < 0.1
+    assert not [t for (t, _, ev) in res if ev == "unlock" and t > 60]
+    assert w.model.locked
+    assert max(errs(res, 60, 2400)) < 0.05
+    assert max(steps(res, 60)) < 0.02, "no step: the trims are invisible"
 
+
+def _locked_model(gap, scatter):
+    """A model locked on a 1.0x line, fed timed reports that sit ``gap`` off it
+    (+/- ``scatter``), one every 5 s. Returns how far its timeline moved."""
+    from hueghost.watcher import PlaybackModel, Report, StallEstimator
+
+    m = PlaybackModel(item_id="f", media_source_id=None, name="f", runtime_s=None, paused=False,
+                      anchor_pos=100.0, anchor_mono=0.0, stalls=StallEstimator())
+    m.precise = True
+    m.lock(0.08)
+    for k in range(1, 13):
+        t = 5.0 * k
+        m.apply(Report("f", None, "f", 100.0 + t + gap + scatter * (-1) ** k, False, 1000.0 + t, None),
+                t, jitter_tol=1.5)
+    assert m.locked
+    return m.position_at(60.0) - 160.0
+
+
+def test_a_locked_precise_player_trims_the_timeline_a_ms_at_a_time():
+    moved = _locked_model(gap=0.010, scatter=0.002)
+    assert 0.003 < moved <= 0.010 * 1.001 and moved <= 10 * 0.002   # toward it, <= 2 ms per report
+
+
+def test_a_noisy_player_does_not_trim_the_locked_timeline():
+    """Jellyfin for Android scatters +/-0.14 s: its median says nothing about
+    skew, so the locked timeline stands still for it."""
+    assert _locked_model(gap=0.010, scatter=0.06) == 0.0
 
 def test_seek_pause_and_resume_release_the_lock():
     sim = Sim(report_every=1.0, seed=8)
